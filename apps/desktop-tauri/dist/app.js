@@ -241,6 +241,114 @@ $("#cleanup-apply").addEventListener("click", async () => {
   }
 });
 
+// ---- psd ----
+let psdOutputs = [];
+
+function fmtBytes(n) {
+  if (n < 1024) return `${n} B`;
+  if (n < 1024 * 1024) return `${(n / 1024).toFixed(1)} KB`;
+  return `${(n / (1024 * 1024)).toFixed(1)} MB`;
+}
+
+async function loadPsdOutputs() {
+  const dir = $("#psd-dir").value.trim();
+  const list = $("#psd-list");
+  $("#psd-detail").classList.add("hidden");
+  if (!dir) {
+    list.innerHTML = `<div class="card"><div class="value missing">enter an output directory</div></div>`;
+    return;
+  }
+  list.innerHTML = `<div class="card"><div class="value">loading…</div></div>`;
+  try {
+    psdOutputs = await invoke("list_psd_outputs", { dir });
+    if (!psdOutputs.length) {
+      list.innerHTML = `<div class="card"><div class="value">no PSD files found</div></div>`;
+      return;
+    }
+    list.innerHTML = psdOutputs
+      .map((o, i) => {
+        const time = o.modified_ms ? new Date(Number(o.modified_ms)).toLocaleString() : "-";
+        const tags = [
+          o.preview_path ? "preview" : null,
+          o.metadata_path ? "metadata" : null,
+        ].filter(Boolean);
+        const badges = tags.map((t) => `<span class="badge ok">${t}</span>`).join(" ");
+        return `<div class="card psd-card" data-psd-index="${i}">
+          <div class="label">${o.name}.psd</div>
+          <div class="value">${time}<br/>${fmtBytes(o.size_bytes)} ${badges}</div>
+        </div>`;
+      })
+      .join("");
+  } catch (err) {
+    list.innerHTML = `<div class="card"><div class="value missing">${err}</div></div>`;
+  }
+}
+
+async function showPsdDetail(index) {
+  const o = psdOutputs[index];
+  if (!o) return;
+  const detail = $("#psd-detail");
+  detail.classList.remove("hidden");
+  detail.dataset.index = String(index);
+  $("#psd-detail-name").textContent = `${o.name}.psd`;
+
+  const img = $("#psd-detail-preview");
+  if (o.preview_path) {
+    img.classList.remove("hidden");
+    img.alt = "loading preview…";
+    try {
+      img.src = await invoke("read_image_data_url", { path: o.preview_path });
+    } catch (err) {
+      img.removeAttribute("src");
+      img.alt = String(err);
+    }
+  } else {
+    img.classList.add("hidden");
+    img.removeAttribute("src");
+  }
+
+  const meta = $("#psd-detail-metadata");
+  if (o.metadata_path) {
+    try {
+      meta.textContent = await invoke("read_text_file", { path: o.metadata_path, maxBytes: 20000 });
+    } catch (err) {
+      meta.textContent = String(err);
+    }
+  } else {
+    meta.textContent = "(no metadata.json)";
+  }
+}
+
+$("#psd-list").addEventListener("click", (e) => {
+  const card = e.target.closest("[data-psd-index]");
+  if (card) showPsdDetail(parseInt(card.dataset.psdIndex, 10));
+});
+
+$("#psd-detail").addEventListener("click", async (e) => {
+  const which = e.target.dataset.psdOpen;
+  if (!which) return;
+  const o = psdOutputs[parseInt($("#psd-detail").dataset.index, 10)];
+  if (!o) return;
+  const path = which === "folder" ? o.psd_path.replace(/[/\\][^/\\]*$/, "") : o.psd_path;
+  try {
+    await invoke("open_path", { path });
+    toast(which === "folder" ? "opened folder" : "opened PSD", "ok");
+  } catch (err) {
+    toast(String(err), "err");
+  }
+});
+
+$("#psd-refresh").addEventListener("click", loadPsdOutputs);
+$("#psd-use-output").addEventListener("click", async () => {
+  try {
+    const info = await invoke("get_runtime_info");
+    $("#psd-dir").value = info.output_dir.path;
+    loadPsdOutputs();
+  } catch (err) {
+    toast(String(err), "err");
+  }
+});
+
 // ---- comfyui ----
 $("#comfy-open").addEventListener("click", async () => {
   const status = $("#comfy-status");

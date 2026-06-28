@@ -1,4 +1,5 @@
 import type { ParamSpec } from "../graph/nodeSpecs";
+import { isTauri, pickFile } from "../bridge/tauri";
 
 interface ParamFieldProps {
   spec: ParamSpec;
@@ -23,9 +24,31 @@ export function ParamField({ spec, value, onChange, compact }: ParamFieldProps) 
         <textarea className={cls} value={String(value ?? "")} onChange={(e) => onChange(e.target.value)} />
       );
     case "text":
-    case "path":
       return (
         <input className={cls} value={String(value ?? "")} onChange={(e) => onChange(e.target.value)} />
+      );
+    case "path":
+      return (
+        <span className="path-row">
+          <input className={cls} value={String(value ?? "")} onChange={(e) => onChange(e.target.value)} />
+          {isTauri() && (
+            <button
+              type="button"
+              className={compact ? "nodrag" : undefined}
+              title="Choose a file…"
+              onClick={async () => {
+                const picked = await pickFile({
+                  title: `Choose ${spec.label}`,
+                  filterName: spec.pickerFilterName,
+                  extensions: spec.pickerExtensions,
+                });
+                if (picked) onChange(picked);
+              }}
+            >
+              Browse…
+            </button>
+          )}
+        </span>
       );
     case "number":
       return (

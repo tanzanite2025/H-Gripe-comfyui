@@ -27,6 +27,9 @@ export interface ParamSpec {
   hint?: string;
   /** Render this param directly on the node card (not just the inspector). */
   inline?: boolean;
+  /** For `path` controls: native file-picker extension filter. */
+  pickerFilterName?: string;
+  pickerExtensions?: string[];
 }
 
 export interface NodeSpec {
@@ -97,6 +100,8 @@ export const NODE_SPECS: Record<string, NodeSpec> = {
         defaultValue: "",
         hint: "absolute path to an image file",
         inline: true,
+        pickerFilterName: "Images",
+        pickerExtensions: ["png", "jpg", "jpeg", "webp", "gif", "bmp", "tiff"],
       },
     ],
   },
@@ -115,6 +120,8 @@ export const NODE_SPECS: Record<string, NodeSpec> = {
         defaultValue: "",
         hint: "absolute path to a .psd template",
         inline: true,
+        pickerFilterName: "PSD",
+        pickerExtensions: ["psd"],
       },
     ],
   },

@@ -206,6 +206,28 @@ fn open_url(url: String) -> Result<(), String> {
     open_external(&url)
 }
 
+/// Open a native file-open dialog and return the chosen path, or `None` if the
+/// user cancelled. `filter_name` + `extensions` optionally scope the picker
+/// (e.g. images, or `.psd` templates); extensions are bare (no leading dot).
+#[tauri::command]
+fn pick_file(
+    app: tauri::AppHandle,
+    title: Option<String>,
+    filter_name: Option<String>,
+    extensions: Option<Vec<String>>,
+) -> Option<String> {
+    use tauri_plugin_dialog::DialogExt;
+    let mut builder = app.dialog().file();
+    if let Some(title) = title {
+        builder = builder.set_title(title);
+    }
+    if let Some(exts) = extensions.as_ref().filter(|e| !e.is_empty()) {
+        let refs: Vec<&str> = exts.iter().map(String::as_str).collect();
+        builder = builder.add_filter(filter_name.unwrap_or_else(|| "Files".to_string()), &refs);
+    }
+    builder.blocking_pick_file().map(|path| path.to_string())
+}
+
 #[derive(Serialize)]
 struct PsdOutputFile {
     /// Base name shared by the triplet (e.g. `final` for `final.psd`).
@@ -648,6 +670,7 @@ fn stop_comfyui(state: tauri::State<'_, ComfyServer>) -> Result<(), String> {
 
 fn main() {
     tauri::Builder::default()
+        .plugin(tauri_plugin_dialog::init())
         .manage(ComfyServer::default())
         .invoke_handler(tauri::generate_handler![
             get_runtime_info,
@@ -666,6 +689,7 @@ fn main() {
             run_task_json,
             rerun_task,
             open_url,
+            pick_file,
             list_psd_outputs,
             read_image_data_url,
             generate_thumbnail,

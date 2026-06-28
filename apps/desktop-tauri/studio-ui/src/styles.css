@@ -157,6 +157,9 @@ button:disabled { opacity: 0.6; cursor: default; }
 .palette-hint { font-size: 11px; margin-top: 8px; }
 
 /* inspector control extras */
+.path-row { display: flex; align-items: center; gap: 6px; }
+.path-row input { flex: 1; min-width: 0; }
+.path-row > button { font-size: 11px; padding: 3px 8px; white-space: nowrap; }
 .slider-row { display: flex; align-items: center; gap: 8px; }
 .slider-row input[type="range"] { flex: 1; }
 .slider-row output { min-width: 28px; text-align: right; color: var(--muted); }

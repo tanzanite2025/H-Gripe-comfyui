@@ -14,6 +14,9 @@ tauri-build = { version = "2", features = [] }
 
 [dependencies]
 tauri = { version = "2", features = [] }
+# Native file-open dialog for the node editor (pick_file command). Invoked from
+# Rust, so no frontend capability/permission entry is required.
+tauri-plugin-dialog = "2"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 # Thumbnail generation for the node-graph editor (generate_thumbnail command).

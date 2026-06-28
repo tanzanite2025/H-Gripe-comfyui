@@ -71,8 +71,76 @@ button:disabled { opacity: 0.6; cursor: default; }
   padding: 6px 8px;
 }
 .field textarea { min-height: 70px; resize: vertical; }
-.inspector-img { max-width: 100%; border-radius: 6px; border: 1px solid var(--border); }
+.inspector-img { max-width: 100%; border-radius: 6px; border: 1px solid var(--border); display: block; }
+.inspector-img-btn {
+  display: block;
+  width: 100%;
+  padding: 0;
+  border: none;
+  background: none;
+  cursor: zoom-in;
+}
+.inspector-img.placeholder {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  height: 90px;
+  color: var(--muted);
+  background: #11131a;
+}
 .path { font-size: 11px; color: var(--muted); word-break: break-all; }
+
+/* full-resolution media viewer (modal) */
+.media-viewer-backdrop {
+  position: fixed;
+  inset: 0;
+  background: rgba(0, 0, 0, 0.72);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  z-index: 1000;
+  padding: 24px;
+}
+.media-viewer {
+  display: flex;
+  flex-direction: column;
+  max-width: 92vw;
+  max-height: 92vh;
+  background: var(--panel);
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  overflow: hidden;
+}
+.media-viewer-bar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 8px 12px;
+  background: #20232e;
+  border-bottom: 1px solid var(--border);
+}
+.media-viewer-name { font-size: 13px; font-weight: 600; }
+.media-viewer-actions { display: flex; gap: 6px; }
+.media-viewer-stage {
+  flex: 1;
+  min-height: 0;
+  overflow: auto;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: #0c0e14;
+  padding: 12px;
+}
+.media-viewer-stage.fit .media-viewer-img { max-width: 100%; max-height: calc(92vh - 110px); object-fit: contain; }
+.media-viewer-stage.actual .media-viewer-img { max-width: none; max-height: none; }
+.media-viewer-path {
+  font-size: 11px;
+  color: var(--muted);
+  word-break: break-all;
+  padding: 6px 12px;
+  border-top: 1px solid var(--border);
+}
 
 /* nodes */
 .node {

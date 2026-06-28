@@ -464,6 +464,140 @@ class HGripeOpenAICompatibleImage:
         return (image, json.dumps(result, ensure_ascii=False, indent=2), status)
 
 
+class HGripeOpenAICompatibleImageEdit:
+    @classmethod
+    def INPUT_TYPES(cls):
+        return {
+            "required": {
+                "image": ("IMAGE",),
+                "base_url": (
+                    "STRING",
+                    {"default": ""},
+                ),
+                "profile_ref": ("STRING", {"default": ""}),
+                "model": ("STRING", {"default": "gpt-image-1"}),
+                "credentials_ref": ("STRING", {"default": "openai-main"}),
+                "auth_mode": (
+                    ["credentials_ref", "env_or_key", "no_auth"],
+                    {"default": "credentials_ref"},
+                ),
+                "api_key_env": ("STRING", {"default": "OPENAI_API_KEY"}),
+                "api_key": ("STRING", {"default": ""}),
+                "prompt": ("STRING", {"multiline": True, "default": "Edit this image"}),
+                "image_index": ("INT", {"default": 0, "min": 0, "max": 4095, "step": 1}),
+                "image_format": (["png", "jpeg", "webp"], {"default": "png"}),
+                "size": ("STRING", {"default": "1024x1024"}),
+                "n": ("INT", {"default": 1, "min": 1, "max": 8, "step": 1}),
+                "response_format": (
+                    ["provider_default", "b64_json", "url"],
+                    {"default": "provider_default"},
+                ),
+                "quality": (
+                    ["provider_default", "auto", "standard", "hd", "low", "medium", "high"],
+                    {"default": "provider_default"},
+                ),
+                "output_format": (
+                    ["provider_default", "png", "jpeg", "webp"],
+                    {"default": "provider_default"},
+                ),
+                "save_outputs": (["enable", "disable"], {"default": "enable"}),
+                "download_url_outputs": (["enable", "disable"], {"default": "enable"}),
+                "extra_body_json": ("STRING", {"multiline": True, "default": "{}"}),
+                "max_attempts": ("INT", {"default": 2, "min": 1, "max": 10, "step": 1}),
+                "timeout_ms": (
+                    "INT",
+                    {"default": 180000, "min": 1000, "max": 1200000, "step": 1000},
+                ),
+                "force_run_nonce": (
+                    "INT",
+                    {"default": 0, "min": 0, "max": 2147483647, "step": 1},
+                ),
+            }
+        }
+
+    RETURN_TYPES = ("IMAGE", "STRING", "STRING")
+    RETURN_NAMES = ("image", "result_json", "status")
+    FUNCTION = "run"
+    CATEGORY = "H-Gripe/API"
+
+    def run(
+        self,
+        image,
+        base_url: str,
+        profile_ref: str,
+        model: str,
+        credentials_ref: str,
+        auth_mode: str,
+        api_key_env: str,
+        api_key: str,
+        prompt: str,
+        image_index: int,
+        image_format: str,
+        size: str,
+        n: int,
+        response_format: str,
+        quality: str,
+        output_format: str,
+        save_outputs: str,
+        download_url_outputs: str,
+        extra_body_json: str,
+        max_attempts: int,
+        timeout_ms: int,
+        force_run_nonce: int,
+    ):
+        extra_body = _parse_json_object(extra_body_json, "extra_body_json")
+        image_data_url = _tensor_image_to_data_url(image, image_index, image_format)
+        params: dict[str, Any] = {
+            "base_url": base_url,
+            "model": model,
+            "n": n,
+            "extra_body": extra_body,
+            "save_outputs": save_outputs == "enable",
+            "download_url_outputs": download_url_outputs == "enable",
+        }
+        if profile_ref.strip():
+            params["profile_ref"] = profile_ref.strip()
+
+        task_credentials_ref = _apply_openai_auth(
+            params, auth_mode, credentials_ref, api_key_env, api_key
+        )
+
+        if size.strip() and size.strip() != "provider_default":
+            params["size"] = size.strip()
+        if response_format != "provider_default":
+            params["response_format"] = response_format
+        if quality != "provider_default":
+            params["quality"] = quality
+        if output_format != "provider_default":
+            params["output_format"] = output_format
+
+        task = {
+            "id": f"comfy-openai-image-edit-{uuid.uuid4()}",
+            "provider": "openai_compatible",
+            "operation": "image.edit",
+            "inputs": {
+                "prompt": prompt,
+                "image_data_url": image_data_url,
+                "force_run_nonce": force_run_nonce,
+            },
+            "params": params,
+            "credentials_ref": task_credentials_ref,
+            "output_type": "image",
+            "cache_policy": {"enabled": False, "ttl_seconds": None, "key": None},
+            "retry_policy": {
+                "max_attempts": max_attempts,
+                "backoff_ms": 500,
+                "timeout_ms": timeout_ms,
+            },
+        }
+
+        result = run_task(task)
+        _raise_if_failed(result, "H-Gripe OpenAI Compatible Image Edit")
+        status = str(result.get("status", "unknown"))
+        edited_image = _images_to_tensor(result, timeout_ms)
+        return (edited_image, json.dumps(result, ensure_ascii=False, indent=2), status)
+
+
 class HGripeOpenAICompatibleVision:
     @classmethod
     def INPUT_TYPES(cls):
@@ -602,6 +736,7 @@ NODE_CLASS_MAPPINGS = {
     "HGripeCustomHttpApi": HGripeCustomHttpApi,
     "HGripeOpenAICompatibleText": HGripeOpenAICompatibleText,
     "HGripeOpenAICompatibleImage": HGripeOpenAICompatibleImage,
+    "HGripeOpenAICompatibleImageEdit": HGripeOpenAICompatibleImageEdit,
     "HGripeOpenAICompatibleVision": HGripeOpenAICompatibleVision,
 }
 
@@ -609,5 +744,6 @@ NODE_DISPLAY_NAME_MAPPINGS = {
     "HGripeCustomHttpApi": "H-Gripe Custom HTTP API",
     "HGripeOpenAICompatibleText": "H-Gripe OpenAI Compatible Text",
     "HGripeOpenAICompatibleImage": "H-Gripe OpenAI Compatible Image",
+    "HGripeOpenAICompatibleImageEdit": "H-Gripe OpenAI Compatible Image Edit",
     "HGripeOpenAICompatibleVision": "H-Gripe OpenAI Compatible Vision",
 }

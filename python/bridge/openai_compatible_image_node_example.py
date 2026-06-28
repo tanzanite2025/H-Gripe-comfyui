@@ -58,6 +58,7 @@ try:
     node = HGripeOpenAICompatibleImage()
     image, result_json, status = node.run(
         base_url=f"http://127.0.0.1:{server.server_port}",
+        profile_ref="",
         model="local-image-model",
         credentials_ref="",
         auth_mode="no_auth",

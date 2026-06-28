@@ -161,6 +161,61 @@ async fn openai_compatible_image_saves_b64_output_file() {
 }
 
 #[tokio::test]
+async fn openai_compatible_image_edit_sends_multipart_image() {
+    let image_b64 = "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+/p9sAAAAASUVORK5CYII=";
+    let body = format!(
+        r#"{{"created":123,"data":[{{"b64_json":"{image_b64}","revised_prompt":"edited cat"}}]}}"#
+    );
+    let (base_url, request_rx) = spawn_once_json_server(
+        "HTTP/1.1 200 OK",
+        Box::leak(body.into_boxed_str()),
+        Some("openai-image-edit-test"),
+    )
+    .await;
+
+    let mut broker = ApiBroker::new();
+    broker.register_provider(OpenAiCompatibleProvider::default());
+
+    let mut task = ApiTask::new("openai_compatible", "image.edit");
+    task.params.insert("base_url".into(), json!(base_url));
+    task.params.insert("no_auth".into(), json!(true));
+    task.params.insert("model".into(), json!("edit-model"));
+    task.params
+        .insert("response_format".into(), json!("b64_json"));
+    task.inputs
+        .insert("prompt".into(), json!("edit a small cat"));
+    task.inputs.insert(
+        "image_data_url".into(),
+        json!(format!("data:image/png;base64,{image_b64}")),
+    );
+
+    let result = broker
+        .execute(task)
+        .await
+        .expect("image edit task should run");
+    let request = request_rx.await.expect("server should capture request");
+
+    assert_eq!(result.status, ApiStatus::Succeeded);
+    assert_eq!(
+        result.provider_request_id.as_deref(),
+        Some("openai-image-edit-test")
+    );
+    assert_eq!(
+        result.output_json.unwrap()["images"][0]["revised_prompt"],
+        json!("edited cat")
+    );
+    assert!(request.contains("POST /images/edits HTTP/1.1"));
+    assert!(request
+        .to_lowercase()
+        .contains("content-type: multipart/form-data"));
+    assert!(request.contains(r#"name="image"; filename="image.png""#));
+    assert!(request.contains(r#"name="prompt""#));
+    assert!(request.contains("edit a small cat"));
+    assert!(request.contains(r#"name="model""#));
+    assert!(request.contains("edit-model"));
+}
+
+#[tokio::test]
 async fn openai_compatible_vision_sends_image_message() {
     let (base_url, request_rx) = spawn_once_json_server(
         "HTTP/1.1 200 OK",

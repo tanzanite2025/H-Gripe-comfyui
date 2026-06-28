@@ -219,8 +219,9 @@ Tauri 不只是一个壳，应该承担桌面体验：
 - 已新增 Python 桥接示例：`python/bridge/hgripe_api_bridge.py`。
 - 已新增本地 HTTP 验证示例：`python/bridge/custom_http_example.py`，不依赖外部网络服务。
 - 已新增 OpenAI-compatible 本地验证示例：`python/bridge/openai_compatible_text_example.py`，用本地临时服务模拟 chat completions。
-- 已新增 ComfyUI 薄节点：`custom_nodes/hgripe_api_nodes.py`，当前提供 `H-Gripe Custom HTTP API`、`H-Gripe OpenAI Compatible Text`、`H-Gripe OpenAI Compatible Image` 和 `H-Gripe OpenAI Compatible Vision`，把参数组装成 `ApiTask` 后交给 Rust broker。
+- 已新增 ComfyUI 薄节点：`custom_nodes/hgripe_api_nodes.py`，当前提供 `H-Gripe Custom HTTP API`、`H-Gripe OpenAI Compatible Text`、`H-Gripe OpenAI Compatible Image`、`H-Gripe OpenAI Compatible Image Edit` 和 `H-Gripe OpenAI Compatible Vision`，把参数组装成 `ApiTask` 后交给 Rust broker。
 - `H-Gripe OpenAI Compatible Image` 支持 `b64_json` 和 `url` 返回，并转换为 ComfyUI `IMAGE` tensor，同时保留完整 `result_json` 和 `status` 输出。
+- `H-Gripe OpenAI Compatible Image Edit` 支持把 ComfyUI `IMAGE` tensor 编码后交给 OpenAI-compatible `/images/edits` multipart 接口，并复用图片输出落盘和 tensor 转换逻辑。
 - `H-Gripe OpenAI Compatible Vision` 支持把 ComfyUI `IMAGE` tensor 编码为 data URL，通过 OpenAI-compatible chat/vision 接口返回文本分析。
 - 已新增 credential ref 第一版：OpenAI-compatible 节点可用 `credentials_ref` 引用本地凭据，默认读取被 git 忽略的 `user/hgripe/credentials.json`，也支持 `HGRIPE_CREDENTIALS_FILE` 指向其他文件。
 - 已新增本地任务历史第一版：CLI broker 每次执行后追加 JSONL 记录到 `user/hgripe/history/tasks.jsonl`，记录 provider、operation、status、duration、request id、输出文件列表和输出摘要。
@@ -240,6 +241,7 @@ cargo build -p hgripe-api --bins
 .\.venv\Scripts\python.exe python\bridge\custom_http_example.py
 .\.venv\Scripts\python.exe python\bridge\openai_compatible_text_example.py
 .\.venv\Scripts\python.exe python\bridge\openai_compatible_image_node_example.py
+.\.venv\Scripts\python.exe python\bridge\openai_compatible_image_edit_node_example.py
 .\.venv\Scripts\python.exe python\bridge\openai_compatible_vision_node_example.py
 .\.venv\Scripts\python.exe python\bridge\openai_compatible_credentials_ref_example.py
 .\.venv\Scripts\python.exe python\bridge\openai_compatible_profile_example.py

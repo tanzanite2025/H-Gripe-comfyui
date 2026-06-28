@@ -7,10 +7,13 @@ use async_trait::async_trait;
 use base64::engine::general_purpose::STANDARD as BASE64_STANDARD;
 use base64::Engine;
 use reqwest::header::CONTENT_TYPE;
+use reqwest::multipart::{Form, Part};
 use reqwest::{Client, StatusCode};
 use serde_json::{json, Map, Value};
 use std::collections::BTreeMap;
 use std::env;
+use std::fs;
+use std::path::Path;
 use std::time::Duration;
 
 pub struct OpenAiCompatibleProvider {
@@ -21,6 +24,23 @@ struct JsonResponse {
     status: StatusCode,
     body: Value,
     provider_request_id: Option<String>,
+}
+
+struct MultipartImage {
+    bytes: Vec<u8>,
+    filename: String,
+    mime_type: String,
+}
+
+impl MultipartImage {
+    fn into_part(self) -> BrokerResult<Part> {
+        Part::bytes(self.bytes)
+            .file_name(self.filename)
+            .mime_str(&self.mime_type)
+            .map_err(|err| {
+                BrokerError::Provider(format!("invalid multipart image MIME type: {err}"))
+            })
+    }
 }
 
 impl Default for OpenAiCompatibleProvider {
@@ -44,6 +64,7 @@ impl Provider for OpenAiCompatibleProvider {
                 | "chat.generate"
                 | "text.generate"
                 | "vision.analyze"
+                | "image.edit"
                 | "image.generate"
         )
     }
@@ -51,6 +72,7 @@ impl Provider for OpenAiCompatibleProvider {
     async fn execute(&self, task: &ApiTask) -> BrokerResult<ApiResult> {
         let task = apply_provider_profile(task)?;
         match task.operation.as_str() {
+            "image.edit" => self.execute_image_edit(&task).await,
             "image.generate" => self.execute_image(&task).await,
             _ => self.execute_chat(&task).await,
         }
@@ -146,6 +168,71 @@ impl OpenAiCompatibleProvider {
 
         let path = value_str(task, "path").unwrap_or("/images/generations");
         let response = self.send_json(task, path, Value::Object(body)).await?;
+
+        if response.status.is_success() {
+            let mut images = response
+                .body
+                .get("data")
+                .cloned()
+                .unwrap_or_else(|| Value::Array(Vec::new()));
+            let output_files = if value_bool(task, "save_outputs").unwrap_or(false) {
+                self.save_image_outputs(task, &mut images).await?
+            } else {
+                Vec::new()
+            };
+            let mut result = ApiResult::succeeded(
+                task.id.clone(),
+                Some(json!({
+                    "images": images,
+                    "raw": response.body,
+                })),
+            );
+            result.provider_request_id = response.provider_request_id;
+            result.output_files = output_files;
+            Ok(result)
+        } else {
+            Ok(failed_result(task, response))
+        }
+    }
+
+    async fn execute_image_edit(&self, task: &ApiTask) -> BrokerResult<ApiResult> {
+        let image = multipart_image_from_task(task, "image")?.ok_or_else(|| {
+            BrokerError::Provider(
+                "image.edit requires image_data_url, image_b64, image_base64, or image_path"
+                    .to_string(),
+            )
+        })?;
+
+        let mut form = Form::new()
+            .part("image", image.into_part()?)
+            .text("prompt", required_prompt(task)?.to_string());
+
+        if let Some(mask) = multipart_image_from_task(task, "mask")? {
+            form = form.part("mask", mask.into_part()?);
+        }
+
+        if let Some(model) = value_str(task, "model") {
+            form = form.text("model", model.to_string());
+        }
+
+        form = copy_optional_form_fields(
+            task,
+            form,
+            &[
+                "n",
+                "size",
+                "quality",
+                "response_format",
+                "user",
+                "background",
+                "output_format",
+                "input_fidelity",
+            ],
+        );
+        form = merge_extra_body_form(task, form)?;
+
+        let path = value_str(task, "path").unwrap_or("/images/edits");
+        let response = self.send_multipart(task, path, form).await?;
 
         if response.status.is_success() {
             let mut images = response
@@ -341,6 +428,81 @@ impl OpenAiCompatibleProvider {
             provider_request_id,
         })
     }
+
+    async fn send_multipart(
+        &self,
+        task: &ApiTask,
+        path: &str,
+        form: Form,
+    ) -> BrokerResult<JsonResponse> {
+        let credentials = resolve_credentials(task)?;
+        let url = endpoint_url(task, path, credentials.as_ref());
+        let mut request = self.client.post(url).multipart(form);
+
+        if let Some(timeout_ms) = task.retry_policy.timeout_ms {
+            request = request.timeout(Duration::from_millis(timeout_ms));
+        }
+
+        if let Some(api_key) = resolve_api_key(task, credentials.as_ref())? {
+            request = request.bearer_auth(api_key);
+        }
+
+        if let Some(headers) = credentials
+            .as_ref()
+            .and_then(|entry| entry.headers.as_ref())
+        {
+            for (name, header_value) in headers {
+                request = request.header(name, header_value);
+            }
+        }
+
+        if let Some(headers) = value(task, "headers").and_then(Value::as_object) {
+            for (name, header_value) in headers {
+                if let Some(header_value) = header_value.as_str() {
+                    request = request.header(name, header_value);
+                }
+            }
+        }
+
+        let response = request.send().await.map_err(|err| {
+            BrokerError::Provider(format!("OpenAI-compatible request failed: {err}"))
+        })?;
+        let status = response.status();
+        let headers = response.headers().clone();
+        let provider_request_id = headers
+            .get("x-request-id")
+            .or_else(|| headers.get("request-id"))
+            .or_else(|| headers.get("openai-request-id"))
+            .and_then(|value| value.to_str().ok())
+            .map(str::to_string);
+        let content_type = headers
+            .get(CONTENT_TYPE)
+            .and_then(|value| value.to_str().ok())
+            .unwrap_or("")
+            .to_string();
+        let text = response.text().await.map_err(|err| {
+            BrokerError::Provider(format!("failed to read OpenAI-compatible body: {err}"))
+        })?;
+
+        if status.is_server_error() {
+            return Err(BrokerError::Provider(format!(
+                "server error {} from OpenAI-compatible provider",
+                status.as_u16()
+            )));
+        }
+
+        let body = if content_type.contains("application/json") {
+            serde_json::from_str::<Value>(&text).unwrap_or_else(|_| json!(text))
+        } else {
+            serde_json::from_str::<Value>(&text).unwrap_or_else(|_| json!(text))
+        };
+
+        Ok(JsonResponse {
+            status,
+            body,
+            provider_request_id,
+        })
+    }
 }
 
 fn value<'a>(task: &'a ApiTask, key: &str) -> Option<&'a Value> {
@@ -353,6 +515,136 @@ fn value_str<'a>(task: &'a ApiTask, key: &str) -> Option<&'a str> {
 
 fn value_bool(task: &ApiTask, key: &str) -> Option<bool> {
     value(task, key).and_then(Value::as_bool)
+}
+
+fn multipart_image_from_task(task: &ApiTask, prefix: &str) -> BrokerResult<Option<MultipartImage>> {
+    let data_url_key = format!("{prefix}_data_url");
+    if let Some(data_url) = value_str(task, &data_url_key)
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+    {
+        let (mime_type, bytes) = decode_data_url(data_url)?;
+        return Ok(Some(MultipartImage {
+            bytes,
+            filename: multipart_filename(task, prefix, &mime_type),
+            mime_type,
+        }));
+    }
+
+    for key in [format!("{prefix}_b64"), format!("{prefix}_base64")] {
+        if let Some(encoded) = value_str(task, &key)
+            .map(str::trim)
+            .filter(|value| !value.is_empty())
+        {
+            let bytes = BASE64_STANDARD.decode(encoded).map_err(|err| {
+                BrokerError::Provider(format!("failed to decode {key} image: {err}"))
+            })?;
+            let mime_type = value_str(task, &format!("{prefix}_mime_type"))
+                .map(str::trim)
+                .filter(|value| !value.is_empty())
+                .map(str::to_string)
+                .or_else(|| detect_image_type(&bytes).map(|(mime_type, _)| mime_type.to_string()))
+                .unwrap_or_else(|| "image/png".to_string());
+            return Ok(Some(MultipartImage {
+                bytes,
+                filename: multipart_filename(task, prefix, &mime_type),
+                mime_type,
+            }));
+        }
+    }
+
+    let path_key = format!("{prefix}_path");
+    if let Some(path) = value_str(task, &path_key)
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+    {
+        let path = Path::new(path);
+        let bytes = fs::read(path).map_err(|err| {
+            BrokerError::Provider(format!(
+                "failed to read {path_key} {}: {err}",
+                path.display()
+            ))
+        })?;
+        let mime_type = detect_image_type(&bytes)
+            .map(|(mime_type, _)| mime_type.to_string())
+            .or_else(|| mime_type_from_path(path))
+            .unwrap_or_else(|| "application/octet-stream".to_string());
+        let filename = value_str(task, &format!("{prefix}_filename"))
+            .map(str::trim)
+            .filter(|value| !value.is_empty())
+            .map(str::to_string)
+            .or_else(|| {
+                path.file_name()
+                    .and_then(|name| name.to_str())
+                    .map(str::to_string)
+            })
+            .unwrap_or_else(|| filename_for_mime_type(prefix, &mime_type));
+        return Ok(Some(MultipartImage {
+            bytes,
+            filename,
+            mime_type,
+        }));
+    }
+
+    Ok(None)
+}
+
+fn decode_data_url(data_url: &str) -> BrokerResult<(String, Vec<u8>)> {
+    let (metadata, encoded) = data_url
+        .split_once(',')
+        .ok_or_else(|| BrokerError::Provider("data URL is missing comma separator".to_string()))?;
+    let metadata = metadata.trim();
+    if !metadata.starts_with("data:") || !metadata.contains(";base64") {
+        return Err(BrokerError::Provider(
+            "image data URL must use base64 encoding".to_string(),
+        ));
+    }
+
+    let mime_type = metadata
+        .trim_start_matches("data:")
+        .split(';')
+        .next()
+        .filter(|value| !value.is_empty())
+        .unwrap_or("application/octet-stream")
+        .to_string();
+    let bytes = BASE64_STANDARD
+        .decode(encoded.trim())
+        .map_err(|err| BrokerError::Provider(format!("failed to decode image data URL: {err}")))?;
+    Ok((mime_type, bytes))
+}
+
+fn multipart_filename(task: &ApiTask, prefix: &str, mime_type: &str) -> String {
+    value_str(task, &format!("{prefix}_filename"))
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .map(str::to_string)
+        .unwrap_or_else(|| filename_for_mime_type(prefix, mime_type))
+}
+
+fn filename_for_mime_type(prefix: &str, mime_type: &str) -> String {
+    let extension = match mime_type {
+        "image/jpeg" => "jpg",
+        "image/webp" => "webp",
+        "image/gif" => "gif",
+        "image/png" => "png",
+        _ => "bin",
+    };
+    format!("{prefix}.{extension}")
+}
+
+fn mime_type_from_path(path: &Path) -> Option<String> {
+    match path
+        .extension()
+        .and_then(|extension| extension.to_str())
+        .map(|extension| extension.to_ascii_lowercase())
+        .as_deref()
+    {
+        Some("png") => Some("image/png".to_string()),
+        Some("jpg" | "jpeg") => Some("image/jpeg".to_string()),
+        Some("webp") => Some("image/webp".to_string()),
+        Some("gif") => Some("image/gif".to_string()),
+        _ => None,
+    }
 }
 
 fn credentials_file(task: &ApiTask) -> Option<&str> {
@@ -559,6 +851,15 @@ fn copy_optional_fields(task: &ApiTask, body: &mut Map<String, Value>, keys: &[&
     }
 }
 
+fn copy_optional_form_fields(task: &ApiTask, mut form: Form, keys: &[&str]) -> Form {
+    for key in keys {
+        if let Some(value) = value(task, key) {
+            form = form.text((*key).to_string(), multipart_value_to_string(value));
+        }
+    }
+    form
+}
+
 fn merge_extra_body(task: &ApiTask, body: &mut Map<String, Value>) -> BrokerResult<()> {
     if let Some(extra) = value(task, "extra_body") {
         let extra = extra
@@ -569,6 +870,25 @@ fn merge_extra_body(task: &ApiTask, body: &mut Map<String, Value>) -> BrokerResu
         }
     }
     Ok(())
+}
+
+fn merge_extra_body_form(task: &ApiTask, mut form: Form) -> BrokerResult<Form> {
+    if let Some(extra) = value(task, "extra_body") {
+        let extra = extra
+            .as_object()
+            .ok_or_else(|| BrokerError::Provider("extra_body must be a JSON object".to_string()))?;
+        for (key, value) in extra {
+            form = form.text(key.clone(), multipart_value_to_string(value));
+        }
+    }
+    Ok(form)
+}
+
+fn multipart_value_to_string(value: &Value) -> String {
+    value
+        .as_str()
+        .map(str::to_string)
+        .unwrap_or_else(|| value.to_string())
 }
 
 fn endpoint_url(task: &ApiTask, path: &str, credentials: Option<&CredentialEntry>) -> String {

@@ -94,6 +94,7 @@ cargo build -p hgripe-api --bins
 .\.venv\Scripts\python.exe python\bridge\custom_http_example.py
 .\.venv\Scripts\python.exe python\bridge\openai_compatible_text_example.py
 .\.venv\Scripts\python.exe python\bridge\openai_compatible_image_node_example.py
+.\.venv\Scripts\python.exe python\bridge\openai_compatible_image_edit_node_example.py
 .\.venv\Scripts\python.exe python\bridge\openai_compatible_vision_node_example.py
 .\.venv\Scripts\python.exe python\bridge\openai_compatible_credentials_ref_example.py
 .\.venv\Scripts\python.exe python\bridge\openai_compatible_profile_example.py

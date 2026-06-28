@@ -132,6 +132,18 @@ def _images_to_tensor(result: dict[str, Any], timeout_ms: int):
     return torch.cat(tensors, dim=0)
 
 
+def _image_file_to_tensor(path: str):
+    import numpy as np
+    import torch
+    from PIL import Image
+
+    if not path:
+        raise RuntimeError("result does not contain a downloaded image file")
+    image = Image.open(path).convert("RGB")
+    array = np.asarray(image).astype(np.float32) / 255.0
+    return torch.from_numpy(array)[None,]
+
+
 def _tensor_image_to_data_url(image: Any, image_index: int, image_format: str) -> str:
     import numpy as np
     from PIL import Image
@@ -1483,6 +1495,127 @@ class HGripeVisionAnalyze:
         return (text, json.dumps(result, ensure_ascii=False, indent=2), status)
 
 
+class HGripeImageEnhance:
+    """Semantic enhance node: upscale / denoise / background removal.
+
+    The concrete enhance API (Real-ESRGAN, a Replicate upscaler, remove.bg, a
+    local GPU service, etc.) is described by a ``custom_http`` provider profile
+    that supplies the submit/poll URLs, status/result JSON paths and auth. This
+    node uploads the input image (as a data URL in the request body), runs the
+    generic submit -> poll -> download async job, and decodes the returned file
+    back into an IMAGE tensor for downstream nodes.
+    """
+
+    @classmethod
+    def INPUT_TYPES(cls):
+        return {
+            "required": {
+                "image": ("IMAGE",),
+                "profile_ref": ("STRING", {"default": ""}),
+                "credentials_ref": ("STRING", {"default": "custom-http-main"}),
+                "auth_mode": (
+                    ["credentials_ref", "env_or_key", "no_auth"],
+                    {"default": "credentials_ref"},
+                ),
+                "api_key_env": ("STRING", {"default": "HGRIPE_CUSTOM_HTTP_API_KEY"}),
+                "api_key": ("STRING", {"default": ""}),
+                "image_key": ("STRING", {"default": "image"}),
+                "image_format": (["png", "jpeg", "webp"], {"default": "png"}),
+                "image_index": ("INT", {"default": 0, "min": 0, "max": 4095, "step": 1}),
+                "body_json": ("STRING", {"multiline": True, "default": "{}"}),
+                "output_extension": ("STRING", {"default": "png"}),
+                "max_polls": ("INT", {"default": 60, "min": 1, "max": 10000, "step": 1}),
+                "poll_interval_ms": (
+                    "INT",
+                    {"default": 1500, "min": 0, "max": 3600000, "step": 100},
+                ),
+                "max_attempts": ("INT", {"default": 2, "min": 1, "max": 10, "step": 1}),
+                "timeout_ms": (
+                    "INT",
+                    {"default": 300000, "min": 1000, "max": 3600000, "step": 1000},
+                ),
+                "force_run_nonce": (
+                    "INT",
+                    {"default": 0, "min": 0, "max": 2147483647, "step": 1},
+                ),
+            }
+        }
+
+    RETURN_TYPES = ("IMAGE", "STRING", "STRING", "STRING")
+    RETURN_NAMES = ("image", "output_path", "result_json", "status")
+    FUNCTION = "run"
+    CATEGORY = "H-Gripe/API"
+
+    def run(
+        self,
+        image,
+        profile_ref: str,
+        credentials_ref: str,
+        auth_mode: str,
+        api_key_env: str,
+        api_key: str,
+        image_key: str,
+        image_format: str,
+        image_index: int,
+        body_json: str,
+        output_extension: str,
+        max_polls: int,
+        poll_interval_ms: int,
+        max_attempts: int,
+        timeout_ms: int,
+        force_run_nonce: int,
+    ):
+        if not profile_ref.strip():
+            raise ValueError(
+                "H-Gripe Image Enhance requires a profile_ref describing the custom_http enhance API"
+            )
+        if not image_key.strip():
+            raise ValueError("image_key must be set")
+
+        body = _parse_json_object(body_json, "body_json")
+        body[image_key.strip()] = _tensor_image_to_data_url(image, image_index, image_format)
+
+        params: dict[str, Any] = {
+            "profile_ref": profile_ref.strip(),
+            "json": body,
+            "download_result": True,
+            "max_polls": max_polls,
+            "poll_interval_ms": poll_interval_ms,
+        }
+        if output_extension.strip():
+            params["output_extension"] = output_extension.strip()
+
+        task_credentials_ref = _apply_openai_auth(
+            params, auth_mode, credentials_ref, api_key_env, api_key
+        )
+
+        task = {
+            "id": f"comfy-image-enhance-{uuid.uuid4()}",
+            "provider": "custom_http",
+            "operation": "async_job",
+            "inputs": {"force_run_nonce": force_run_nonce},
+            "params": params,
+            "credentials_ref": task_credentials_ref,
+            "output_type": "files",
+            "cache_policy": {"enabled": False, "ttl_seconds": None, "key": None},
+            "retry_policy": {
+                "max_attempts": max_attempts,
+                "backoff_ms": 500,
+                "timeout_ms": timeout_ms,
+            },
+        }
+
+        result = run_task(task)
+        _raise_if_failed(result, "H-Gripe Image Enhance")
+        status = str(result.get("status", "unknown"))
+        output_files = result.get("output_files") or []
+        output_path = ""
+        if output_files and isinstance(output_files[0], dict):
+            output_path = str(output_files[0].get("path") or "")
+        enhanced = _image_file_to_tensor(output_path)
+        return (enhanced, output_path, json.dumps(result, ensure_ascii=False, indent=2), status)
+
+
 class HGripeVideoJob:
     """Semantic video node: text-to-video / image-to-video async jobs.
 
@@ -1925,6 +2058,7 @@ NODE_CLASS_MAPPINGS = {
     "HGripeOpenAICompatibleAudioText": HGripeOpenAICompatibleAudioText,
     "HGripeOpenAICompatibleVision": HGripeOpenAICompatibleVision,
     "HGripeVisionAnalyze": HGripeVisionAnalyze,
+    "HGripeImageEnhance": HGripeImageEnhance,
     "HGripeVideoJob": HGripeVideoJob,
     "HGripeReplicateRun": HGripeReplicateRun,
 }
@@ -1941,6 +2075,7 @@ NODE_DISPLAY_NAME_MAPPINGS = {
     "HGripeOpenAICompatibleAudioText": "H-Gripe OpenAI Compatible Audio Text",
     "HGripeOpenAICompatibleVision": "H-Gripe OpenAI Compatible Vision",
     "HGripeVisionAnalyze": "H-Gripe Vision Analyze",
+    "HGripeImageEnhance": "H-Gripe Image Enhance",
     "HGripeVideoJob": "H-Gripe Video Job",
     "HGripeReplicateRun": "H-Gripe Replicate Run",
 }

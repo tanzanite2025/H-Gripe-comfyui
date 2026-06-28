@@ -112,6 +112,36 @@ fn credentials_show_redacts_secret_values() {
 }
 
 #[test]
+fn credentials_validate_accepts_custom_http_provider() {
+    let path = temp_credentials_path();
+    write_credentials_file(
+        &path,
+        json!({
+            "custom-http-main": {
+                "provider": "custom_http",
+                "base_url": "https://api.example.test",
+                "api_key": "do-not-leak",
+                "headers": {
+                    "X-Team": "visible"
+                }
+            }
+        }),
+    );
+
+    let validation = validate_credentials(Some(path.to_str().unwrap()))
+        .expect("credential validation should run");
+
+    assert_eq!(validation.credential_count, 1);
+    assert!(validation.ok);
+    assert!(!validation
+        .issues
+        .iter()
+        .any(|issue| issue.code == "unsupported_provider"));
+
+    let _ = fs::remove_file(path);
+}
+
+#[test]
 fn credentials_validate_reports_errors_and_warnings() {
     let path = temp_credentials_path();
     write_credentials_file(

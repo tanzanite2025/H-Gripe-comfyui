@@ -170,6 +170,52 @@ async fn custom_http_sends_multipart_file_and_fields() {
 }
 
 #[tokio::test]
+async fn custom_http_uses_credentials_ref_for_base_url_and_auth_headers() {
+    let (absolute_url, request_rx) = spawn_once_json_server_with_request(
+        "HTTP/1.1 200 OK",
+        r#"{"ok":true,"credential":true}"#,
+        Some("local-credential-request"),
+    )
+    .await;
+    let base_url = absolute_url.trim_end_matches("/multipart").to_string();
+    let credentials_file = write_temp_credentials_file(&base_url);
+
+    let mut broker = ApiBroker::new();
+    broker.register_provider(CustomHttpProvider::default());
+
+    let mut task = ApiTask::new("custom_http", "request");
+    task.credentials_ref = Some("local-custom-http".to_string());
+    task.params.insert("method".into(), json!("GET"));
+    task.params.insert("url".into(), json!("/secure"));
+    task.params.insert(
+        "credentials_file".into(),
+        json!(credentials_file.to_string_lossy().to_string()),
+    );
+
+    let result = broker
+        .execute(task)
+        .await
+        .expect("credential HTTP task should run");
+    let request = request_rx.await.expect("server should capture request");
+    let _ = fs::remove_file(credentials_file);
+
+    assert_eq!(result.status, ApiStatus::Succeeded);
+    assert_eq!(
+        result.provider_request_id.as_deref(),
+        Some("local-credential-request")
+    );
+    assert_eq!(
+        result.output_json.unwrap()["body"]["credential"],
+        json!(true)
+    );
+    assert!(request.contains("GET /secure HTTP/1.1"));
+    assert!(request
+        .to_lowercase()
+        .contains("authorization: bearer credential-token"));
+    assert!(request.contains("x-credential-test: yes"));
+}
+
+#[tokio::test]
 async fn custom_http_async_job_polls_and_downloads_result() {
     let video_body = b"fake mp4 bytes from async job";
     let base_url = spawn_async_job_server(video_body).await;
@@ -504,6 +550,26 @@ fn find_subsequence(buffer: &[u8], needle: &[u8]) -> Option<usize> {
 fn write_temp_upload_file(extension: &str, bytes: &[u8]) -> std::path::PathBuf {
     let path = std::env::temp_dir().join(format!("hgripe-upload-{}.{}", temp_suffix(), extension));
     fs::write(&path, bytes).expect("upload fixture should be written");
+    path
+}
+
+fn write_temp_credentials_file(base_url: &str) -> std::path::PathBuf {
+    let path = std::env::temp_dir().join(format!(
+        "hgripe-custom-http-credentials-{}.json",
+        temp_suffix()
+    ));
+    let document = json!({
+        "local-custom-http": {
+            "provider": "custom_http",
+            "base_url": base_url,
+            "api_key": "credential-token",
+            "headers": {
+                "X-Credential-Test": "yes"
+            }
+        }
+    });
+    fs::write(&path, serde_json::to_string_pretty(&document).unwrap())
+        .expect("credentials fixture should be written");
     path
 }
 

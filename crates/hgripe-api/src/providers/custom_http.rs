@@ -1,3 +1,4 @@
+use crate::credentials::{load_credential_ref, CredentialEntry};
 use crate::model::{ApiErrorInfo, ApiResult, ApiStatus, ApiTask, OutputFile};
 use crate::outputs::write_task_output_bytes;
 use crate::provider::{BrokerError, BrokerResult, Provider};
@@ -7,6 +8,7 @@ use reqwest::multipart::{Form, Part};
 use reqwest::{Client, Method, StatusCode};
 use serde_json::{json, Map, Value};
 use std::collections::BTreeMap;
+use std::env;
 use std::fs;
 use std::path::Path;
 use std::time::Duration;
@@ -58,8 +60,16 @@ impl CustomHttpProvider {
     async fn execute_request(&self, task: &ApiTask) -> BrokerResult<ApiResult> {
         let url = value_str(task, "url")
             .ok_or_else(|| BrokerError::Provider("custom_http requires params.url".to_string()))?;
+        let credentials = resolve_credentials(task)?;
         let response = self
-            .send_task_request(task, "", url, inferred_default_method(task, ""), false)
+            .send_task_request(
+                task,
+                "",
+                url,
+                inferred_default_method(task, ""),
+                false,
+                credentials.as_ref(),
+            )
             .await?;
 
         if response.status.is_server_error() {
@@ -101,6 +111,7 @@ impl CustomHttpProvider {
         let submit_url = value_str(task, "url").ok_or_else(|| {
             BrokerError::Provider("custom_http async_job requires params.url".to_string())
         })?;
+        let credentials = resolve_credentials(task)?;
         let submit_response = self
             .send_task_request(
                 task,
@@ -108,6 +119,7 @@ impl CustomHttpProvider {
                 submit_url,
                 inferred_default_method(task, ""),
                 false,
+                credentials.as_ref(),
             )
             .await?;
 
@@ -170,7 +182,7 @@ impl CustomHttpProvider {
             }
 
             let response = self
-                .send_task_request(task, "poll", &poll_url, "GET", true)
+                .send_task_request(task, "poll", &poll_url, "GET", true, credentials.as_ref())
                 .await?;
 
             if response.status.is_server_error() {
@@ -233,8 +245,13 @@ impl CustomHttpProvider {
                                 ))
                             })?;
                     output_files.push(
-                        self.download_result_output(task, &download_url, output_files.len())
-                            .await?,
+                        self.download_result_output(
+                            task,
+                            &download_url,
+                            output_files.len(),
+                            credentials.as_ref(),
+                        )
+                        .await?,
                     );
                     download_saved = true;
                 }
@@ -348,11 +365,13 @@ impl CustomHttpProvider {
         url: &str,
         default_method: &str,
         fallback_headers: bool,
+        credentials: Option<&CredentialEntry>,
     ) -> BrokerResult<HttpResponse> {
         let method_key = prefixed_key(prefix, "method");
         let method = value_str(task, &method_key).unwrap_or(default_method);
         let method = Method::from_bytes(method.as_bytes())
             .map_err(|err| BrokerError::Provider(format!("invalid HTTP method: {err}")))?;
+        let url = request_url(task, url, credentials)?;
 
         let mut request = self.client.request(method, url);
 
@@ -360,17 +379,19 @@ impl CustomHttpProvider {
             request = request.timeout(Duration::from_millis(timeout_ms));
         }
 
-        let headers_key = prefixed_key(prefix, "headers");
-        if let Some(headers) = value(task, &headers_key)
-            .and_then(Value::as_object)
-            .or_else(|| {
-                if fallback_headers {
-                    value(task, "headers").and_then(Value::as_object)
-                } else {
-                    None
-                }
-            })
+        if let Some(api_key) = resolve_api_key(task, credentials)?
+            .filter(|_| !has_auth_header(task, prefix, fallback_headers, credentials))
         {
+            request = request.bearer_auth(api_key);
+        }
+
+        if let Some(headers) = credentials.and_then(|entry| entry.headers.as_ref()) {
+            for (name, header_value) in headers {
+                request = request.header(name, header_value);
+            }
+        }
+
+        if let Some(headers) = task_headers(task, prefix, fallback_headers) {
             for (name, header_value) in headers {
                 if let Some(header_value) = header_value.as_str() {
                     request = request.header(name, header_value);
@@ -433,11 +454,25 @@ impl CustomHttpProvider {
         task: &ApiTask,
         url: &str,
         index: usize,
+        credentials: Option<&CredentialEntry>,
     ) -> BrokerResult<OutputFile> {
+        let url = request_url(task, url, credentials)?;
         let mut request = self.client.get(url);
 
         if let Some(timeout_ms) = task.retry_policy.timeout_ms {
             request = request.timeout(Duration::from_millis(timeout_ms));
+        }
+
+        if let Some(api_key) = resolve_api_key(task, credentials)?
+            .filter(|_| !has_download_auth_header(task, credentials))
+        {
+            request = request.bearer_auth(api_key);
+        }
+
+        if let Some(headers) = credentials.and_then(|entry| entry.headers.as_ref()) {
+            for (name, header_value) in headers {
+                request = request.header(name, header_value);
+            }
         }
 
         if let Some(headers) = value(task, "download_headers")
@@ -502,6 +537,165 @@ fn value_u64(task: &ApiTask, key: &str) -> Option<u64> {
         Value::String(value) => value.trim().parse().ok(),
         _ => None,
     }
+}
+
+fn credentials_file(task: &ApiTask) -> Option<&str> {
+    value_str(task, "credentials_file")
+}
+
+fn resolve_credentials(task: &ApiTask) -> BrokerResult<Option<CredentialEntry>> {
+    let Some(credential_ref) = task.credentials_ref.as_deref() else {
+        return Ok(None);
+    };
+    let credential_ref = credential_ref.trim();
+    if credential_ref.is_empty() {
+        return Ok(None);
+    }
+
+    let credential =
+        load_credential_ref(credential_ref, credentials_file(task))?.ok_or_else(|| {
+            BrokerError::Provider(format!("credentials_ref '{credential_ref}' was not found"))
+        })?;
+    if let Some(provider) = credential.provider.as_deref() {
+        let provider = provider.trim();
+        if !provider.is_empty() && provider != "custom_http" {
+            return Err(BrokerError::Provider(format!(
+                "credentials_ref '{credential_ref}' is for provider '{provider}', not custom_http"
+            )));
+        }
+    }
+
+    Ok(Some(credential))
+}
+
+fn resolve_api_key(
+    task: &ApiTask,
+    credentials: Option<&CredentialEntry>,
+) -> BrokerResult<Option<String>> {
+    if value_bool(task, "no_auth").unwrap_or(false) {
+        return Ok(None);
+    }
+
+    if let Some(api_key) = value_str(task, "api_key") {
+        let api_key = api_key.trim();
+        if !api_key.is_empty() {
+            return Ok(Some(api_key.to_string()));
+        }
+    }
+
+    if let Some(api_key_env) = value_str(task, "api_key_env") {
+        let api_key_env = api_key_env.trim();
+        if api_key_env.is_empty() {
+            return Ok(None);
+        }
+        return Ok(env::var(api_key_env).ok().filter(|value| !value.is_empty()));
+    }
+
+    if let Some(credentials) = credentials {
+        if let Some(api_key) = credentials.api_key.as_deref() {
+            let api_key = api_key.trim();
+            if !api_key.is_empty() {
+                return Ok(Some(api_key.to_string()));
+            }
+        }
+
+        if let Some(api_key_env) = credentials.api_key_env.as_deref() {
+            let api_key_env = api_key_env.trim();
+            if api_key_env.is_empty() {
+                return Ok(None);
+            }
+            return Ok(env::var(api_key_env).ok().filter(|value| !value.is_empty()));
+        }
+    }
+
+    Ok(env::var("HGRIPE_CUSTOM_HTTP_API_KEY")
+        .ok()
+        .filter(|value| !value.is_empty()))
+}
+
+fn request_url(
+    task: &ApiTask,
+    url: &str,
+    credentials: Option<&CredentialEntry>,
+) -> BrokerResult<String> {
+    let url = url.trim();
+    if url.starts_with("http://") || url.starts_with("https://") {
+        return Ok(url.to_string());
+    }
+
+    let base_url = value_str(task, "base_url")
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .map(str::to_string)
+        .or_else(|| {
+            credentials
+                .and_then(|entry| entry.base_url.as_deref())
+                .map(str::trim)
+                .filter(|value| !value.is_empty())
+                .map(str::to_string)
+        })
+        .or_else(|| {
+            env::var("HGRIPE_CUSTOM_HTTP_BASE_URL")
+                .ok()
+                .map(|value| value.trim().to_string())
+                .filter(|value| !value.is_empty())
+        })
+        .ok_or_else(|| {
+            BrokerError::Provider(
+                "custom_http URL must be absolute or base_url must be configured".to_string(),
+            )
+        })?;
+
+    let path = if url.starts_with('/') {
+        url.to_string()
+    } else {
+        format!("/{url}")
+    };
+    Ok(format!("{}{}", base_url.trim_end_matches('/'), path))
+}
+
+fn task_headers<'a>(
+    task: &'a ApiTask,
+    prefix: &str,
+    fallback_headers: bool,
+) -> Option<&'a Map<String, Value>> {
+    let headers_key = prefixed_key(prefix, "headers");
+    value(task, &headers_key)
+        .and_then(Value::as_object)
+        .or_else(|| {
+            if fallback_headers {
+                value(task, "headers").and_then(Value::as_object)
+            } else {
+                None
+            }
+        })
+}
+
+fn has_auth_header(
+    task: &ApiTask,
+    prefix: &str,
+    fallback_headers: bool,
+    credentials: Option<&CredentialEntry>,
+) -> bool {
+    credentials
+        .and_then(|entry| entry.headers.as_ref())
+        .is_some_and(|headers| headers.keys().any(|name| is_authorization_header(name)))
+        || task_headers(task, prefix, fallback_headers)
+            .is_some_and(|headers| headers.keys().any(|name| is_authorization_header(name)))
+}
+
+fn has_download_auth_header(task: &ApiTask, credentials: Option<&CredentialEntry>) -> bool {
+    credentials
+        .and_then(|entry| entry.headers.as_ref())
+        .is_some_and(|headers| headers.keys().any(|name| is_authorization_header(name)))
+        || value(task, "download_headers")
+            .and_then(Value::as_object)
+            .or_else(|| value(task, "headers").and_then(Value::as_object))
+            .is_some_and(|headers| headers.keys().any(|name| is_authorization_header(name)))
+}
+
+fn is_authorization_header(name: &str) -> bool {
+    name.eq_ignore_ascii_case("authorization") || name.eq_ignore_ascii_case("proxy-authorization")
 }
 
 fn multipart_enabled(task: &ApiTask, prefix: &str) -> bool {

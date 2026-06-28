@@ -47,6 +47,10 @@ try:
     output_path, result_json, status = node.run(
         url=f"http://127.0.0.1:{server.server_port}/upload",
         method="POST",
+        credentials_ref="",
+        auth_mode="no_auth",
+        api_key_env="",
+        api_key="",
         headers_json="{}",
         query_json="{}",
         fields_json='{"prompt":"local multipart upload","strength":0.75}',

@@ -191,6 +191,13 @@ class HGripeCustomHttpApi:
             "required": {
                 "url": ("STRING", {"default": "http://127.0.0.1:8199/"}),
                 "method": (["GET", "POST", "PUT", "PATCH", "DELETE"], {"default": "GET"}),
+                "credentials_ref": ("STRING", {"default": "custom-http-main"}),
+                "auth_mode": (
+                    ["credentials_ref", "env_or_key", "no_auth"],
+                    {"default": "credentials_ref"},
+                ),
+                "api_key_env": ("STRING", {"default": "HGRIPE_CUSTOM_HTTP_API_KEY"}),
+                "api_key": ("STRING", {"default": ""}),
                 "headers_json": ("STRING", {"multiline": True, "default": "{}"}),
                 "query_json": ("STRING", {"multiline": True, "default": "{}"}),
                 "body_json": ("STRING", {"multiline": True, "default": ""}),
@@ -217,6 +224,10 @@ class HGripeCustomHttpApi:
         self,
         url: str,
         method: str,
+        credentials_ref: str,
+        auth_mode: str,
+        api_key_env: str,
+        api_key: str,
         headers_json: str,
         query_json: str,
         body_json: str,
@@ -237,6 +248,9 @@ class HGripeCustomHttpApi:
             "query": query,
             "save_response": save_response == "enable",
         }
+        task_credentials_ref = _apply_openai_auth(
+            params, auth_mode, credentials_ref, api_key_env, api_key
+        )
         if body is not None:
             params["json"] = body
         if output_extension.strip():
@@ -248,7 +262,7 @@ class HGripeCustomHttpApi:
             "operation": "request",
             "inputs": {"force_run_nonce": force_run_nonce},
             "params": params,
-            "credentials_ref": None,
+            "credentials_ref": task_credentials_ref,
             "output_type": "json",
             "cache_policy": {"enabled": False, "ttl_seconds": None, "key": None},
             "retry_policy": {
@@ -270,6 +284,13 @@ class HGripeCustomHttpMultipartApi:
             "required": {
                 "url": ("STRING", {"default": "http://127.0.0.1:8199/upload"}),
                 "method": (["POST", "PUT", "PATCH"], {"default": "POST"}),
+                "credentials_ref": ("STRING", {"default": "custom-http-main"}),
+                "auth_mode": (
+                    ["credentials_ref", "env_or_key", "no_auth"],
+                    {"default": "credentials_ref"},
+                ),
+                "api_key_env": ("STRING", {"default": "HGRIPE_CUSTOM_HTTP_API_KEY"}),
+                "api_key": ("STRING", {"default": ""}),
                 "headers_json": ("STRING", {"multiline": True, "default": "{}"}),
                 "query_json": ("STRING", {"multiline": True, "default": "{}"}),
                 "fields_json": ("STRING", {"multiline": True, "default": "{}"}),
@@ -300,6 +321,10 @@ class HGripeCustomHttpMultipartApi:
         self,
         url: str,
         method: str,
+        credentials_ref: str,
+        auth_mode: str,
+        api_key_env: str,
+        api_key: str,
         headers_json: str,
         query_json: str,
         fields_json: str,
@@ -328,6 +353,9 @@ class HGripeCustomHttpMultipartApi:
             "multipart_fields": fields,
             "save_response": save_response == "enable",
         }
+        task_credentials_ref = _apply_openai_auth(
+            params, auth_mode, credentials_ref, api_key_env, api_key
+        )
         if file_path:
             params["multipart_file_path"] = file_path
             params["multipart_file_field"] = file_field.strip() or "file"
@@ -344,7 +372,7 @@ class HGripeCustomHttpMultipartApi:
             "operation": "request",
             "inputs": {"force_run_nonce": force_run_nonce},
             "params": params,
-            "credentials_ref": None,
+            "credentials_ref": task_credentials_ref,
             "output_type": "files",
             "cache_policy": {"enabled": False, "ttl_seconds": None, "key": None},
             "retry_policy": {
@@ -370,6 +398,13 @@ class HGripeCustomHttpAsyncJob:
             "required": {
                 "url": ("STRING", {"default": "http://127.0.0.1:8199/submit"}),
                 "method": (["POST", "GET", "PUT", "PATCH", "DELETE"], {"default": "POST"}),
+                "credentials_ref": ("STRING", {"default": "custom-http-main"}),
+                "auth_mode": (
+                    ["credentials_ref", "env_or_key", "no_auth"],
+                    {"default": "credentials_ref"},
+                ),
+                "api_key_env": ("STRING", {"default": "HGRIPE_CUSTOM_HTTP_API_KEY"}),
+                "api_key": ("STRING", {"default": ""}),
                 "headers_json": ("STRING", {"multiline": True, "default": "{}"}),
                 "query_json": ("STRING", {"multiline": True, "default": "{}"}),
                 "body_json": ("STRING", {"multiline": True, "default": "{}"}),
@@ -427,6 +462,10 @@ class HGripeCustomHttpAsyncJob:
         self,
         url: str,
         method: str,
+        credentials_ref: str,
+        auth_mode: str,
+        api_key_env: str,
+        api_key: str,
         headers_json: str,
         query_json: str,
         body_json: str,
@@ -494,6 +533,9 @@ class HGripeCustomHttpAsyncJob:
             "download_url_path": download_url_path,
             "save_response": save_response == "enable",
         }
+        task_credentials_ref = _apply_openai_auth(
+            params, auth_mode, credentials_ref, api_key_env, api_key
+        )
         uses_multipart = bool(multipart_fields) or bool(multipart_file_path.strip())
         if uses_multipart:
             params["multipart_fields"] = multipart_fields
@@ -519,7 +561,7 @@ class HGripeCustomHttpAsyncJob:
             "operation": "async_job",
             "inputs": {"force_run_nonce": force_run_nonce},
             "params": params,
-            "credentials_ref": None,
+            "credentials_ref": task_credentials_ref,
             "output_type": "files",
             "cache_policy": {"enabled": False, "ttl_seconds": None, "key": None},
             "retry_policy": {

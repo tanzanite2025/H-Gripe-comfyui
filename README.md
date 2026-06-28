@@ -42,7 +42,7 @@ The current prototype adds a Rust API broker plus thin Python/ComfyUI bridge nod
 - Credential ref example: `docs/credentials.example.json`
 - Provider profile example: `docs/provider_profiles.example.json`
 
-Credential refs keep API keys out of workflow files. The default local credential file is ignored by git:
+Credential refs keep API keys out of workflow files. `openai_compatible` and `custom_http` tasks/nodes can use them. The default local credential file is ignored by git:
 
 ```text
 user/hgripe/credentials.json
@@ -79,6 +79,7 @@ user/hgripe/outputs
 `custom_http` can also save raw successful response bytes when `save_response=true`, which is useful for API endpoints that directly return images, audio, video, PDFs, or other files.
 `custom_http` supports multipart form fields and local file uploads for APIs that accept images, audio, video, PDFs, or dataset files.
 `custom_http async_job` can submit an async API job, poll a status endpoint, and download a final result URL into `output_files`.
+`custom_http` can use `credentials_ref` for `base_url`, bearer API keys, env-based API keys, and secret/non-secret headers, keeping them out of workflow JSON.
 
 Useful environment overrides:
 
@@ -88,6 +89,8 @@ $env:HGRIPE_HISTORY_DB="C:\path\to\tasks.sqlite3"
 $env:HGRIPE_OUTPUT_DIR="C:\path\to\outputs"
 $env:HGRIPE_HISTORY_DISABLED="1"
 $env:HGRIPE_PROVIDER_PROFILES_FILE="C:\path\to\provider_profiles.json"
+$env:HGRIPE_CUSTOM_HTTP_BASE_URL="https://api.example.com"
+$env:HGRIPE_CUSTOM_HTTP_API_KEY="..."
 ```
 
 Local verification:
@@ -98,6 +101,7 @@ cargo build -p hgripe-api --bins
 .\.venv\Scripts\python.exe python\bridge\mock_task_example.py
 .\.venv\Scripts\python.exe python\bridge\custom_http_example.py
 .\.venv\Scripts\python.exe python\bridge\custom_http_binary_output_example.py
+.\.venv\Scripts\python.exe python\bridge\custom_http_credentials_ref_example.py
 .\.venv\Scripts\python.exe python\bridge\custom_http_multipart_example.py
 .\.venv\Scripts\python.exe python\bridge\custom_http_async_job_example.py
 .\.venv\Scripts\python.exe python\bridge\openai_compatible_text_example.py

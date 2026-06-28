@@ -1,0 +1,6 @@
+# Tauri build artifacts
+src-tauri/gen/
+src-tauri/target/
+
+# Node (frontend tooling, if added later)
+node_modules/

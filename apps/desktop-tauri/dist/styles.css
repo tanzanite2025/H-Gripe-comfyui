@@ -145,6 +145,9 @@ tr:hover td { background: var(--panel); }
 }
 .badge.ok { background: rgba(67,197,158,0.15); color: var(--ok); }
 .badge.err { background: rgba(224,85,107,0.15); color: var(--danger); }
+.badge.so { background: rgba(120,140,255,0.18); color: #9fb0ff; }
+.so-note { margin: 8px 0; font-size: 13px; color: var(--muted); }
+.so-note em { font-style: italic; color: var(--text); }
 
 .hidden { display: none !important; }
 

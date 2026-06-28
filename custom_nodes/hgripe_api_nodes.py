@@ -1345,6 +1345,144 @@ class HGripeOpenAICompatibleVision:
         return (text, json.dumps(result, ensure_ascii=False, indent=2), status)
 
 
+class HGripeVisionAnalyze:
+    """Semantic vision node: image understanding, prompt inference, QA checks.
+
+    The concrete backend (any OpenAI-compatible vision/chat model) is selected by
+    ``profile_ref`` rather than by a per-vendor node. Returns the analysis text.
+    """
+
+    @classmethod
+    def INPUT_TYPES(cls):
+        return {
+            "required": {
+                "image": ("IMAGE",),
+                "prompt": ("STRING", {"multiline": True, "default": "Describe this image."}),
+                "profile_ref": ("STRING", {"default": ""}),
+                "model": ("STRING", {"default": ""}),
+                "base_url": ("STRING", {"default": ""}),
+                "credentials_ref": ("STRING", {"default": "openai-main"}),
+                "auth_mode": (
+                    ["credentials_ref", "env_or_key", "no_auth"],
+                    {"default": "credentials_ref"},
+                ),
+                "api_key_env": ("STRING", {"default": "OPENAI_API_KEY"}),
+                "api_key": ("STRING", {"default": ""}),
+                "system_prompt": ("STRING", {"multiline": True, "default": ""}),
+                "image_index": ("INT", {"default": 0, "min": 0, "max": 4095, "step": 1}),
+                "image_format": (["png", "jpeg", "webp"], {"default": "png"}),
+                "detail": (["auto", "low", "high"], {"default": "auto"}),
+                "temperature": (
+                    "FLOAT",
+                    {"default": 0.2, "min": 0.0, "max": 2.0, "step": 0.1},
+                ),
+                "max_tokens": (
+                    "INT",
+                    {"default": 1024, "min": 1, "max": 131072, "step": 1},
+                ),
+                "advanced_json": ("STRING", {"multiline": True, "default": "{}"}),
+                "max_attempts": ("INT", {"default": 2, "min": 1, "max": 10, "step": 1}),
+                "timeout_ms": (
+                    "INT",
+                    {"default": 120000, "min": 1000, "max": 1200000, "step": 1000},
+                ),
+                "force_run_nonce": (
+                    "INT",
+                    {"default": 0, "min": 0, "max": 2147483647, "step": 1},
+                ),
+            }
+        }
+
+    RETURN_TYPES = ("STRING", "STRING", "STRING")
+    RETURN_NAMES = ("text", "result_json", "status")
+    FUNCTION = "run"
+    CATEGORY = "H-Gripe/API"
+
+    def run(
+        self,
+        image,
+        prompt: str,
+        profile_ref: str,
+        model: str,
+        base_url: str,
+        credentials_ref: str,
+        auth_mode: str,
+        api_key_env: str,
+        api_key: str,
+        system_prompt: str,
+        image_index: int,
+        image_format: str,
+        detail: str,
+        temperature: float,
+        max_tokens: int,
+        advanced_json: str,
+        max_attempts: int,
+        timeout_ms: int,
+        force_run_nonce: int,
+    ):
+        extra_body = _parse_json_object(advanced_json, "advanced_json")
+        image_url = _tensor_image_to_data_url(image, image_index, image_format)
+        messages: list[dict[str, Any]] = []
+
+        if system_prompt.strip():
+            messages.append({"role": "system", "content": system_prompt})
+
+        messages.append(
+            {
+                "role": "user",
+                "content": [
+                    {"type": "text", "text": prompt},
+                    {
+                        "type": "image_url",
+                        "image_url": {
+                            "url": image_url,
+                            "detail": detail,
+                        },
+                    },
+                ],
+            }
+        )
+
+        params: dict[str, Any] = {
+            "base_url": base_url,
+            "messages": messages,
+            "temperature": temperature,
+            "max_tokens": max_tokens,
+            "extra_body": extra_body,
+        }
+        if model.strip():
+            params["model"] = model.strip()
+        if profile_ref.strip():
+            params["profile_ref"] = profile_ref.strip()
+
+        task_credentials_ref = _apply_openai_auth(
+            params, auth_mode, credentials_ref, api_key_env, api_key
+        )
+
+        task = {
+            "id": f"comfy-vision-analyze-{uuid.uuid4()}",
+            "provider": "openai_compatible",
+            "operation": "vision.analyze",
+            "inputs": {"force_run_nonce": force_run_nonce},
+            "params": params,
+            "credentials_ref": task_credentials_ref,
+            "output_type": "text",
+            "cache_policy": {"enabled": False, "ttl_seconds": None, "key": None},
+            "retry_policy": {
+                "max_attempts": max_attempts,
+                "backoff_ms": 500,
+                "timeout_ms": timeout_ms,
+            },
+        }
+
+        result = run_task(task)
+        _raise_if_failed(result, "H-Gripe Vision Analyze")
+        status = str(result.get("status", "unknown"))
+        output_json = result.get("output_json") or {}
+        text = str(output_json.get("text") or "")
+        return (text, json.dumps(result, ensure_ascii=False, indent=2), status)
+
+
 class HGripeReplicateRun:
     @classmethod
     def INPUT_TYPES(cls):
@@ -1654,6 +1792,7 @@ NODE_CLASS_MAPPINGS = {
     "HGripeOpenAICompatibleAudioSpeech": HGripeOpenAICompatibleAudioSpeech,
     "HGripeOpenAICompatibleAudioText": HGripeOpenAICompatibleAudioText,
     "HGripeOpenAICompatibleVision": HGripeOpenAICompatibleVision,
+    "HGripeVisionAnalyze": HGripeVisionAnalyze,
     "HGripeReplicateRun": HGripeReplicateRun,
 }
 
@@ -1668,5 +1807,6 @@ NODE_DISPLAY_NAME_MAPPINGS = {
     "HGripeOpenAICompatibleAudioSpeech": "H-Gripe OpenAI Compatible Audio Speech",
     "HGripeOpenAICompatibleAudioText": "H-Gripe OpenAI Compatible Audio Text",
     "HGripeOpenAICompatibleVision": "H-Gripe OpenAI Compatible Vision",
+    "HGripeVisionAnalyze": "H-Gripe Vision Analyze",
     "HGripeReplicateRun": "H-Gripe Replicate Run",
 }

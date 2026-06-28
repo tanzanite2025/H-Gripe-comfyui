@@ -168,3 +168,21 @@ button:disabled { opacity: 0.6; cursor: default; }
 
 /* node thumbnail wrapper (lazy) */
 .node-thumb-wrap { width: 100%; }
+
+/* inline param editing on the node card */
+.inline-field { display: flex; flex-direction: column; gap: 3px; margin-bottom: 8px; }
+.inline-field > span { color: var(--muted); font-size: 11px; }
+.inline-field input,
+.inline-field textarea,
+.inline-field select {
+  background: #11131a;
+  color: var(--text);
+  border: 1px solid var(--border);
+  border-radius: 5px;
+  padding: 4px 6px;
+  font: inherit;
+  width: 100%;
+}
+.inline-field textarea { min-height: 44px; resize: vertical; }
+.inline-field .slider-row input[type="range"] { width: auto; }
+.inline-field .path { margin-top: 1px; }

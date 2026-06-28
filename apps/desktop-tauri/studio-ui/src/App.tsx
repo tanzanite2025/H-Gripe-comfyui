@@ -10,6 +10,7 @@ import {
 import { FlowCanvas } from "./editor/FlowCanvas";
 import { Inspector } from "./editor/Inspector";
 import { Palette } from "./editor/Palette";
+import { NodeEditingContext } from "./editor/editingContext";
 import type { HgripeNodeData } from "./editor/HgripeNode";
 import { fromWorkflowGraph, toWorkflowGraph } from "./editor/adapter";
 import { defaultParams } from "./graph/nodeSpecs";
@@ -147,6 +148,9 @@ function Studio() {
     setSelectedId(null);
   }, [setNodes, setEdges]);
 
+  // Stable context value so memoized node cards can edit their own params.
+  const editing = useMemo(() => ({ onParamChange }), [onParamChange]);
+
   return (
     <div className="app">
       <header className="toolbar">
@@ -178,21 +182,23 @@ function Studio() {
         />
       </header>
 
-      <div className="workspace">
-        <Palette onAdd={addNode} />
-        <div className="canvas">
-          <FlowCanvas
-            nodes={nodes}
-            edges={edges}
-            onNodesChange={onNodesChange}
-            onEdgesChange={onEdgesChange}
-            setEdges={setEdges}
-            onSelect={setSelectedId}
-            onAddNode={addNode}
-          />
+      <NodeEditingContext.Provider value={editing}>
+        <div className="workspace">
+          <Palette onAdd={addNode} />
+          <div className="canvas">
+            <FlowCanvas
+              nodes={nodes}
+              edges={edges}
+              onNodesChange={onNodesChange}
+              onEdgesChange={onEdgesChange}
+              setEdges={setEdges}
+              onSelect={setSelectedId}
+              onAddNode={addNode}
+            />
+          </div>
+          <Inspector node={selectedNode} onParamChange={onParamChange} />
         </div>
-        <Inspector node={selectedNode} onParamChange={onParamChange} />
-      </div>
+      </NodeEditingContext.Provider>
     </div>
   );
 }

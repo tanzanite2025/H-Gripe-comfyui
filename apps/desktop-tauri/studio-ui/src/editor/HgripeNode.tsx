@@ -3,6 +3,8 @@ import { Handle, Position, type NodeProps } from "@xyflow/react";
 import { nodeSpec } from "../graph/nodeSpecs";
 import type { NodeStatus } from "../runtime/dag";
 import { generateThumbnail } from "../bridge/tauri";
+import { ParamField } from "./ParamField";
+import { useNodeEditing } from "./editingContext";
 
 export interface HgripeNodeData extends Record<string, unknown> {
   kind: string;
@@ -67,10 +69,15 @@ function LazyThumb({ path }: { path: string }) {
 // Custom node is memoized (React Flow perf guidance): node drags must not
 // re-render every node. The node shows only a compact summary + a thumbnail;
 // full params live in the Inspector and full-res media is opened there.
-function HgripeNodeImpl({ data, selected }: NodeProps) {
+function HgripeNodeImpl({ id, data, selected }: NodeProps) {
   const d = data as HgripeNodeData;
   const spec = nodeSpec(d.kind);
   const status = d.status ?? "idle";
+  const editing = useNodeEditing();
+  // Params flagged `inline` are edited directly on the card; the rest live in
+  // the Inspector. `imageSource`/`psdTemplate` paths get a basename caption so
+  // the card stays readable even with a long absolute path.
+  const inlineParams = spec.params.filter((p) => p.inline);
 
   return (
     <div className={`node ${selected ? "selected" : ""} status-${status}`}>
@@ -80,33 +87,27 @@ function HgripeNodeImpl({ data, selected }: NodeProps) {
       </div>
 
       <div className="node-body">
-        {spec.kind === "prompt" && (
-          <div className="node-preview-text">
-            {String(d.params.text ?? "") || <em>empty prompt</em>}
-          </div>
-        )}
-        {(spec.kind === "imageSource" || spec.kind === "psdTemplate") && (
-          <div className="node-meta">
-            {d.params.path ? basename(String(d.params.path)) : <em>no path set</em>}
-          </div>
-        )}
-        {spec.kind === "number" && (
-          <div className="node-meta">{String(d.params.value ?? 0)}</div>
-        )}
+        {inlineParams.map((p) => (
+          <label key={p.key} className="inline-field">
+            <span>{p.label}</span>
+            <ParamField
+              spec={p}
+              value={d.params[p.key]}
+              onChange={(v) => editing?.onParamChange(id, p.key, v)}
+              compact
+            />
+            {p.control === "path" && d.params[p.key] ? (
+              <small className="path">{basename(String(d.params[p.key]))}</small>
+            ) : null}
+          </label>
+        ))}
+
         {spec.kind === "preview" &&
           (d.imagePath ? (
             <LazyThumb path={d.imagePath} />
           ) : (
             <div className="node-thumb placeholder">no image</div>
           ))}
-        {spec.kind === "save" && (
-          <div className="node-meta">{String(d.params.filename ?? "output.png")}</div>
-        )}
-        {spec.kind === "generate" && (
-          <div className="node-meta">
-            {String(d.params.operation ?? "")} · {String(d.params.provider ?? "")}
-          </div>
-        )}
       </div>
 
       {spec.inputs.map((p, i) => (

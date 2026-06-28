@@ -1,0 +1,102 @@
+from __future__ import annotations
+
+import json
+import sys
+import tempfile
+from pathlib import Path
+
+import torch
+from PIL import Image
+from psd_tools import PSDImage
+from psd_tools.api.layers import PixelLayer
+
+ROOT_DIR = Path(__file__).resolve().parents[2]
+if str(ROOT_DIR) not in sys.path:
+    sys.path.insert(0, str(ROOT_DIR))
+
+from custom_nodes.hgripe_psd_nodes import (
+    HGripePsdCompose,
+    HGripePsdExport,
+    HGripePsdTemplateLoad,
+)
+
+
+def build_template(path: Path) -> None:
+    psd = PSDImage.new(mode="RGBA", size=(64, 48))
+    background = PixelLayer.frompil(
+        Image.new("RGBA", (64, 48), (240, 240, 240, 255)), psd, "background", 0, 0
+    )
+    psd.append(background)
+    # A named placeholder region the generated image should fill.
+    placeholder = PixelLayer.frompil(
+        Image.new("RGBA", (32, 24), (0, 0, 0, 0)), psd, "main_placeholder", 8, 16
+    )
+    psd.append(placeholder)
+    # A decorative border that must stay on top of the generated content.
+    border = Image.new("RGBA", (64, 48), (0, 0, 0, 0))
+    border.paste((255, 0, 0, 255), (0, 0, 64, 2))
+    decoration = PixelLayer.frompil(border, psd, "decoration", 0, 0)
+    psd.append(decoration)
+    psd.save(str(path))
+
+
+work_dir = Path(tempfile.mkdtemp(prefix="hgripe-psd-"))
+template_path = work_dir / "template.psd"
+build_template(template_path)
+
+# Load
+template, preview, info_json = HGripePsdTemplateLoad().run(psd_path=str(template_path))
+info = json.loads(info_json)
+
+# Compose: place a generated image into the named placeholder; add a hidden reference.
+generated = torch.zeros((1, 24, 32, 3), dtype=torch.float32)
+generated[:, :, :, 2] = 1.0  # blue
+reference = torch.zeros((1, 16, 16, 3), dtype=torch.float32)
+reference[:, :, :, 1] = 1.0  # green
+
+composed, composed_preview, metadata_json = HGripePsdCompose().run(
+    template=template,
+    image=generated,
+    placeholder_json=json.dumps({"name": "main_placeholder"}),
+    generated_layer_name="generated",
+    fit_mode="stretch",
+    z_order="above_background",
+    image_index=0,
+    reference_image=reference,
+    metadata_json=json.dumps({"prompt": "a blue square", "seed": 42}),
+)
+
+# Export
+psd_path, preview_path, metadata_path, status = HGripePsdExport().run(
+    composed=composed,
+    output_dir=str(work_dir / "out"),
+    filename="final",
+    save_preview="enable",
+)
+
+reloaded = PSDImage.open(psd_path)
+
+
+def walk(node):
+    names = []
+    for layer in node:
+        names.append(layer.name)
+        if layer.is_group():
+            names.extend(walk(layer))
+    return names
+
+
+metadata = json.loads(Path(metadata_path).read_text(encoding="utf-8"))
+print(
+    {
+        "status": status,
+        "template_layers": [layer["name"] for layer in info["layers"]],
+        "preview_shape": tuple(preview.shape),
+        "composed_preview_shape": tuple(composed_preview.shape),
+        "exported_layers": walk(reloaded),
+        "psd_exists": Path(psd_path).is_file(),
+        "preview_exists": Path(preview_path).is_file(),
+        "metadata_prompt": metadata.get("prompt"),
+        "metadata_placeholder": metadata.get("placeholder"),
+    }
+)

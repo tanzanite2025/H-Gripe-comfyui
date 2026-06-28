@@ -77,6 +77,7 @@ user/hgripe/outputs
 `openai_compatible audio.speech` saves generated audio bytes there by default and returns the local audio file through `output_files`.
 `openai_compatible audio.transcriptions` and `audio.translations` upload local audio files with multipart requests and return extracted text through `output_json.text`.
 `custom_http` can also save raw successful response bytes when `save_response=true`, which is useful for API endpoints that directly return images, audio, video, PDFs, or other files.
+`custom_http` supports multipart form fields and local file uploads for APIs that accept images, audio, video, PDFs, or dataset files.
 `custom_http async_job` can submit an async API job, poll a status endpoint, and download a final result URL into `output_files`.
 
 Useful environment overrides:
@@ -97,6 +98,7 @@ cargo build -p hgripe-api --bins
 .\.venv\Scripts\python.exe python\bridge\mock_task_example.py
 .\.venv\Scripts\python.exe python\bridge\custom_http_example.py
 .\.venv\Scripts\python.exe python\bridge\custom_http_binary_output_example.py
+.\.venv\Scripts\python.exe python\bridge\custom_http_multipart_example.py
 .\.venv\Scripts\python.exe python\bridge\custom_http_async_job_example.py
 .\.venv\Scripts\python.exe python\bridge\openai_compatible_text_example.py
 .\.venv\Scripts\python.exe python\bridge\openai_compatible_image_node_example.py

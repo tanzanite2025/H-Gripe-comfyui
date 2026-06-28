@@ -263,6 +263,106 @@ class HGripeCustomHttpApi:
         return (json.dumps(result, ensure_ascii=False, indent=2), status)
 
 
+class HGripeCustomHttpMultipartApi:
+    @classmethod
+    def INPUT_TYPES(cls):
+        return {
+            "required": {
+                "url": ("STRING", {"default": "http://127.0.0.1:8199/upload"}),
+                "method": (["POST", "PUT", "PATCH"], {"default": "POST"}),
+                "headers_json": ("STRING", {"multiline": True, "default": "{}"}),
+                "query_json": ("STRING", {"multiline": True, "default": "{}"}),
+                "fields_json": ("STRING", {"multiline": True, "default": "{}"}),
+                "file_path": ("STRING", {"default": ""}),
+                "file_field": ("STRING", {"default": "file"}),
+                "file_name": ("STRING", {"default": ""}),
+                "file_mime_type": ("STRING", {"default": ""}),
+                "save_response": (["disable", "enable"], {"default": "disable"}),
+                "output_extension": ("STRING", {"default": ""}),
+                "max_attempts": ("INT", {"default": 2, "min": 1, "max": 10, "step": 1}),
+                "timeout_ms": (
+                    "INT",
+                    {"default": 60000, "min": 1000, "max": 1200000, "step": 1000},
+                ),
+                "force_run_nonce": (
+                    "INT",
+                    {"default": 0, "min": 0, "max": 2147483647, "step": 1},
+                ),
+            }
+        }
+
+    RETURN_TYPES = ("STRING", "STRING", "STRING")
+    RETURN_NAMES = ("output_path", "result_json", "status")
+    FUNCTION = "run"
+    CATEGORY = "H-Gripe/API"
+
+    def run(
+        self,
+        url: str,
+        method: str,
+        headers_json: str,
+        query_json: str,
+        fields_json: str,
+        file_path: str,
+        file_field: str,
+        file_name: str,
+        file_mime_type: str,
+        save_response: str,
+        output_extension: str,
+        max_attempts: int,
+        timeout_ms: int,
+        force_run_nonce: int,
+    ):
+        headers = _parse_json_object(headers_json, "headers_json")
+        query = _parse_json_object(query_json, "query_json")
+        fields = _parse_json_object(fields_json, "fields_json")
+        file_path = file_path.strip()
+        if not file_path and not fields:
+            raise ValueError("file_path or fields_json is required for multipart upload")
+
+        params: dict[str, Any] = {
+            "url": url,
+            "method": method,
+            "headers": headers,
+            "query": query,
+            "multipart_fields": fields,
+            "save_response": save_response == "enable",
+        }
+        if file_path:
+            params["multipart_file_path"] = file_path
+            params["multipart_file_field"] = file_field.strip() or "file"
+        if file_name.strip():
+            params["multipart_file_name"] = file_name.strip()
+        if file_mime_type.strip():
+            params["multipart_file_mime_type"] = file_mime_type.strip()
+        if output_extension.strip():
+            params["output_extension"] = output_extension.strip()
+
+        task = {
+            "id": f"comfy-http-multipart-{uuid.uuid4()}",
+            "provider": "custom_http",
+            "operation": "request",
+            "inputs": {"force_run_nonce": force_run_nonce},
+            "params": params,
+            "credentials_ref": None,
+            "output_type": "files",
+            "cache_policy": {"enabled": False, "ttl_seconds": None, "key": None},
+            "retry_policy": {
+                "max_attempts": max_attempts,
+                "backoff_ms": 500,
+                "timeout_ms": timeout_ms,
+            },
+        }
+
+        result = run_task(task)
+        status = str(result.get("status", "unknown"))
+        output_files = result.get("output_files") or []
+        output_path = ""
+        if output_files and isinstance(output_files[0], dict):
+            output_path = str(output_files[0].get("path") or "")
+        return (output_path, json.dumps(result, ensure_ascii=False, indent=2), status)
+
+
 class HGripeCustomHttpAsyncJob:
     @classmethod
     def INPUT_TYPES(cls):
@@ -273,6 +373,11 @@ class HGripeCustomHttpAsyncJob:
                 "headers_json": ("STRING", {"multiline": True, "default": "{}"}),
                 "query_json": ("STRING", {"multiline": True, "default": "{}"}),
                 "body_json": ("STRING", {"multiline": True, "default": "{}"}),
+                "multipart_fields_json": ("STRING", {"multiline": True, "default": "{}"}),
+                "multipart_file_path": ("STRING", {"default": ""}),
+                "multipart_file_field": ("STRING", {"default": "file"}),
+                "multipart_file_name": ("STRING", {"default": ""}),
+                "multipart_file_mime_type": ("STRING", {"default": ""}),
                 "poll_url": (
                     "STRING",
                     {"default": "http://127.0.0.1:8199/jobs/{job_id}"},
@@ -325,6 +430,11 @@ class HGripeCustomHttpAsyncJob:
         headers_json: str,
         query_json: str,
         body_json: str,
+        multipart_fields_json: str,
+        multipart_file_path: str,
+        multipart_file_field: str,
+        multipart_file_name: str,
+        multipart_file_mime_type: str,
         poll_url: str,
         poll_method: str,
         poll_headers_json: str,
@@ -348,6 +458,9 @@ class HGripeCustomHttpAsyncJob:
         headers = _parse_json_object(headers_json, "headers_json")
         query = _parse_json_object(query_json, "query_json")
         body = _parse_json_field(body_json, "body_json", None)
+        multipart_fields = _parse_json_object(
+            multipart_fields_json, "multipart_fields_json"
+        )
         poll_headers = _parse_json_object(poll_headers_json, "poll_headers_json")
         poll_query = _parse_json_object(poll_query_json, "poll_query_json")
         poll_body = _parse_json_field(poll_body_json, "poll_body_json", None)
@@ -381,7 +494,17 @@ class HGripeCustomHttpAsyncJob:
             "download_url_path": download_url_path,
             "save_response": save_response == "enable",
         }
-        if body is not None:
+        uses_multipart = bool(multipart_fields) or bool(multipart_file_path.strip())
+        if uses_multipart:
+            params["multipart_fields"] = multipart_fields
+            if multipart_file_path.strip():
+                params["multipart_file_path"] = multipart_file_path.strip()
+                params["multipart_file_field"] = multipart_file_field.strip() or "file"
+            if multipart_file_name.strip():
+                params["multipart_file_name"] = multipart_file_name.strip()
+            if multipart_file_mime_type.strip():
+                params["multipart_file_mime_type"] = multipart_file_mime_type.strip()
+        elif body is not None:
             params["json"] = body
         if poll_body is not None:
             params["poll_json"] = poll_body
@@ -1170,6 +1293,7 @@ class HGripeOpenAICompatibleVision:
 
 NODE_CLASS_MAPPINGS = {
     "HGripeCustomHttpApi": HGripeCustomHttpApi,
+    "HGripeCustomHttpMultipartApi": HGripeCustomHttpMultipartApi,
     "HGripeCustomHttpAsyncJob": HGripeCustomHttpAsyncJob,
     "HGripeOpenAICompatibleText": HGripeOpenAICompatibleText,
     "HGripeOpenAICompatibleImage": HGripeOpenAICompatibleImage,
@@ -1181,6 +1305,7 @@ NODE_CLASS_MAPPINGS = {
 
 NODE_DISPLAY_NAME_MAPPINGS = {
     "HGripeCustomHttpApi": "H-Gripe Custom HTTP API",
+    "HGripeCustomHttpMultipartApi": "H-Gripe Custom HTTP Multipart API",
     "HGripeCustomHttpAsyncJob": "H-Gripe Custom HTTP Async Job",
     "HGripeOpenAICompatibleText": "H-Gripe OpenAI Compatible Text",
     "HGripeOpenAICompatibleImage": "H-Gripe OpenAI Compatible Image",

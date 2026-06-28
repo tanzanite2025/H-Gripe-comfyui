@@ -3,9 +3,12 @@ use crate::outputs::write_task_output_bytes;
 use crate::provider::{BrokerError, BrokerResult, Provider};
 use async_trait::async_trait;
 use reqwest::header::CONTENT_TYPE;
+use reqwest::multipart::{Form, Part};
 use reqwest::{Client, Method, StatusCode};
 use serde_json::{json, Map, Value};
 use std::collections::BTreeMap;
+use std::fs;
+use std::path::Path;
 use std::time::Duration;
 use tokio::time::sleep;
 
@@ -383,7 +386,9 @@ impl CustomHttpProvider {
 
         let json_key = prefixed_key(prefix, "json");
         let body_key = prefixed_key(prefix, "body");
-        if let Some(json_body) = value(task, &json_key) {
+        if let Some(form) = multipart_form_from_task(task, prefix)? {
+            request = request.multipart(form);
+        } else if let Some(json_body) = value(task, &json_key) {
             request = request.json(json_body);
         } else if let Some(body) = value_str(task, &body_key) {
             request = request.body(body.to_string());
@@ -499,10 +504,24 @@ fn value_u64(task: &ApiTask, key: &str) -> Option<u64> {
     }
 }
 
+fn multipart_enabled(task: &ApiTask, prefix: &str) -> bool {
+    let fields_key = prefixed_key(prefix, "multipart_fields");
+    let files_key = prefixed_key(prefix, "multipart_files");
+    let file_path_key = prefixed_key(prefix, "multipart_file_path");
+    value(task, &fields_key).is_some()
+        || value(task, &files_key).is_some()
+        || value_str(task, &file_path_key)
+            .map(str::trim)
+            .is_some_and(|value| !value.is_empty())
+}
+
 fn inferred_default_method(task: &ApiTask, prefix: &str) -> &'static str {
     let json_key = prefixed_key(prefix, "json");
     let body_key = prefixed_key(prefix, "body");
-    if value(task, &json_key).is_some() || value_str(task, &body_key).is_some() {
+    if multipart_enabled(task, prefix)
+        || value(task, &json_key).is_some()
+        || value_str(task, &body_key).is_some()
+    {
         "POST"
     } else {
         "GET"
@@ -514,6 +533,218 @@ fn prefixed_key(prefix: &str, key: &str) -> String {
         key.to_string()
     } else {
         format!("{prefix}_{key}")
+    }
+}
+
+fn multipart_form_from_task(task: &ApiTask, prefix: &str) -> BrokerResult<Option<Form>> {
+    if !multipart_enabled(task, prefix) {
+        return Ok(None);
+    }
+
+    let mut form = Form::new();
+
+    let fields_key = prefixed_key(prefix, "multipart_fields");
+    if let Some(fields) = value(task, &fields_key).and_then(Value::as_object) {
+        for (key, field_value) in fields {
+            form = form.text(key.clone(), multipart_value_to_string(field_value));
+        }
+    }
+
+    let files_key = prefixed_key(prefix, "multipart_files");
+    if let Some(files) = value(task, &files_key) {
+        form = add_multipart_files(form, files)?;
+    }
+
+    let file_path_key = prefixed_key(prefix, "multipart_file_path");
+    if let Some(path) = value_str(task, &file_path_key)
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+    {
+        let field_key = prefixed_key(prefix, "multipart_file_field");
+        let filename_key = prefixed_key(prefix, "multipart_file_name");
+        let mime_type_key = prefixed_key(prefix, "multipart_file_mime_type");
+        let field = value_str(task, &field_key)
+            .map(str::trim)
+            .filter(|value| !value.is_empty())
+            .unwrap_or("file");
+        let file = MultipartFileSpec {
+            field: field.to_string(),
+            path: path.to_string(),
+            filename: value_str(task, &filename_key)
+                .map(str::trim)
+                .filter(|value| !value.is_empty())
+                .map(str::to_string),
+            mime_type: value_str(task, &mime_type_key)
+                .map(str::trim)
+                .filter(|value| !value.is_empty())
+                .map(str::to_string),
+        };
+        form = form.part(file.field.clone(), multipart_file_part(&file)?);
+    }
+
+    Ok(Some(form))
+}
+
+struct MultipartFileSpec {
+    field: String,
+    path: String,
+    filename: Option<String>,
+    mime_type: Option<String>,
+}
+
+fn add_multipart_files(mut form: Form, files: &Value) -> BrokerResult<Form> {
+    match files {
+        Value::Array(items) => {
+            for item in items {
+                let file = multipart_file_spec_from_value(item)?;
+                form = form.part(file.field.clone(), multipart_file_part(&file)?);
+            }
+        }
+        Value::Object(map) => {
+            for (field, value) in map {
+                let file = match value {
+                    Value::String(path) => MultipartFileSpec {
+                        field: field.clone(),
+                        path: path.clone(),
+                        filename: None,
+                        mime_type: None,
+                    },
+                    Value::Object(_) => {
+                        let mut file = multipart_file_spec_from_value(value)?;
+                        if file.field.trim().is_empty() || file.field == "file" {
+                            file.field = field.clone();
+                        }
+                        file
+                    }
+                    _ => {
+                        return Err(BrokerError::Provider(
+                            "multipart_files object values must be paths or file objects"
+                                .to_string(),
+                        ));
+                    }
+                };
+                form = form.part(file.field.clone(), multipart_file_part(&file)?);
+            }
+        }
+        _ => {
+            return Err(BrokerError::Provider(
+                "multipart_files must be an array or object".to_string(),
+            ));
+        }
+    }
+
+    Ok(form)
+}
+
+fn multipart_file_spec_from_value(value: &Value) -> BrokerResult<MultipartFileSpec> {
+    let object = value.as_object().ok_or_else(|| {
+        BrokerError::Provider("multipart file entry must be an object".to_string())
+    })?;
+    let field = object
+        .get("field")
+        .and_then(Value::as_str)
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .unwrap_or("file")
+        .to_string();
+    let path = object
+        .get("path")
+        .or_else(|| object.get("file_path"))
+        .or_else(|| object.get("source_path"))
+        .and_then(Value::as_str)
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .ok_or_else(|| {
+            BrokerError::Provider("multipart file entry requires path/file_path".to_string())
+        })?
+        .to_string();
+    let filename = object
+        .get("filename")
+        .or_else(|| object.get("file_name"))
+        .and_then(Value::as_str)
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .map(str::to_string);
+    let mime_type = object
+        .get("mime_type")
+        .or_else(|| object.get("content_type"))
+        .and_then(Value::as_str)
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .map(str::to_string);
+
+    Ok(MultipartFileSpec {
+        field,
+        path,
+        filename,
+        mime_type,
+    })
+}
+
+fn multipart_file_part(file: &MultipartFileSpec) -> BrokerResult<Part> {
+    let path = Path::new(&file.path);
+    let bytes = fs::read(path).map_err(|err| {
+        BrokerError::Provider(format!(
+            "failed to read multipart file {}: {err}",
+            path.display()
+        ))
+    })?;
+    let filename = file
+        .filename
+        .clone()
+        .or_else(|| {
+            path.file_name()
+                .and_then(|name| name.to_str())
+                .map(str::to_string)
+        })
+        .unwrap_or_else(|| "upload.bin".to_string());
+    let mime_type = file
+        .mime_type
+        .clone()
+        .or_else(|| mime_type_from_path(path))
+        .unwrap_or_else(|| "application/octet-stream".to_string());
+
+    Part::bytes(bytes)
+        .file_name(filename)
+        .mime_str(&mime_type)
+        .map_err(|err| BrokerError::Provider(format!("invalid multipart MIME type: {err}")))
+}
+
+fn multipart_value_to_string(value: &Value) -> String {
+    value
+        .as_str()
+        .map(str::to_string)
+        .unwrap_or_else(|| value.to_string())
+}
+
+fn mime_type_from_path(path: &Path) -> Option<String> {
+    match path
+        .extension()
+        .and_then(|extension| extension.to_str())
+        .map(|extension| extension.to_ascii_lowercase())
+        .as_deref()
+    {
+        Some("aac") => Some("audio/aac".to_string()),
+        Some("csv") => Some("text/csv".to_string()),
+        Some("flac") => Some("audio/flac".to_string()),
+        Some("gif") => Some("image/gif".to_string()),
+        Some("htm" | "html") => Some("text/html".to_string()),
+        Some("jpg" | "jpeg") => Some("image/jpeg".to_string()),
+        Some("json") => Some("application/json".to_string()),
+        Some("m4a") => Some("audio/mp4".to_string()),
+        Some("mov") => Some("video/quicktime".to_string()),
+        Some("mp3") => Some("audio/mpeg".to_string()),
+        Some("mp4") => Some("video/mp4".to_string()),
+        Some("ogg" | "oga") => Some("audio/ogg".to_string()),
+        Some("opus") => Some("audio/opus".to_string()),
+        Some("pdf") => Some("application/pdf".to_string()),
+        Some("png") => Some("image/png".to_string()),
+        Some("txt") => Some("text/plain".to_string()),
+        Some("wav") => Some("audio/wav".to_string()),
+        Some("webm") => Some("video/webm".to_string()),
+        Some("webp") => Some("image/webp".to_string()),
+        Some("xml") => Some("application/xml".to_string()),
+        _ => None,
     }
 }
 

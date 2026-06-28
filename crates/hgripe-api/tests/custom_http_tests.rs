@@ -7,6 +7,7 @@ use std::sync::Arc;
 use std::time::{SystemTime, UNIX_EPOCH};
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::TcpListener;
+use tokio::sync::oneshot;
 
 static TEMP_COUNTER: AtomicU64 = AtomicU64::new(0);
 
@@ -105,6 +106,67 @@ async fn custom_http_saves_binary_response_output_file() {
     assert_eq!(output_json["body_size_bytes"], json!(body.len()));
 
     let _ = fs::remove_dir_all(output_dir);
+}
+
+#[tokio::test]
+async fn custom_http_sends_multipart_file_and_fields() {
+    let upload_file = write_temp_upload_file("png", b"\x89PNG\r\n\x1a\nupload-body");
+    let (url, request_rx) = spawn_once_json_server_with_request(
+        "HTTP/1.1 200 OK",
+        r#"{"ok":true,"uploaded":true}"#,
+        Some("local-multipart-request"),
+    )
+    .await;
+
+    let mut broker = ApiBroker::new();
+    broker.register_provider(CustomHttpProvider::default());
+
+    let mut task = ApiTask::new("custom_http", "request");
+    task.params.insert("method".into(), json!("POST"));
+    task.params.insert("url".into(), json!(url));
+    task.params.insert(
+        "multipart_fields".into(),
+        json!({
+            "prompt": "make this sharper",
+            "strength": 0.75
+        }),
+    );
+    task.params.insert(
+        "multipart_files".into(),
+        json!([
+            {
+                "field": "image",
+                "path": upload_file.to_string_lossy().to_string(),
+                "filename": "input.png",
+                "mime_type": "image/png"
+            }
+        ]),
+    );
+
+    let result = broker
+        .execute(task)
+        .await
+        .expect("multipart HTTP task should run");
+    let request = request_rx.await.expect("server should capture request");
+    let _ = fs::remove_file(upload_file);
+
+    assert_eq!(result.status, ApiStatus::Succeeded);
+    assert_eq!(
+        result.provider_request_id.as_deref(),
+        Some("local-multipart-request")
+    );
+    assert_eq!(result.output_json.unwrap()["body"]["uploaded"], json!(true));
+    assert!(request.contains("POST /multipart HTTP/1.1"));
+    assert!(request
+        .to_lowercase()
+        .contains("content-type: multipart/form-data"));
+    assert!(request.contains(r#"name="prompt""#));
+    assert!(request.contains("make this sharper"));
+    assert!(request.contains(r#"name="strength""#));
+    assert!(request.contains("0.75"));
+    assert!(request.contains(r#"name="image"; filename="input.png""#));
+    assert!(request.contains("Content-Type: image/png"));
+    assert!(request.contains("upload-body"));
 }
 
 #[tokio::test]
@@ -208,6 +270,39 @@ async fn spawn_once_json_server(
     });
 
     format!("http://{addr}/test")
+}
+
+async fn spawn_once_json_server_with_request(
+    status_line: &'static str,
+    body: &'static str,
+    request_id: Option<&'static str>,
+) -> (String, oneshot::Receiver<String>) {
+    let listener = TcpListener::bind("127.0.0.1:0")
+        .await
+        .expect("test server should bind");
+    let addr = listener.local_addr().expect("test server should have addr");
+    let (request_tx, request_rx) = oneshot::channel();
+
+    tokio::spawn(async move {
+        let (mut socket, _) = listener.accept().await.expect("test server should accept");
+        let request = read_http_request(&mut socket).await;
+        let _ = request_tx.send(request);
+
+        let request_header = request_id
+            .map(|id| format!("X-Request-Id: {id}\r\n"))
+            .unwrap_or_default();
+        let response = format!(
+            "{status_line}\r\nContent-Type: application/json\r\n{request_header}Content-Length: {}\r\nConnection: close\r\n\r\n{body}",
+            body.len()
+        );
+
+        socket
+            .write_all(response.as_bytes())
+            .await
+            .expect("test server should write response");
+    });
+
+    (format!("http://{addr}/multipart"), request_rx)
 }
 
 async fn spawn_once_binary_server(
@@ -404,6 +499,12 @@ fn find_subsequence(buffer: &[u8], needle: &[u8]) -> Option<usize> {
     buffer
         .windows(needle.len())
         .position(|window| window == needle)
+}
+
+fn write_temp_upload_file(extension: &str, bytes: &[u8]) -> std::path::PathBuf {
+    let path = std::env::temp_dir().join(format!("hgripe-upload-{}.{}", temp_suffix(), extension));
+    fs::write(&path, bytes).expect("upload fixture should be written");
+    path
 }
 
 fn temp_output_dir() -> std::path::PathBuf {

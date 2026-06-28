@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import { GRAPH_VERSION, type WorkflowGraph } from "../graph/model";
 import { runGraph, topoLevels, validateGraph, wouldCreateCycle, type ExecutorRegistry } from "./dag";
+import { defaultExecutors } from "./executors";
 
 function graph(partial: Pick<WorkflowGraph, "nodes" | "edges">): WorkflowGraph {
   return { version: GRAPH_VERSION, ...partial };
@@ -178,6 +179,34 @@ describe("conditional branch execution", () => {
     const { statuses } = await runGraph(g, reg);
     expect(ran).toEqual([]);
     expect(statuses.get("r")).toBe("skipped");
+    expect(statuses.get("f")).toBe("skipped");
+  });
+
+  it("drives the If condition from a Compare result (real condition chain)", async () => {
+    // numA, numB -> compare(>) -> if.cond ; value -> if.value ; -> {true,false}
+    const g = graph({
+      nodes: [
+        { id: "a", kind: "number", position: { x: 0, y: 0 }, params: { value: 5 } },
+        { id: "b", kind: "number", position: { x: 0, y: 0 }, params: { value: 3 } },
+        { id: "v", kind: "prompt", position: { x: 0, y: 0 }, params: { text: "go" } },
+        { id: "cmp", kind: "compare", position: { x: 0, y: 0 }, params: { op: ">" } },
+        { id: "if", kind: "if", position: { x: 0, y: 0 }, params: { cond: "false" } },
+        { id: "t", kind: "preview", position: { x: 0, y: 0 }, params: {} },
+        { id: "f", kind: "preview", position: { x: 0, y: 0 }, params: {} },
+      ],
+      edges: [
+        { id: "e0", source: "a", sourcePort: "value", target: "cmp", targetPort: "a" },
+        { id: "e1", source: "b", sourcePort: "value", target: "cmp", targetPort: "b" },
+        { id: "e2", source: "cmp", sourcePort: "result", target: "if", targetPort: "cond" },
+        { id: "e3", source: "v", sourcePort: "text", target: "if", targetPort: "value" },
+        { id: "e4", source: "if", sourcePort: "true", target: "t", targetPort: "image" },
+        { id: "e5", source: "if", sourcePort: "false", target: "f", targetPort: "image" },
+      ],
+    });
+    expect(validateGraph(g)).toEqual([]);
+    // 5 > 3 is true, so the wired cond (1) wins over the param fallback ("false").
+    const { statuses } = await runGraph(g, defaultExecutors);
+    expect(statuses.get("t")).toBe("succeeded");
     expect(statuses.get("f")).toBe("skipped");
   });
 

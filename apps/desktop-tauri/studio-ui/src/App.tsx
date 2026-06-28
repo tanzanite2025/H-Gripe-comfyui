@@ -5,12 +5,16 @@ import {
   useNodesState,
   type Edge,
   type Node,
+  type OnNodesChange,
+  type OnEdgesChange,
 } from "@xyflow/react";
 
 import { FlowCanvas } from "./editor/FlowCanvas";
 import { Inspector } from "./editor/Inspector";
 import { Palette } from "./editor/Palette";
 import { NodeEditingContext } from "./editor/editingContext";
+import { useHistory } from "./editor/useHistory";
+import { buildPaste, clipFromSelection, type Clip } from "./editor/clipboard";
 import type { HgripeNodeData } from "./editor/HgripeNode";
 import { fromWorkflowGraph, toWorkflowGraph } from "./editor/adapter";
 import { clearPersistedGraph, loadPersistedGraph, persistGraph } from "./editor/persist";
@@ -60,6 +64,16 @@ function Studio() {
   );
   const idSeq = useRef(0);
   const fileInput = useRef<HTMLInputElement | null>(null);
+  const clipboard = useRef<Clip | null>(null);
+  // True while a node drag is in progress, so we snapshot only once per drag.
+  const dragging = useRef(false);
+  // Coalesce rapid edits to the same param (e.g. typing) into one undo step.
+  const lastParamEdit = useRef<{ id: string; key: string; t: number } | null>(null);
+
+  const newNodeId = useCallback((kind: string) => `${kind}-${Date.now()}-${idSeq.current++}`, []);
+
+  const history = useHistory({ nodes, edges, setNodes, setEdges });
+  const { takeSnapshot, undo, redo } = history;
 
   const selectedNode = useMemo(
     () => nodes.find((n) => n.id === selectedId) ?? null,
@@ -83,6 +97,11 @@ function Studio() {
 
   const onParamChange = useCallback(
     (id: string, key: string, value: unknown) => {
+      const now = Date.now();
+      const last = lastParamEdit.current;
+      const coalesce = last && last.id === id && last.key === key && now - last.t < 600;
+      if (!coalesce) takeSnapshot();
+      lastParamEdit.current = { id, key, t: now };
       setNodes((ns) =>
         ns.map((n) => {
           if (n.id !== id) return n;
@@ -96,13 +115,58 @@ function Studio() {
 
   const addNode = useCallback(
     (kind: string, position?: { x: number; y: number }) => {
-      const id = `${kind}-${Date.now()}-${idSeq.current++}`;
+      takeSnapshot();
+      const id = newNodeId(kind);
       // Click-to-add cascades nodes so they do not stack exactly.
       const pos = position ?? { x: 80 + (idSeq.current % 6) * 36, y: 80 + (idSeq.current % 6) * 36 };
       setNodes((ns) => ns.concat(makeNode(id, kind, pos.x, pos.y)));
     },
-    [setNodes],
+    [setNodes, takeSnapshot, newNodeId],
   );
+
+  // Snapshot before structural changes that React Flow applies itself
+  // (deletions, and the start of a drag), so they can be undone.
+  const handleNodesChange = useCallback<OnNodesChange>(
+    (changes) => {
+      if (changes.some((c) => c.type === "remove")) {
+        takeSnapshot();
+      } else if (changes.some((c) => c.type === "position" && c.dragging) && !dragging.current) {
+        dragging.current = true;
+        takeSnapshot();
+      }
+      if (changes.some((c) => c.type === "position" && c.dragging === false)) {
+        dragging.current = false;
+      }
+      onNodesChange(changes);
+    },
+    [onNodesChange, takeSnapshot],
+  );
+
+  const handleEdgesChange = useCallback<OnEdgesChange>(
+    (changes) => {
+      if (changes.some((c) => c.type === "remove")) takeSnapshot();
+      onEdgesChange(changes);
+    },
+    [onEdgesChange, takeSnapshot],
+  );
+
+  const copySelection = useCallback(() => {
+    const clip = clipFromSelection(nodes, edges);
+    if (clip.nodes.length === 0) return;
+    clipboard.current = clip;
+    setMessage(`copied ${clip.nodes.length} node${clip.nodes.length > 1 ? "s" : ""}`);
+  }, [nodes, edges]);
+
+  const pasteClipboard = useCallback(() => {
+    const clip = clipboard.current;
+    if (!clip || clip.nodes.length === 0) return;
+    takeSnapshot();
+    const pasted = buildPaste(clip, { x: 40, y: 40 }, newNodeId);
+    setNodes((ns) => ns.map((n): Node => ({ ...n, selected: false })).concat(pasted.nodes));
+    setEdges((es) => es.map((e): Edge => ({ ...e, selected: false })).concat(pasted.edges));
+    setSelectedId(pasted.nodes[0]?.id ?? null);
+    setMessage(`pasted ${pasted.nodes.length} node${pasted.nodes.length > 1 ? "s" : ""}`);
+  }, [setNodes, setEdges, takeSnapshot, newNodeId]);
 
   const setStatus = useCallback(
     (id: string, status: NodeStatus) => patchNode(id, { status }),
@@ -190,6 +254,7 @@ function Studio() {
   const load = useCallback(
     async (file: File) => {
       try {
+        takeSnapshot();
         const graph = deserializeGraph(await file.text());
         const next = fromWorkflowGraph(graph);
         setNodes(next.nodes);
@@ -200,22 +265,24 @@ function Studio() {
         setMessage(`load failed: ${String(err)}`);
       }
     },
-    [setNodes, setEdges],
+    [setNodes, setEdges, takeSnapshot],
   );
 
   const clear = useCallback(() => {
+    takeSnapshot();
     setNodes([]);
     setEdges([]);
     setSelectedId(null);
     clearPersistedGraph();
-  }, [setNodes, setEdges]);
+  }, [setNodes, setEdges, takeSnapshot]);
 
   const resetSample = useCallback(() => {
+    takeSnapshot();
     setNodes(initialNodes);
     setEdges(initialEdges);
     setSelectedId(null);
     setMessage("reset to sample workflow");
-  }, [setNodes, setEdges]);
+  }, [setNodes, setEdges, takeSnapshot]);
 
   // Autosave to the workspace (debounced). Only graph-structural fields are
   // serialized (kind/params/position/edges), so transient run statuses and
@@ -228,6 +295,39 @@ function Studio() {
     }, 500);
     return () => clearTimeout(t);
   }, [nodes, edges]);
+
+  // Keyboard: undo/redo (Ctrl+Z / Ctrl+Shift+Z / Ctrl+Y) and copy/paste
+  // (Ctrl+C / Ctrl+V). Skipped while editing a form field so native text
+  // editing keeps working there.
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => {
+      if (!(e.ctrlKey || e.metaKey)) return;
+      const t = e.target as HTMLElement | null;
+      const editable =
+        !!t && (t.tagName === "INPUT" || t.tagName === "TEXTAREA" || t.tagName === "SELECT" || t.isContentEditable);
+      if (editable) return;
+      switch (e.key.toLowerCase()) {
+        case "z":
+          e.preventDefault();
+          if (e.shiftKey) redo();
+          else undo();
+          break;
+        case "y":
+          e.preventDefault();
+          redo();
+          break;
+        case "c":
+          copySelection();
+          break;
+        case "v":
+          e.preventDefault();
+          pasteClipboard();
+          break;
+      }
+    };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [undo, redo, copySelection, pasteClipboard]);
 
   // Stable context value so memoized node cards can edit their own params.
   const editing = useMemo(() => ({ onParamChange }), [onParamChange]);
@@ -246,6 +346,12 @@ function Studio() {
         <span className="muted autosave" title="this workflow is autosaved to the workspace and restored on next open">
           {saved ? "● autosaved" : "○ saving…"}
         </span>
+        <button onClick={undo} disabled={!history.canUndo} title="Undo (Ctrl+Z)">
+          Undo
+        </button>
+        <button onClick={redo} disabled={!history.canRedo} title="Redo (Ctrl+Shift+Z)">
+          Redo
+        </button>
         <button onClick={save}>Save</button>
         <button onClick={() => fileInput.current?.click()}>Load</button>
         <button onClick={resetSample}>Reset</button>
@@ -283,11 +389,12 @@ function Studio() {
             <FlowCanvas
               nodes={nodes}
               edges={edges}
-              onNodesChange={onNodesChange}
-              onEdgesChange={onEdgesChange}
+              onNodesChange={handleNodesChange}
+              onEdgesChange={handleEdgesChange}
               setEdges={setEdges}
               onSelect={setSelectedId}
               onAddNode={addNode}
+              onBeforeConnect={takeSnapshot}
             />
           </div>
           <Inspector node={selectedNode} onParamChange={onParamChange} />

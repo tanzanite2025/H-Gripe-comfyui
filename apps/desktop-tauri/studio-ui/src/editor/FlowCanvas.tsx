@@ -32,6 +32,8 @@ interface FlowCanvasProps {
   onSelect: (nodeId: string | null) => void;
   /** Create a node of `kind` at a flow-space position. */
   onAddNode: (kind: string, position: { x: number; y: number }) => void;
+  /** Called right before a new edge is created, so the host can snapshot. */
+  onBeforeConnect?: () => void;
 }
 
 export function FlowCanvas({
@@ -42,6 +44,7 @@ export function FlowCanvas({
   setEdges,
   onSelect,
   onAddNode,
+  onBeforeConnect,
 }: FlowCanvasProps) {
   // Declared once so React does not re-create the map each render.
   const nodeTypes = useMemo(() => ({ hgripe: HgripeNode }), []);
@@ -74,8 +77,11 @@ export function FlowCanvas({
   );
 
   const onConnect: OnConnect = useCallback(
-    (params) => setEdges((eds) => addEdge(params, eds)),
-    [setEdges],
+    (params) => {
+      onBeforeConnect?.();
+      setEdges((eds) => addEdge(params, eds));
+    },
+    [setEdges, onBeforeConnect],
   );
 
   const onDragOver = useCallback((e: React.DragEvent) => {

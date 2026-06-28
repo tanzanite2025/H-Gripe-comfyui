@@ -106,21 +106,34 @@ ApiResult
   cache_hit
 ```
 
-节点示例：
+节点设计原则：
 
-- OpenAI Image Generate
-- OpenAI Image Edit
-- Gemini Image
-- Claude Text
-- Kling Text to Video
-- Runway Image to Video
-- Veo Video
-- Replicate Model Run
-- HTTP Custom API
-- File Upload
-- File Download
-- Result Cache
-- Batch Prompt
+- 节点按“生产动作”划分，不按 API 厂商、模型名或小参数差异划分。
+- 同一类能力必须优先收敛到一个语义节点，通过 `profile_ref`、`credentials_ref`、`operation` 和 `advanced_json` 切换 provider。
+- Provider-specific 节点只能作为调试、兼容或临时探索入口，不能成为主工作流默认形态。
+- Workflow 里应尽量表达“我要做什么”，而不是表达“我要调用哪家 API 的哪一个 endpoint”。
+- 复杂 provider 差异放在 Rust provider/profile 层，Python/ComfyUI 节点保持薄、少、稳定。
+
+推荐语义节点：
+
+- `H-Gripe Image Generate`：文本生图、参考图生图、API 或本地小服务生图，具体 provider 由 `profile_ref` 决定。
+- `H-Gripe Image Edit`：图生图、局部重绘、mask edit、参考图融合。
+- `H-Gripe Image Enhance`：upscale、denoise、sharpen、背景移除、色彩匹配等增强能力。
+- `H-Gripe Vision Analyze`：图片理解、提示词反推、质量检查、构图分析。
+- `H-Gripe Text / Prompt`：文本生成、提示词扩写、结构化 prompt。
+- `H-Gripe Audio`：TTS、转写、翻译、音频理解，具体动作由 operation/profile 区分。
+- `H-Gripe Video Job`：文生视频、图生视频、首尾帧视频、视频增强等异步任务。
+- `H-Gripe PSD Template Load`：读取 PSD/PNG 模板、图层、占位区域、mask 和尺寸信息。
+- `H-Gripe PSD Compose`：把生成图、参考图、候选图层、mask 和模板合成到生产结构。
+- `H-Gripe PSD Export`：输出 `final.psd`、`preview.png` 和 `metadata.json`。
+- `H-Gripe API Task`：高级/调试入口，用于直接提交原始 `ApiTask`。
+- `H-Gripe Async Job`：高级/通用异步入口，用于尚未抽象成语义节点的 provider。
+
+反例：
+
+- 不新增 `OpenAI Image`、`Gemini Image`、`Replicate Image`、`Kling Image`、`Runway Image` 这一类平行节点。
+- 不因为某个 provider 多一个参数就新增一个节点；优先放进 profile defaults 或 advanced 参数。
+- 不把上游 `comfy_api_nodes` 的 partner/API 节点作为长期主路径；需要接入的 API 应进入 H-Gripe Rust provider/profile 体系。
 
 ## Rust 负责的部分
 
@@ -212,6 +225,7 @@ Tauri 不只是一个壳，应该承担桌面体验：
 - 已实现 `openai_compatible` provider，支持 `chat.completions`、`text.generate`、`vision.analyze`、`image.generate`、`image.edit`、`audio.speech`、`audio.transcriptions` 和 `audio.translations`，可配置 `base_url`、API key/env、额外请求体和本地/代理 OpenAI-compatible 服务。
 - 已实现 `replicate` provider，支持 `run` 操作：按 `model`（owner/name）或 `version` 创建 Replicate prediction，轮询 `status` 直到 succeeded/failed/canceled，下载 `output` 里的单个或多个 URL 到 `output_files`，并返回完整 prediction body；支持 `credentials_ref`/`profile_ref`（provider `replicate`）、`api_key`/`api_key_env`/`no_auth`、`HGRIPE_REPLICATE_API_KEY`、`REPLICATE_API_TOKEN` 和 `HGRIPE_REPLICATE_BASE_URL`。
 - 已新增 provider profile 第一版：OpenAI-compatible 和 Custom HTTP 任务可用 `profile_ref` 引用本地 `user/hgripe/provider_profiles.json`，把 `base_url`、`model`、默认参数、headers、`extra_body`、`credentials_ref` 或 `no_auth` 从 workflow/node 参数里抽出来。
+- 已明确节点收敛原则：后续主工作流节点按生产动作合并为 `Image Generate`、`Image Edit`、`Image Enhance`、`Vision Analyze`、`Video Job`、`PSD Compose/Export` 等语义节点；具体 OpenAI-compatible、Replicate、Kling、Runway、Veo、本地 GPU 小服务等 provider 由 `profile_ref` 和 Rust provider 层选择，避免按厂商堆出大量重复节点。
 - 已新增 provider profile 管理入口：`hgripe-api-config profiles list/show/resolve/validate` 可列出、查看、解析预览、校验本地 profile；`resolve` 不输出 API key 或 header 值，后续可直接接入 Tauri 设置页。
 - 已新增 credentials 管理入口：`hgripe-api-config credentials list/show/validate` 可列出、脱敏查看、校验本地 credentials，当前支持 `openai_compatible` 和 `custom_http`，`show` 不输出明文 API key 或 secret-like header。
 - 已新增桌面预检入口：`hgripe-api-config doctor` 汇总 credentials/profile 校验、profile 到 credentials 的引用检查、broker 路径、history/output 路径和 H-Gripe 环境变量覆盖情况，后续可作为 Tauri 启动/设置页诊断数据源。
@@ -228,7 +242,7 @@ Tauri 不只是一个壳，应该承担桌面体验：
 - `H-Gripe OpenAI Compatible Audio Speech` 支持调用 OpenAI-compatible `/audio/speech`，把返回音频 bytes 保存到本地输出目录，并返回本地音频路径。
 - `H-Gripe OpenAI Compatible Audio Text` 支持把本地音频文件上传到 OpenAI-compatible `/audio/transcriptions` 或 `/audio/translations`，返回识别/翻译后的文本和完整 `result_json`。
 - `H-Gripe OpenAI Compatible Vision` 支持把 ComfyUI `IMAGE` tensor 编码为 data URL，通过 OpenAI-compatible chat/vision 接口返回文本分析。
-- `H-Gripe Replicate Run` 支持调用 Replicate：填 `model`（owner/name）或 `version` 加 `input_json`，节点内自动完成创建 prediction、轮询和输出下载，返回首个输出文件路径、`output` JSON、完整 `result_json` 和 `status`，是 Replicate 上图像/视频/音频模型的专用通道。
+- `H-Gripe Replicate Run` 支持调用 Replicate：填 `model`（owner/name）或 `version` 加 `input_json`，节点内自动完成创建 prediction、轮询和输出下载，返回首个输出文件路径、`output` JSON、完整 `result_json` 和 `status`。该节点应定位为 provider 调试/高级入口，长期主工作流应迁移到 `H-Gripe Image Generate`、`H-Gripe Image Edit`、`H-Gripe Video Job` 等语义节点。
 - 已新增 credential ref 第一版：OpenAI-compatible 和 Custom HTTP 节点可用 `credentials_ref` 引用本地凭据，默认读取被 git 忽略的 `user/hgripe/credentials.json`，也支持 `HGRIPE_CREDENTIALS_FILE` 指向其他文件。
 - 已新增本地任务历史第一版：CLI broker 每次执行后追加 JSONL 记录到 `user/hgripe/history/tasks.jsonl`，记录 provider、operation、status、duration、request id、输出文件列表和输出摘要。
 - 已新增 SQLite 历史索引：CLI broker 同步写入 `user/hgripe/history/tasks.sqlite3`，支持按时间读取最近任务，并支持按 provider、operation、status、是否有输出文件筛选。
@@ -244,7 +258,7 @@ Tauri 不只是一个壳，应该承担桌面体验：
 - `custom_http` 已支持 `credentials_ref`：可从本地 credentials 读取 `base_url`、bearer API key、`api_key_env` 和 headers，减少 workflow/history 中出现敏感字段。
 - `custom_http` 已支持 `profile_ref`：可把 method、url、polling JSON path、默认 headers、下载参数等非敏感默认配置放进 provider profile，节点里只保留变化参数。
 - `custom_http async_job` 已支持提交、轮询、成功/失败状态判断、最终结果 URL 下载和 `output_files` 落盘，是后续接 Kling、Runway、Veo、Replicate 或本地 GPU 服务的通用基座。
-- `replicate run` 已在通用 async 基座之上实现 Replicate 专用 provider：内置 `/v1/models/{owner}/{name}/predictions` 与 `/v1/predictions`（version 模式）两种创建入口、`urls.get` 优先的轮询、多输出 URL 下载，是 provider-specific API 专用节点的第一个落地示例。
+- `replicate run` 已在通用 async 基座之上实现 Replicate provider：内置 `/v1/models/{owner}/{name}/predictions` 与 `/v1/predictions`（version 模式）两种创建入口、`urls.get` 优先的轮询、多输出 URL 下载。后续应把它接入语义节点，而不是继续复制更多 provider-specific 节点。
 
 当前验证命令：
 
@@ -292,8 +306,9 @@ cargo build -p hgripe-api --bins
 
 - 后续把 credential ref 从本地 JSON 文件升级到 Tauri/系统 keychain，并把 provider profile 管理接入桌面设置页。
 - 把历史列表、详情、重跑和清理接入 Tauri 桌面 UI。
-- 把输出落盘能力继续扩展到更多专用视频、音频节点。
-- 把 ComfyUI 节点继续扩展为更多常用 API 专用节点，例如 OpenAI-compatible Video、Audio Transcription、Provider-specific Video/Image APIs（已落地 `H-Gripe Replicate Run`，后续可继续补 Replicate 流式/文件上传输入、Kling、Runway、Veo 等）。
+- 把输出落盘能力继续扩展为通用媒体输出能力，统一服务图片、音频、视频、PSD 和 metadata。
+- 把现有 provider-specific ComfyUI 节点收敛成少量语义节点：优先实现 `H-Gripe Image Generate`、`H-Gripe Image Edit`、`H-Gripe Image Enhance`、`H-Gripe Vision Analyze`、`H-Gripe Video Job`、`H-Gripe PSD Compose` 和 `H-Gripe PSD Export`。
+- 新接 Kling、Runway、Veo、Replicate、本地 GPU 小服务等能力时，优先新增/扩展 Rust provider 和 provider profile，不优先新增平行的厂商节点。
 
 ### Phase 2: Tauri Shell
 

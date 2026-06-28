@@ -1,0 +1,72 @@
+# H-Gripe Studio (node-graph editor)
+
+A Vite + React + TypeScript sub-app implementing H-Gripe's own production
+node-graph editor on top of [React Flow](https://reactflow.dev) (`@xyflow/react`).
+This is the in-house alternative to the embedded ComfyUI — ComfyUI stays as the
+**Advanced Canvas** and is **not touched** by this work.
+
+> Status: **foundation scaffold.** Not yet wired into the Tauri window
+> (`tauri.conf.json` still serves `../dist`), so the existing static shell and
+> the embedded ComfyUI canvas are unaffected. A later PR mounts this build
+> inside the desktop app.
+
+## Architecture (renderer-agnostic by design)
+
+The durable assets are deliberately independent of the renderer, so React Flow
+can be swapped later (e.g. for tldraw / a canvas renderer) without a data or
+runtime migration:
+
+```
+src/
+  graph/      renderer-agnostic data model + node specs (typed ports)
+  runtime/    DAG runtime (topo sort, parallel levels, validation, executors)
+  bridge/     thin Tauri bridge (run_task_json, generate_thumbnail) + mocks
+  editor/     React Flow rendering layer (adapter <-> graph model)
+```
+
+- **graph/model.ts** – `WorkflowGraph` (`nodes` / `edges` / typed ports /
+  `MediaRef`), serialization, and port-type compatibility.
+- **graph/nodeSpecs.ts** – node catalogue. Each kind declares typed input/output
+  ports and param controls.
+- **runtime/dag.ts** – `topoLevels` (Kahn, grouped for parallel execution),
+  `wouldCreateCycle`, `validateGraph` (type + cycle checks), and `runGraph`
+  (threads outputs to inputs, runs independent branches concurrently, memoizes
+  by signature). Runs headless — no UI dependency.
+- **runtime/executors.ts** – maps node kinds to behaviour; `generate` composes
+  an `ApiTask` and runs it through the existing broker via `run_task_json`.
+- **editor/** – React Flow nodes are memoized, connections are validated by port
+  type and acyclicity (`isValidConnection`), and `onlyRenderVisibleElements` is
+  on. The adapter converts render state <-> `WorkflowGraph`.
+
+## Media / thumbnail discipline (why previews never blur)
+
+Nodes display a **backend-generated thumbnail**; the original file path is the
+source of truth for execution/export. The webview never downscales originals —
+that is the real memory/quality killer.
+
+Backend contract (consumed by `bridge/tauri.ts`, Rust impl lands with Tauri
+integration):
+
+```
+generate_thumbnail({ path, size, dpr }) -> { thumbnailPath, width, height, hash, mime }
+```
+
+The backend should generate at `size * dpr`, cache on disk keyed by
+`hash + size`, and return a path/URL the webview can load cheaply.
+
+## Develop
+
+```
+npm install
+npm run dev        # browser preview; backend calls are mocked when not in Tauri
+npm run typecheck
+npm test           # vitest (DAG runtime unit tests)
+npm run build
+```
+
+### Note on `npm audit`
+
+The remaining advisories are the well-known **esbuild dev-server** issue, pulled
+in transitively by Vite 5/6. It only affects the local dev server and is **not**
+part of the shipped bundle. Clearing it requires Vite 8 (a breaking bump), so it
+is intentionally deferred; production builds are unaffected.

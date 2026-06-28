@@ -165,6 +165,7 @@ button:disabled { opacity: 0.6; cursor: default; }
 
 /* toolbar validation marker */
 .issues { color: var(--running); font-size: 12px; cursor: help; }
+.autosave { font-size: 11px; cursor: help; }
 
 /* node thumbnail wrapper (lazy) */
 .node-thumb-wrap { width: 100%; }

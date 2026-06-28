@@ -59,9 +59,13 @@ src/
   inputs carry `nodrag`/`nowheel` so editing never drags the node or pans the
   canvas. Edits flow through `NodeEditingContext` so memoized cards update
   their own params without putting callbacks in the serializable graph.
-- **Save / Load / Clear**: serialize the graph to `workflow.json` and load it
-  back (params are merged over the kind's current defaults). Delete removes the
+- **Save / Load / Reset / Clear**: serialize the graph to `workflow.json` and
+  load it back (params are merged over the kind's current defaults). Reset
+  restores the sample workflow; Clear empties the canvas. Delete removes the
   selected node/edge.
+- **Workspace autosave**: the graph is autosaved to `localStorage` (debounced,
+  structural fields only) and restored on next open, so work survives a reload
+  without a manual JSON download. See `editor/persist.ts`.
 - **Lazy thumbnails**: preview nodes request `generate_thumbnail` only when they
   scroll into view (IntersectionObserver), so the graph data stays light (only
   the original path) and off-screen media is never decoded.

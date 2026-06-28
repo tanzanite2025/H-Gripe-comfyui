@@ -1,4 +1,4 @@
-import { useCallback, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
   ReactFlowProvider,
   useEdgesState,
@@ -13,6 +13,7 @@ import { Palette } from "./editor/Palette";
 import { NodeEditingContext } from "./editor/editingContext";
 import type { HgripeNodeData } from "./editor/HgripeNode";
 import { fromWorkflowGraph, toWorkflowGraph } from "./editor/adapter";
+import { clearPersistedGraph, loadPersistedGraph, persistGraph } from "./editor/persist";
 import { defaultParams } from "./graph/nodeSpecs";
 import { deserializeGraph, serializeGraph } from "./graph/model";
 import { runGraph, validateGraph, type NodeStatus } from "./runtime/dag";
@@ -36,11 +37,27 @@ const initialEdges: Edge[] = [
 ];
 
 function Studio() {
-  const [nodes, setNodes, onNodesChange] = useNodesState(initialNodes);
-  const [edges, setEdges, onEdgesChange] = useEdgesState(initialEdges);
+  // Restore the last autosaved workflow from this workspace; fall back to the
+  // pre-wired sample graph on a fresh / unreadable workspace.
+  const initial = useMemo(() => {
+    const restored = loadPersistedGraph();
+    if (restored && restored.nodes.length) return fromWorkflowGraph(restored);
+    return { nodes: initialNodes, edges: initialEdges };
+  }, []);
+  const restoredOnMount = useRef(initial.nodes !== initialNodes);
+
+  const [nodes, setNodes, onNodesChange] = useNodesState(initial.nodes);
+  const [edges, setEdges, onEdgesChange] = useEdgesState(initial.edges);
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const [running, setRunning] = useState(false);
-  const [message, setMessage] = useState<string>(isTauri() ? "" : "browser preview (backend mocked)");
+  const [saved, setSaved] = useState(restoredOnMount.current);
+  const [message, setMessage] = useState<string>(
+    isTauri()
+      ? restoredOnMount.current
+        ? "restored last workflow"
+        : ""
+      : "browser preview (backend mocked)",
+  );
   const idSeq = useRef(0);
   const fileInput = useRef<HTMLInputElement | null>(null);
 
@@ -146,7 +163,27 @@ function Studio() {
     setNodes([]);
     setEdges([]);
     setSelectedId(null);
+    clearPersistedGraph();
   }, [setNodes, setEdges]);
+
+  const resetSample = useCallback(() => {
+    setNodes(initialNodes);
+    setEdges(initialEdges);
+    setSelectedId(null);
+    setMessage("reset to sample workflow");
+  }, [setNodes, setEdges]);
+
+  // Autosave to the workspace (debounced). Only graph-structural fields are
+  // serialized (kind/params/position/edges), so transient run statuses and
+  // fetched thumbnails never hit storage.
+  useEffect(() => {
+    setSaved(false);
+    const t = setTimeout(() => {
+      persistGraph(toWorkflowGraph(nodes, edges));
+      setSaved(true);
+    }, 500);
+    return () => clearTimeout(t);
+  }, [nodes, edges]);
 
   // Stable context value so memoized node cards can edit their own params.
   const editing = useMemo(() => ({ onParamChange }), [onParamChange]);
@@ -162,8 +199,12 @@ function Studio() {
             ⚠ {issues.length} issue{issues.length > 1 ? "s" : ""}
           </span>
         )}
+        <span className="muted autosave" title="this workflow is autosaved to the workspace and restored on next open">
+          {saved ? "● autosaved" : "○ saving…"}
+        </span>
         <button onClick={save}>Save</button>
         <button onClick={() => fileInput.current?.click()}>Load</button>
+        <button onClick={resetSample}>Reset</button>
         <button onClick={clear}>Clear</button>
         <button className="primary" onClick={run} disabled={running || issues.length > 0}>
           {running ? "Running…" : "Run"}

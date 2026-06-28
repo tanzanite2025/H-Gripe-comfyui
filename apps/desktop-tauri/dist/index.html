@@ -13,17 +13,19 @@
     </header>
 
     <nav class="tabs" id="tabs">
-      <button data-tab="comfyui" class="active">ComfyUI</button>
-      <button data-tab="dashboard">Dashboard</button>
+      <button data-tab="dashboard" class="active">Dashboard</button>
       <button data-tab="credentials">Credentials</button>
       <button data-tab="profiles">Profiles</button>
       <button data-tab="run">Run Task</button>
       <button data-tab="history">History</button>
       <button data-tab="psd">PSD</button>
+      <!-- Advanced Canvas (embedded ComfyUI) is an advanced/escape-hatch tab,
+           not the product's main surface; keep it last in the nav. -->
+      <button data-tab="comfyui">Advanced Canvas</button>
     </nav>
 
     <main>
-      <section id="dashboard" class="panel">
+      <section id="dashboard" class="panel active">
         <div class="row">
           <h2>Runtime</h2>
           <button id="refresh-dashboard">Refresh</button>
@@ -139,7 +141,17 @@
         </div>
       </section>
 
-      <section id="comfyui" class="panel comfyui-panel active">
+      <!-- Advanced Canvas: the embedded ComfyUI node editor. This is an
+           advanced workflow surface (complex node graphs, legacy workflows,
+           mature plugins) — day-to-day production should go through the
+           H-Gripe panels above, not here. ComfyUI stays embedded as the
+           advanced canvas; it is not the product's main UI. -->
+      <section id="comfyui" class="panel comfyui-panel">
+        <p class="hint">
+          <strong>Advanced Canvas</strong> embeds the full ComfyUI node editor
+          for complex workflows, legacy graphs, and mature plugins. For routine
+          work, prefer the H-Gripe production panels (Dashboard, Run Task, PSD).
+        </p>
         <div class="row comfy-bar">
           <input id="comfy-url" value="http://127.0.0.1:8188" />
           <button id="comfy-start" class="primary">Start ComfyUI</button>
@@ -156,7 +168,7 @@
           <iframe id="comfy-frame" class="comfy-frame hidden" title="ComfyUI"></iframe>
           <div id="comfy-placeholder" class="comfy-placeholder">
             <p>Embedding the running ComfyUI web UI.</p>
-            <p class="hint">Make sure ComfyUI is running at the URL above, then click <strong>Embed</strong> / <strong>Reload</strong>. The full node editor loads here inside the app.</p>
+            <p class="hint">Click <strong>Start ComfyUI</strong> to launch a local server (it embeds automatically when ready), or point the URL at an already-running instance and click <strong>Reload</strong>. The full node editor loads here inside the app.</p>
           </div>
         </div>
       </section>

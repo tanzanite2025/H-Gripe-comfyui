@@ -1,18 +1,47 @@
 # H-Gripe Desktop (Tauri shell)
 
 Phase 2 desktop shell for H-Gripe. It wraps the `hgripe-api` crate in a
-[Tauri](https://tauri.app) window and exposes the API-first workflow:
+[Tauri](https://tauri.app) window and exposes the API-first workflow.
 
-- **Dashboard** – runtime paths + `doctor` diagnostics.
+## Positioning: shell + production panels + Advanced Canvas
+
+The desktop app is intentionally **three layers**, and ComfyUI is *not* the
+product's main surface — it is embedded as an advanced/escape-hatch canvas:
+
+```
+H-Gripe Desktop
+  ├─ Shell        Dashboard · Credentials · Profiles · History · Outputs
+  ├─ Production   PSD Studio · API Image · Batch Job (H-Gripe's own panels)
+  └─ Advanced Canvas  embedded ComfyUI node editor (advanced workflows only)
+```
+
+Day-to-day production should go through H-Gripe's own panels. The embedded
+ComfyUI (the **Advanced Canvas** tab, opened last in the nav and not by
+default) is for complex node debugging, legacy workflows, and mature plugins —
+it is a high-level canvas, not the final main UI. The app opens on
+**Dashboard**, not on ComfyUI.
+
+## Tabs
+
+- **Dashboard** (default) – runtime paths + `doctor` diagnostics.
 - **Credentials / Profiles** – view summaries, validate, and edit
   `credentials.json` / `provider_profiles.json` in place.
 - **Run Task** – submit an `ApiTask` JSON payload to the broker and inspect the
   `ApiResult`.
 - **History** – list / view / rerun / clean up recorded tasks (SQLite history).
-- **ComfyUI** – open a running ComfyUI web UI in the system browser.
+- **PSD** – browse PSD exports (preview / metadata / smart-object markers).
+- **Advanced Canvas** – start/stop a local ComfyUI server and embed its full
+  web UI in an `<iframe>` inside the app (it also offers an "Open in browser"
+  escape hatch). This replaces the earlier "open in the system browser" flow.
 
 The frontend is a dependency-free static page (`dist/`) using Tauri's global
 API (`window.__TAURI__`); the Rust backend lives in `src-tauri/`.
+
+> **Security TODO (before release):** `tauri.conf.json` currently sets
+> `app.security.csp` to `null`, which disables CSP for development. Before
+> shipping, tighten it to an explicit policy that still allows the embedded
+> ComfyUI iframe (e.g. `frame-src` for the local ComfyUI origin) and Tauri's
+> IPC, then validate the embed still loads with a release build.
 
 ## Prerequisites (Windows)
 

@@ -38,7 +38,7 @@ export interface NodeSpec {
   /** Short description shown in the inspector / node palette. */
   description: string;
   /** Palette grouping. */
-  category: "input" | "generate" | "output";
+  category: "input" | "generate" | "output" | "utility";
   inputs: PortSpec[];
   outputs: PortSpec[];
   params: ParamSpec[];
@@ -186,6 +186,16 @@ export const NODE_SPECS: Record<string, NodeSpec> = {
       },
     ],
   },
+  reroute: {
+    kind: "reroute",
+    title: "Reroute",
+    description:
+      "Pass-through relay: forwards its input unchanged. Use it to tidy long edges and route wires around the canvas.",
+    category: "utility",
+    inputs: [port("in", "in", "any")],
+    outputs: [port("out", "out", "any")],
+    params: [],
+  },
   preview: {
     kind: "preview",
     title: "Preview",
@@ -274,7 +284,7 @@ export function defaultParams(kind: string): Record<string, unknown> {
 
 /** Node kinds grouped by palette category, in display order. */
 export function paletteGroups(): { category: NodeSpec["category"]; specs: NodeSpec[] }[] {
-  const order: NodeSpec["category"][] = ["input", "generate", "output"];
+  const order: NodeSpec["category"][] = ["input", "generate", "utility", "output"];
   return order.map((category) => ({
     category,
     specs: Object.values(NODE_SPECS).filter((s) => s.category === category),

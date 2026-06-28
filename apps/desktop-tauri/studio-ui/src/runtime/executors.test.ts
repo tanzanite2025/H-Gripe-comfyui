@@ -1,4 +1,6 @@
 import { describe, expect, it } from "vitest";
+import { GRAPH_VERSION, type WorkflowGraph } from "../graph/model";
+import { runGraph, validateGraph } from "./dag";
 import { batchItems, defaultExecutors } from "./executors";
 
 function ctx(kind: string, params: Record<string, unknown>, inputs: Record<string, unknown> = {}) {
@@ -37,6 +39,34 @@ describe("batch", () => {
     expect(await defaultExecutors.batch(ctx("batch", { items, index: 2 }))).toEqual({ item: "green frog" });
     // Out-of-range index falls back to the first item.
     expect(await defaultExecutors.batch(ctx("batch", { items, index: 9 }))).toEqual({ item: "red fox" });
+  });
+});
+
+describe("reroute", () => {
+  it("forwards its input unchanged (null when nothing is connected)", async () => {
+    expect(await defaultExecutors.reroute(ctx("reroute", {}, { in: "/a/b.png" }))).toEqual({
+      out: "/a/b.png",
+    });
+    expect(await defaultExecutors.reroute(ctx("reroute", {}, {}))).toEqual({ out: null });
+  });
+
+  it("validates and threads a value through when spliced into a chain", async () => {
+    const g: WorkflowGraph = {
+      version: GRAPH_VERSION,
+      nodes: [
+        { id: "prompt-1", kind: "prompt", position: { x: 0, y: 0 }, params: { text: "hi" } },
+        { id: "reroute-1", kind: "reroute", position: { x: 0, y: 0 }, params: {} },
+        { id: "preview-1", kind: "preview", position: { x: 0, y: 0 }, params: {} },
+      ],
+      edges: [
+        { id: "e1", source: "prompt-1", sourcePort: "text", target: "reroute-1", targetPort: "in" },
+        { id: "e2", source: "reroute-1", sourcePort: "out", target: "preview-1", targetPort: "image" },
+      ],
+    };
+    // `any` ports keep the chain type-valid in both directions.
+    expect(validateGraph(g)).toEqual([]);
+    const { outputs } = await runGraph(g, defaultExecutors);
+    expect(outputs.get("preview-1")).toEqual({ image: "hi" });
   });
 });
 

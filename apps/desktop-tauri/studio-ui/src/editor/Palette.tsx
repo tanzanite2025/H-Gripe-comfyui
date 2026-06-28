@@ -8,6 +8,7 @@ interface PaletteProps {
 const CATEGORY_LABEL: Record<NodeSpec["category"], string> = {
   input: "Inputs",
   generate: "Generate",
+  utility: "Utility",
   output: "Outputs",
 };
 

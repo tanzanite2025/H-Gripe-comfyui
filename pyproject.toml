@@ -35,6 +35,15 @@ master.py-version = "3.10"
 master.extension-pkg-allow-list = [
   "pydantic",
 ]
+# Third-party runtime deps that are not installed in the lint environment;
+# ignore them (and their submodules) so import-error is not raised.
+master.ignored-modules = [
+  "pydantic",
+  "pydantic_settings",
+  "aiohttp",
+  "yarl",
+  "av",
+]
 reports.output-format = "colorized"
 similarities.ignore-imports = "yes"
 messages_control.disable = [

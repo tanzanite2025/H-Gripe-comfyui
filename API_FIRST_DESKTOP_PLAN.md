@@ -222,6 +222,7 @@ Tauri 不只是一个壳，应该承担桌面体验：
 - 已新增 SQLite 历史索引：CLI broker 同步写入 `user/hgripe/history/tasks.sqlite3`，支持按时间读取最近任务，并支持按 provider、operation、status、是否有输出文件筛选。
 - 已新增历史重跑基础：新历史记录会保存脱敏后的 `task_snapshot`，去掉 inline API key、token、password、Authorization 等敏感字段，并可通过 `history_rerun_example.py` 按 `task_id` 重跑。
 - 已新增 Rust 历史动作入口：`hgripe-api-history` 支持 `list`、`show`、`rerun-task` 和 `rerun`，用于模拟后续 Tauri 历史面板需要的查询详情、重跑任务构造和一键重跑。
+- 已新增历史清理第一版：`hgripe-api-history cleanup` 支持按最新保留条数、时间、provider、operation、status、是否有输出文件筛选清理；默认 dry-run，只有 `--apply` 才会改 SQLite/JSONL，输出文件需要额外 `--delete-output-files` 才会删除。
 - 已新增本地输出根目录约定：默认 `user/hgripe/outputs`，也支持 `HGRIPE_OUTPUT_DIR` 指定其他目录。
 - `openai_compatible image.generate` 已支持输出落盘：`b64_json` 图片可直接保存，`url` 图片可通过 `download_url_outputs` 下载保存，并写入 `output_files` 和 `images[*].local_path`。
 
@@ -244,12 +245,14 @@ cargo build -p hgripe-api --bins
 .\target\debug\hgripe-api-history.exe show <task_id>
 .\target\debug\hgripe-api-history.exe rerun-task <task_id>
 .\target\debug\hgripe-api-history.exe rerun <task_id>
+.\target\debug\hgripe-api-history.exe cleanup --keep-latest 100
+.\target\debug\hgripe-api-history.exe cleanup --keep-latest 100 --apply
 ```
 
 下一步：
 
 - 后续把 credential ref 从本地 JSON 文件升级到 Tauri/系统 keychain。
-- 把历史重跑接入 Tauri 桌面 UI，并继续增加历史清理策略。
+- 把历史列表、详情、重跑和清理接入 Tauri 桌面 UI。
 - 把输出落盘能力扩展到通用下载、视频、音频和 Image Edit 节点。
 - 把 ComfyUI 节点继续扩展为更多常用 API 专用节点，例如 OpenAI-compatible Image Edit、Video、Audio。
 

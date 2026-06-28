@@ -4,7 +4,7 @@ use crate::provider::{BrokerError, BrokerResult};
 use rusqlite::{params, Connection, ToSql};
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, HashSet};
 use std::env;
 use std::fs::{self, OpenOptions};
 use std::io::Write;
@@ -74,6 +74,38 @@ impl Default for HistoryRerunOptions {
             disable_cache: true,
         }
     }
+}
+
+#[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq, Eq)]
+pub struct HistoryCleanupOptions {
+    pub keep_latest: Option<usize>,
+    pub older_than_timestamp_ms: Option<u128>,
+    pub provider: Option<String>,
+    pub operation: Option<String>,
+    pub status: Option<ApiStatus>,
+    pub has_output_files: Option<bool>,
+    pub delete_all_matched: bool,
+    pub delete_output_files: bool,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct HistoryCleanupPlan {
+    pub total_records: usize,
+    pub matched_records: usize,
+    pub protected_records: usize,
+    pub delete_count: usize,
+    pub delete_task_ids: Vec<String>,
+    pub delete_output_paths: Vec<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct HistoryCleanupResult {
+    pub plan: HistoryCleanupPlan,
+    pub sqlite_deleted: usize,
+    pub jsonl_removed: usize,
+    pub output_files_deleted: usize,
+    pub output_files_missing: usize,
+    pub output_file_errors: Vec<String>,
 }
 
 pub fn record_task_result(task: &ApiTask, result: &ApiResult) -> BrokerResult<Option<PathBuf>> {
@@ -426,6 +458,102 @@ pub fn query_history_records(path: &Path, query: HistoryQuery) -> BrokerResult<V
     Ok(records)
 }
 
+pub fn plan_history_cleanup(
+    history_db: &Path,
+    options: &HistoryCleanupOptions,
+) -> BrokerResult<HistoryCleanupPlan> {
+    let records = load_all_history_records(history_db)?;
+    Ok(build_history_cleanup_plan(&records, options))
+}
+
+pub fn build_history_cleanup_plan(
+    records: &[HistoryRecord],
+    options: &HistoryCleanupOptions,
+) -> HistoryCleanupPlan {
+    let mut matched_records: Vec<&HistoryRecord> = records
+        .iter()
+        .filter(|record| cleanup_record_matches(record, options))
+        .collect();
+    matched_records.sort_by(|left, right| {
+        right
+            .timestamp_ms
+            .cmp(&left.timestamp_ms)
+            .then_with(|| right.task_id.cmp(&left.task_id))
+    });
+    let protected_task_ids: HashSet<String> = options
+        .keep_latest
+        .map(|keep_latest| {
+            matched_records
+                .iter()
+                .take(keep_latest)
+                .map(|record| record.task_id.clone())
+                .collect()
+        })
+        .unwrap_or_default();
+
+    let mut delete_records = Vec::new();
+    for record in &matched_records {
+        if protected_task_ids.contains(&record.task_id) {
+            continue;
+        }
+
+        let matched_by_age = options
+            .older_than_timestamp_ms
+            .map(|cutoff| record.timestamp_ms < cutoff)
+            .unwrap_or(false);
+        let matched_by_count = options.keep_latest.is_some();
+
+        if options.delete_all_matched || matched_by_age || matched_by_count {
+            delete_records.push(*record);
+        }
+    }
+
+    let delete_task_ids = delete_records
+        .iter()
+        .map(|record| record.task_id.clone())
+        .collect();
+    let delete_output_paths = delete_records
+        .iter()
+        .flat_map(|record| record.output_files.iter().map(|file| file.path.clone()))
+        .collect();
+
+    HistoryCleanupPlan {
+        total_records: records.len(),
+        matched_records: matched_records.len(),
+        protected_records: protected_task_ids.len(),
+        delete_count: delete_records.len(),
+        delete_task_ids,
+        delete_output_paths,
+    }
+}
+
+pub fn apply_history_cleanup(
+    history_db: &Path,
+    history_file: &Path,
+    options: &HistoryCleanupOptions,
+) -> BrokerResult<HistoryCleanupResult> {
+    let plan = plan_history_cleanup(history_db, options)?;
+    let task_ids: HashSet<String> = plan.delete_task_ids.iter().cloned().collect();
+
+    let sqlite_deleted = delete_sqlite_history_records(history_db, &task_ids)?;
+    let jsonl_removed = rewrite_jsonl_history_file(history_file, &task_ids)?;
+    let (output_files_deleted, output_files_missing, output_file_errors) =
+        if options.delete_output_files {
+            delete_history_output_files(&plan.delete_output_paths)
+        } else {
+            (0, 0, Vec::new())
+        };
+
+    Ok(HistoryCleanupResult {
+        plan,
+        sqlite_deleted,
+        jsonl_removed,
+        output_files_deleted,
+        output_files_missing,
+        output_file_errors,
+    })
+}
+
 fn build_history_query_sql(query: &HistoryQuery) -> BrokerResult<(String, Vec<Box<dyn ToSql>>)> {
     let mut sql = String::from("SELECT record_json FROM task_history");
     let mut clauses: Vec<&'static str> = Vec::new();
@@ -473,6 +601,215 @@ fn build_history_query_sql(query: &HistoryQuery) -> BrokerResult<(String, Vec<Bo
     params.push(Box::new(usize_to_i64(normalized_limit(query.limit))));
 
     Ok((sql, params))
+}
+
+fn load_all_history_records(path: &Path) -> BrokerResult<Vec<HistoryRecord>> {
+    if !path.exists() {
+        return Ok(Vec::new());
+    }
+
+    let connection = Connection::open(path).map_err(|err| {
+        BrokerError::Provider(format!(
+            "failed to open history database {}: {err}",
+            path.display()
+        ))
+    })?;
+    init_sqlite_history(&connection)?;
+
+    let mut statement = connection
+        .prepare("SELECT record_json FROM task_history ORDER BY timestamp_ms DESC, rowid DESC")
+        .map_err(|err| {
+            BrokerError::Provider(format!(
+                "failed to query history database {}: {err}",
+                path.display()
+            ))
+        })?;
+    let rows = statement
+        .query_map([], |row| row.get::<_, String>(0))
+        .map_err(|err| {
+            BrokerError::Provider(format!(
+                "failed to read history database {}: {err}",
+                path.display()
+            ))
+        })?;
+
+    let mut records = Vec::new();
+    for row in rows {
+        let record_json = row.map_err(|err| {
+            BrokerError::Provider(format!(
+                "failed to read history row from {}: {err}",
+                path.display()
+            ))
+        })?;
+        records.push(decode_history_record_json(path, &record_json)?);
+    }
+
+    Ok(records)
+}
+
+fn cleanup_record_matches(record: &HistoryRecord, options: &HistoryCleanupOptions) -> bool {
+    if let Some(provider) = normalized_filter(options.provider.as_deref()) {
+        if record.provider != provider {
+            return false;
+        }
+    }
+
+    if let Some(operation) = normalized_filter(options.operation.as_deref()) {
+        if record.operation != operation {
+            return false;
+        }
+    }
+
+    if let Some(status) = &options.status {
+        if &record.status != status {
+            return false;
+        }
+    }
+
+    if let Some(has_output_files) = options.has_output_files {
+        let record_has_output_files =
+            record.output_file_count > 0 || !record.output_files.is_empty();
+        if record_has_output_files != has_output_files {
+            return false;
+        }
+    }
+
+    true
+}
+
+fn normalized_filter(value: Option<&str>) -> Option<&str> {
+    value.map(str::trim).filter(|value| !value.is_empty())
+}
+
+fn delete_sqlite_history_records(path: &Path, task_ids: &HashSet<String>) -> BrokerResult<usize> {
+    if task_ids.is_empty() || !path.exists() {
+        return Ok(0);
+    }
+
+    let mut connection = Connection::open(path).map_err(|err| {
+        BrokerError::Provider(format!(
+            "failed to open history database {}: {err}",
+            path.display()
+        ))
+    })?;
+    init_sqlite_history(&connection)?;
+
+    let transaction = connection.transaction().map_err(|err| {
+        BrokerError::Provider(format!(
+            "failed to start history cleanup transaction for {}: {err}",
+            path.display()
+        ))
+    })?;
+    let mut deleted = 0;
+    {
+        let mut statement = transaction
+            .prepare("DELETE FROM task_history WHERE task_id = ?1")
+            .map_err(|err| {
+                BrokerError::Provider(format!(
+                    "failed to prepare history cleanup for {}: {err}",
+                    path.display()
+                ))
+            })?;
+        for task_id in task_ids {
+            deleted += statement.execute(params![task_id]).map_err(|err| {
+                BrokerError::Provider(format!(
+                    "failed to delete history task '{}' from {}: {err}",
+                    task_id,
+                    path.display()
+                ))
+            })?;
+        }
+    }
+    transaction.commit().map_err(|err| {
+        BrokerError::Provider(format!(
+            "failed to commit history cleanup for {}: {err}",
+            path.display()
+        ))
+    })?;
+
+    Ok(deleted)
+}
+
+fn rewrite_jsonl_history_file(path: &Path, task_ids: &HashSet<String>) -> BrokerResult<usize> {
+    if task_ids.is_empty() || !path.exists() {
+        return Ok(0);
+    }
+
+    let raw = fs::read_to_string(path).map_err(|err| {
+        BrokerError::Provider(format!(
+            "failed to read history file {}: {err}",
+            path.display()
+        ))
+    })?;
+
+    let mut removed = 0;
+    let mut kept_lines = Vec::new();
+    for line in raw.lines() {
+        if line.trim().is_empty() {
+            continue;
+        }
+
+        let should_remove = serde_json::from_str::<Value>(line)
+            .ok()
+            .and_then(|value| {
+                value
+                    .get("task_id")
+                    .and_then(Value::as_str)
+                    .map(|task_id| task_ids.contains(task_id))
+            })
+            .unwrap_or(false);
+
+        if should_remove {
+            removed += 1;
+        } else {
+            kept_lines.push(line.to_string());
+        }
+    }
+
+    let rewritten = if kept_lines.is_empty() {
+        String::new()
+    } else {
+        format!("{}\n", kept_lines.join("\n"))
+    };
+    fs::write(path, rewritten).map_err(|err| {
+        BrokerError::Provider(format!(
+            "failed to rewrite history file {}: {err}",
+            path.display()
+        ))
+    })?;
+
+    Ok(removed)
+}
+
+fn delete_history_output_files(paths: &[String]) -> (usize, usize, Vec<String>) {
+    let mut deleted = 0;
+    let mut missing = 0;
+    let mut errors = Vec::new();
+
+    for path in paths {
+        let path = path.trim();
+        if path.is_empty() {
+            continue;
+        }
+
+        let path_buf = PathBuf::from(path);
+        if !path_buf.exists() {
+            missing += 1;
+            continue;
+        }
+
+        if !path_buf.is_file() {
+            errors.push(format!("refusing to delete non-file output path: {path}"));
+            continue;
+        }
+
+        match fs::remove_file(&path_buf) {
+            Ok(()) => deleted += 1,
+            Err(err) => errors.push(format!("failed to delete output file {path}: {err}")),
+        }
+    }
+
+    (deleted, missing, errors)
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]

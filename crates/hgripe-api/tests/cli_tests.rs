@@ -132,6 +132,66 @@ fn history_cli_lists_shows_and_builds_rerun_task() {
     );
     assert_eq!(executed_rerun_json["result"]["status"], "succeeded");
 
+    let cleanup_preview_output = Command::new(env!("CARGO_BIN_EXE_hgripe-api-history"))
+        .arg("cleanup")
+        .arg("--history-db")
+        .arg(&history_db)
+        .arg("--history-file")
+        .arg(&history_file)
+        .arg("--provider")
+        .arg("mock")
+        .arg("--keep-latest")
+        .arg("1")
+        .output()
+        .expect("history CLI cleanup preview should run");
+    assert!(cleanup_preview_output.status.success());
+    let cleanup_preview_json: serde_json::Value =
+        serde_json::from_slice(&cleanup_preview_output.stdout)
+            .expect("cleanup preview output should be JSON");
+    assert_eq!(cleanup_preview_json["dry_run"], true);
+    assert_eq!(cleanup_preview_json["plan"]["delete_count"], 1);
+
+    let cleanup_apply_output = Command::new(env!("CARGO_BIN_EXE_hgripe-api-history"))
+        .arg("cleanup")
+        .arg("--history-db")
+        .arg(&history_db)
+        .arg("--history-file")
+        .arg(&history_file)
+        .arg("--provider")
+        .arg("mock")
+        .arg("--keep-latest")
+        .arg("1")
+        .arg("--apply")
+        .output()
+        .expect("history CLI cleanup apply should run");
+    assert!(cleanup_apply_output.status.success());
+    let cleanup_apply_json: serde_json::Value =
+        serde_json::from_slice(&cleanup_apply_output.stdout)
+            .expect("cleanup apply output should be JSON");
+    assert_eq!(cleanup_apply_json["dry_run"], false);
+    assert_eq!(cleanup_apply_json["result"]["sqlite_deleted"], 1);
+    assert_eq!(cleanup_apply_json["result"]["jsonl_removed"], 1);
+
+    let list_after_cleanup_output = Command::new(env!("CARGO_BIN_EXE_hgripe-api-history"))
+        .arg("list")
+        .arg("--history-db")
+        .arg(&history_db)
+        .arg("--provider")
+        .arg("mock")
+        .output()
+        .expect("history CLI list after cleanup should run");
+    assert!(list_after_cleanup_output.status.success());
+    let list_after_cleanup_json: serde_json::Value =
+        serde_json::from_slice(&list_after_cleanup_output.stdout)
+            .expect("list after cleanup output should be JSON");
+    assert_eq!(
+        list_after_cleanup_json["records"]
+            .as_array()
+            .expect("records should be an array")
+            .len(),
+        1
+    );
+
     let _ = fs::remove_dir_all(temp_dir);
 }
 

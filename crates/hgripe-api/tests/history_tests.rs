@@ -1,7 +1,8 @@
 use hgripe_api::{
-    append_history_record, build_history_record, build_rerun_task_from_record, get_history_detail,
-    get_history_record, history_detail_from_record, list_recent_history_records,
-    query_history_records, upsert_sqlite_history_record, ApiResult, ApiStatus, ApiTask,
+    append_history_record, apply_history_cleanup, build_history_cleanup_plan, build_history_record,
+    build_rerun_task_from_record, get_history_detail, get_history_record,
+    history_detail_from_record, list_recent_history_records, query_history_records,
+    upsert_sqlite_history_record, ApiResult, ApiStatus, ApiTask, HistoryCleanupOptions,
     HistoryQuery, HistoryRecord, HistoryRerunOptions, OutputFile, OutputType,
 };
 use rusqlite::Connection;
@@ -360,6 +361,100 @@ fn sqlite_history_filters_records() {
     assert_eq!(output_records[0].task_id, "task-image");
 
     let _ = fs::remove_file(path);
+}
+
+#[test]
+fn history_cleanup_plan_keeps_latest_matching_records() {
+    let records = vec![
+        record_for("old-mock", "mock", "echo", 100),
+        record_for("new-mock", "mock", "echo", 300),
+        record_for("middle-mock", "mock", "echo", 200),
+        record_for(
+            "other-provider",
+            "openai_compatible",
+            "chat.completions",
+            50,
+        ),
+    ];
+
+    let plan = build_history_cleanup_plan(
+        &records,
+        &HistoryCleanupOptions {
+            keep_latest: Some(1),
+            provider: Some("mock".to_string()),
+            ..HistoryCleanupOptions::default()
+        },
+    );
+
+    assert_eq!(plan.total_records, 4);
+    assert_eq!(plan.matched_records, 3);
+    assert_eq!(plan.protected_records, 1);
+    assert_eq!(plan.delete_count, 2);
+    assert_eq!(
+        plan.delete_task_ids,
+        vec!["middle-mock".to_string(), "old-mock".to_string()]
+    );
+}
+
+#[test]
+fn history_cleanup_applies_to_sqlite_jsonl_and_optional_outputs() {
+    let history_file = temp_history_path();
+    let history_db = history_file.with_extension("sqlite3");
+    let output_dir = history_file
+        .parent()
+        .expect("temp path should have parent")
+        .join("outputs");
+    fs::create_dir_all(&output_dir).expect("output dir should be created");
+
+    let keep = record_for("keep", "mock", "echo", 300);
+    let mut delete = record_for("delete", "mock", "echo", 100);
+    let output_path = output_dir.join("delete.txt");
+    fs::write(&output_path, "delete me").expect("output file should write");
+    delete.output_file_count = 1;
+    delete.output_files.push(OutputFile {
+        path: output_path.to_string_lossy().to_string(),
+        mime_type: Some("text/plain".to_string()),
+        size_bytes: Some(9),
+        sha256: None,
+    });
+
+    upsert_sqlite_history_record(&history_db, &keep).expect("keep record should write sqlite");
+    upsert_sqlite_history_record(&history_db, &delete).expect("delete record should write sqlite");
+    append_history_record(&history_file, &keep).expect("keep record should write jsonl");
+    append_history_record(&history_file, &delete).expect("delete record should write jsonl");
+
+    let result = apply_history_cleanup(
+        &history_db,
+        &history_file,
+        &HistoryCleanupOptions {
+            keep_latest: Some(1),
+            provider: Some("mock".to_string()),
+            delete_output_files: true,
+            ..HistoryCleanupOptions::default()
+        },
+    )
+    .expect("cleanup should apply");
+
+    assert_eq!(result.plan.delete_task_ids, vec!["delete".to_string()]);
+    assert_eq!(result.sqlite_deleted, 1);
+    assert_eq!(result.jsonl_removed, 1);
+    assert_eq!(result.output_files_deleted, 1);
+    assert!(!output_path.exists());
+
+    let remaining =
+        list_recent_history_records(&history_db, 10).expect("remaining sqlite should query");
+    assert_eq!(remaining.len(), 1);
+    assert_eq!(remaining[0].task_id, "keep");
+
+    let jsonl = fs::read_to_string(&history_file).expect("history file should read");
+    assert!(jsonl.contains("\"task_id\":\"keep\""));
+    assert!(!jsonl.contains("\"task_id\":\"delete\""));
+
+    let _ = fs::remove_dir_all(
+        history_file
+            .parent()
+            .expect("temp history path should have parent"),
+    );
 }
 
 fn record_for(

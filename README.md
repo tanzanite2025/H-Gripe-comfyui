@@ -94,7 +94,11 @@ cargo build -p hgripe-api --bins
 .\target\debug\hgripe-api-history.exe show <task_id>
 .\target\debug\hgripe-api-history.exe rerun-task <task_id>
 .\target\debug\hgripe-api-history.exe rerun <task_id>
+.\target\debug\hgripe-api-history.exe cleanup --keep-latest 100
+.\target\debug\hgripe-api-history.exe cleanup --keep-latest 100 --apply
 ```
+
+`hgripe-api-history cleanup` defaults to dry-run. It only changes SQLite/JSONL history when `--apply` is provided. Output files are preserved unless `--delete-output-files` is also provided.
 
 ComfyUI is the AI creation engine for visual professionals who demand control over every model, every parameter, and every output. Its powerful and modular node graph interface empowers creatives to generate images, videos, 3D models, audio, and more...
 - ComfyUI natively supports the latest open-source state of the art models.

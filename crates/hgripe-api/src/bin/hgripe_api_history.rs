@@ -2,15 +2,17 @@ use hgripe_api::providers::custom_http::CustomHttpProvider;
 use hgripe_api::providers::mock::MockProvider;
 use hgripe_api::providers::openai_compatible::OpenAiCompatibleProvider;
 use hgripe_api::{
-    build_rerun_task_from_record, get_history_detail, get_history_record, query_history_records,
-    record_task_failure, record_task_result, ApiBroker, ApiStatus, ApiTask, HistoryQuery,
-    HistoryRecord, HistoryRerunOptions, RuntimePaths,
+    apply_history_cleanup, build_rerun_task_from_record, get_history_detail, get_history_record,
+    plan_history_cleanup, query_history_records, record_task_failure, record_task_result,
+    ApiBroker, ApiStatus, ApiTask, HistoryCleanupOptions, HistoryQuery, HistoryRecord,
+    HistoryRerunOptions, RuntimePaths,
 };
 use serde::Serialize;
 use serde_json::json;
 use std::env;
 use std::path::PathBuf;
 use std::process::ExitCode;
+use std::time::{SystemTime, UNIX_EPOCH};
 
 #[derive(Debug, Clone, Serialize)]
 struct HistoryListItem {
@@ -54,6 +56,7 @@ async fn run() -> Result<(), String> {
         "show" => run_show(args),
         "rerun-task" => run_rerun_task(args),
         "rerun" => run_rerun(args).await,
+        "cleanup" => run_cleanup(args),
         _ => Err(format!(
             "unknown command '{command}'. Run `hgripe-api-history --help`."
         )),
@@ -181,6 +184,36 @@ async fn run_rerun(args: Vec<String>) -> Result<(), String> {
     }))
 }
 
+fn run_cleanup(args: Vec<String>) -> Result<(), String> {
+    let CleanupCommand {
+        history_db,
+        history_file,
+        options,
+        apply,
+    } = parse_cleanup_command(args)?;
+    let paths = history_paths(history_db, history_file)?;
+
+    if apply {
+        let result = apply_history_cleanup(&paths.history_db, &paths.history_file, &options)
+            .map_err(|err| err.to_string())?;
+        print_json(&json!({
+            "dry_run": false,
+            "history_db": paths.history_db,
+            "history_file": paths.history_file,
+            "result": result,
+        }))
+    } else {
+        let plan =
+            plan_history_cleanup(&paths.history_db, &options).map_err(|err| err.to_string())?;
+        print_json(&json!({
+            "dry_run": true,
+            "history_db": paths.history_db,
+            "history_file": paths.history_file,
+            "plan": plan,
+        }))
+    }
+}
+
 #[derive(Debug, Clone)]
 struct ParsedTaskCommand {
     history_db: Option<PathBuf>,
@@ -234,6 +267,95 @@ fn parse_task_command(
     })
 }
 
+#[derive(Debug, Clone)]
+struct CleanupCommand {
+    history_db: Option<PathBuf>,
+    history_file: Option<PathBuf>,
+    options: HistoryCleanupOptions,
+    apply: bool,
+}
+
+fn parse_cleanup_command(args: Vec<String>) -> Result<CleanupCommand, String> {
+    let mut history_db = None;
+    let mut history_file = None;
+    let mut options = HistoryCleanupOptions::default();
+    let mut apply = false;
+    let mut index = 0;
+
+    while index < args.len() {
+        match args[index].as_str() {
+            "--history-db" => {
+                history_db = Some(PathBuf::from(option_value(&args, index)?));
+                index += 2;
+            }
+            "--history-file" => {
+                history_file = Some(PathBuf::from(option_value(&args, index)?));
+                index += 2;
+            }
+            "--keep-latest" => {
+                options.keep_latest = Some(
+                    option_value(&args, index)?
+                        .parse::<usize>()
+                        .map_err(|err| format!("invalid --keep-latest value: {err}"))?,
+                );
+                index += 2;
+            }
+            "--older-than-days" => {
+                let days = option_value(&args, index)?
+                    .parse::<u64>()
+                    .map_err(|err| format!("invalid --older-than-days value: {err}"))?;
+                options.older_than_timestamp_ms = Some(cutoff_timestamp_ms_for_days(days));
+                index += 2;
+            }
+            "--provider" => {
+                options.provider = Some(option_value(&args, index)?);
+                index += 2;
+            }
+            "--operation" => {
+                options.operation = Some(option_value(&args, index)?);
+                index += 2;
+            }
+            "--status" => {
+                options.status = Some(parse_status(&option_value(&args, index)?)?);
+                index += 2;
+            }
+            "--has-output-files" => {
+                options.has_output_files = Some(parse_yes_no(&option_value(&args, index)?)?);
+                index += 2;
+            }
+            "--all-matched" => {
+                options.delete_all_matched = true;
+                index += 1;
+            }
+            "--delete-output-files" => {
+                options.delete_output_files = true;
+                index += 1;
+            }
+            "--apply" => {
+                apply = true;
+                index += 1;
+            }
+            other => return Err(format!("unknown cleanup option '{other}'")),
+        }
+    }
+
+    if options.keep_latest.is_none()
+        && options.older_than_timestamp_ms.is_none()
+        && !options.delete_all_matched
+    {
+        return Err(
+            "cleanup requires --keep-latest, --older-than-days, or --all-matched".to_string(),
+        );
+    }
+
+    Ok(CleanupCommand {
+        history_db,
+        history_file,
+        options,
+        apply,
+    })
+}
+
 fn history_list_item(record: &HistoryRecord) -> HistoryListItem {
     HistoryListItem {
         task_id: record.task_id.clone(),
@@ -251,6 +373,23 @@ fn history_db_path(path: Option<PathBuf>) -> Result<PathBuf, String> {
     path.map(Ok)
         .unwrap_or_else(|| RuntimePaths::from_env().map(|paths| paths.history_db))
         .map_err(|err| err.to_string())
+}
+
+#[derive(Debug, Clone)]
+struct HistoryPaths {
+    history_db: PathBuf,
+    history_file: PathBuf,
+}
+
+fn history_paths(
+    history_db: Option<PathBuf>,
+    history_file: Option<PathBuf>,
+) -> Result<HistoryPaths, String> {
+    let runtime_paths = RuntimePaths::from_env().map_err(|err| err.to_string())?;
+    Ok(HistoryPaths {
+        history_db: history_db.unwrap_or(runtime_paths.history_db),
+        history_file: history_file.unwrap_or(runtime_paths.history_file),
+    })
 }
 
 fn option_value(args: &[String], index: usize) -> Result<String, String> {
@@ -271,6 +410,22 @@ fn parse_yes_no(value: &str) -> Result<bool, String> {
         "no" | "false" | "0" => Ok(false),
         _ => Err(format!("invalid --has-output-files value '{value}'")),
     }
+}
+
+fn cutoff_timestamp_ms_for_days(days: u64) -> u128 {
+    let age_ms = (days as u128)
+        .saturating_mul(24)
+        .saturating_mul(60)
+        .saturating_mul(60)
+        .saturating_mul(1000);
+    current_timestamp_ms().saturating_sub(age_ms)
+}
+
+fn current_timestamp_ms() -> u128 {
+    SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map(|duration| duration.as_millis())
+        .unwrap_or(0)
 }
 
 fn print_json<T: Serialize>(value: &T) -> Result<(), String> {
@@ -315,6 +470,7 @@ fn print_help() {
   hgripe-api-history show <task_id> [--history-db PATH]
   hgripe-api-history rerun-task <task_id> [--new-id ID] [--keep-cache] [--history-db PATH]
   hgripe-api-history rerun <task_id> [--new-id ID] [--keep-cache] [--history-db PATH]
+  hgripe-api-history cleanup [--keep-latest N] [--older-than-days N] [--provider NAME] [--operation OP] [--status STATUS] [--has-output-files yes|no] [--all-matched] [--delete-output-files] [--apply] [--history-db PATH] [--history-file PATH]
 "#
     );
 }

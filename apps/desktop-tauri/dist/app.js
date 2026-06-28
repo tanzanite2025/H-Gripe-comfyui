@@ -23,6 +23,7 @@ $$("#tabs button").forEach((btn) => {
     $$(".panel").forEach((p) => p.classList.remove("active"));
     btn.classList.add("active");
     $(`#${btn.dataset.tab}`).classList.add("active");
+    if (btn.dataset.tab === "comfyui") ensureComfyEmbedded();
   });
 });
 
@@ -354,6 +355,100 @@ $("#psd-use-output").addEventListener("click", async () => {
 });
 
 // ---- comfyui ----
+let comfyEmbedded = false;
+
+function embedComfy() {
+  const url = $("#comfy-url").value.trim();
+  const frame = $("#comfy-frame");
+  const status = $("#comfy-status");
+  const placeholder = $("#comfy-placeholder");
+  if (!url) {
+    status.textContent = "enter a ComfyUI URL";
+    status.className = "status err";
+    return;
+  }
+  status.textContent = "connecting…";
+  status.className = "status";
+  placeholder.classList.add("hidden");
+  frame.classList.remove("hidden");
+  // Cache-bust so Reload re-fetches even if the URL is unchanged.
+  frame.src = url + (url.includes("?") ? "&" : "?") + "_hg=" + Date.now();
+  comfyEmbedded = true;
+}
+
+function ensureComfyEmbedded() {
+  if (!comfyEmbedded) embedComfy();
+}
+
+$("#comfy-frame").addEventListener("load", () => {
+  const status = $("#comfy-status");
+  status.textContent = "connected";
+  status.className = "status ok";
+});
+
+function comfyPort() {
+  try {
+    return Number(new URL($("#comfy-url").value.trim()).port) || 8188;
+  } catch {
+    return 8188;
+  }
+}
+
+$("#comfy-reload").addEventListener("click", embedComfy);
+
+$("#comfy-start").addEventListener("click", async () => {
+  const status = $("#comfy-status");
+  const dir = $("#comfy-dir").value.trim();
+  const args = $("#comfy-args").value.trim();
+  const port = comfyPort();
+  try {
+    status.textContent = "starting ComfyUI…";
+    status.className = "status";
+    const msg = await invoke("start_comfyui", {
+      dir: dir || null,
+      port,
+      args: args || null,
+    });
+    status.textContent = msg + " — waiting for server…";
+    // Poll until the port accepts connections, then embed once (avoids
+    // hammering the iframe while ComfyUI is still booting).
+    let waited = 0;
+    const poll = async () => {
+      if (await invoke("comfyui_reachable", { port })) {
+        embedComfy();
+        return;
+      }
+      waited += 1500;
+      if (waited < 90000) setTimeout(poll, 1500);
+      else {
+        status.textContent = "server did not come up — check args/folder";
+        status.className = "status err";
+      }
+    };
+    setTimeout(poll, 1500);
+  } catch (err) {
+    status.textContent = String(err);
+    status.className = "status err";
+  }
+});
+
+$("#comfy-stop").addEventListener("click", async () => {
+  const status = $("#comfy-status");
+  try {
+    await invoke("stop_comfyui");
+    const frame = $("#comfy-frame");
+    frame.classList.add("hidden");
+    frame.src = "about:blank";
+    $("#comfy-placeholder").classList.remove("hidden");
+    comfyEmbedded = false;
+    status.textContent = "stopped";
+    status.className = "status";
+  } catch (err) {
+    status.textContent = String(err);
+    status.className = "status err";
+  }
+});
+
 $("#comfy-open").addEventListener("click", async () => {
   const status = $("#comfy-status");
   try {

@@ -13,17 +13,17 @@
     </header>
 
     <nav class="tabs" id="tabs">
-      <button data-tab="dashboard" class="active">Dashboard</button>
+      <button data-tab="comfyui" class="active">ComfyUI</button>
+      <button data-tab="dashboard">Dashboard</button>
       <button data-tab="credentials">Credentials</button>
       <button data-tab="profiles">Profiles</button>
       <button data-tab="run">Run Task</button>
       <button data-tab="history">History</button>
       <button data-tab="psd">PSD</button>
-      <button data-tab="comfyui">ComfyUI</button>
     </nav>
 
     <main>
-      <section id="dashboard" class="panel active">
+      <section id="dashboard" class="panel">
         <div class="row">
           <h2>Runtime</h2>
           <button id="refresh-dashboard">Refresh</button>
@@ -139,14 +139,26 @@
         </div>
       </section>
 
-      <section id="comfyui" class="panel">
-        <h2>ComfyUI</h2>
-        <p class="hint">Open the running ComfyUI web UI in your browser.</p>
-        <div class="row">
-          <input id="comfy-url" value="http://127.0.0.1:8188" style="flex:1" />
-          <button id="comfy-open" class="primary">Open</button>
+      <section id="comfyui" class="panel comfyui-panel active">
+        <div class="row comfy-bar">
+          <input id="comfy-url" value="http://127.0.0.1:8188" />
+          <button id="comfy-start" class="primary">Start ComfyUI</button>
+          <button id="comfy-stop">Stop</button>
+          <button id="comfy-reload">Reload</button>
+          <button id="comfy-open">Open in browser</button>
+          <span id="comfy-status" class="status"></span>
         </div>
-        <span id="comfy-status" class="status"></span>
+        <div class="row comfy-bar">
+          <input id="comfy-dir" placeholder="ComfyUI folder (blank = app working dir)" />
+          <input id="comfy-args" placeholder="extra args (e.g. --cpu --listen)" />
+        </div>
+        <div class="comfy-stage">
+          <iframe id="comfy-frame" class="comfy-frame hidden" title="ComfyUI"></iframe>
+          <div id="comfy-placeholder" class="comfy-placeholder">
+            <p>Embedding the running ComfyUI web UI.</p>
+            <p class="hint">Make sure ComfyUI is running at the URL above, then click <strong>Embed</strong> / <strong>Reload</strong>. The full node editor loads here inside the app.</p>
+          </div>
+        </div>
       </section>
     </main>
 

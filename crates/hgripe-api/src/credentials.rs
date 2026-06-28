@@ -219,13 +219,13 @@ fn validate_credential_provider(
         .filter(|value| !value.is_empty())
         .unwrap_or("openai_compatible");
 
-    if provider != "openai_compatible" && provider != "custom_http" {
+    if provider != "openai_compatible" && provider != "custom_http" && provider != "replicate" {
         push_issue(
             issues,
             "error",
             credential_ref,
             "unsupported_provider",
-            "credentials provider must be 'openai_compatible' or 'custom_http'",
+            "credentials provider must be 'openai_compatible', 'custom_http', or 'replicate'",
         );
     }
 }

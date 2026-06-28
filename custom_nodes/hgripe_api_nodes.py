@@ -1345,6 +1345,135 @@ class HGripeOpenAICompatibleVision:
         return (text, json.dumps(result, ensure_ascii=False, indent=2), status)
 
 
+class HGripeReplicateRun:
+    @classmethod
+    def INPUT_TYPES(cls):
+        return {
+            "required": {
+                "model": ("STRING", {"default": "owner/model-name"}),
+                "version": ("STRING", {"default": ""}),
+                "input_json": (
+                    "STRING",
+                    {"multiline": True, "default": '{"prompt": "a small robot"}'},
+                ),
+                "base_url": ("STRING", {"default": "https://api.replicate.com"}),
+                "profile_ref": ("STRING", {"default": ""}),
+                "credentials_ref": ("STRING", {"default": "replicate-main"}),
+                "auth_mode": (
+                    ["credentials_ref", "env_or_key", "no_auth"],
+                    {"default": "credentials_ref"},
+                ),
+                "api_key_env": ("STRING", {"default": "REPLICATE_API_TOKEN"}),
+                "api_key": ("STRING", {"default": ""}),
+                "extra_body_json": ("STRING", {"multiline": True, "default": "{}"}),
+                "download_outputs": (["enable", "disable"], {"default": "enable"}),
+                "output_extension": ("STRING", {"default": ""}),
+                "max_polls": ("INT", {"default": 120, "min": 1, "max": 10000, "step": 1}),
+                "poll_interval_ms": (
+                    "INT",
+                    {"default": 2000, "min": 0, "max": 3600000, "step": 100},
+                ),
+                "max_attempts": ("INT", {"default": 2, "min": 1, "max": 10, "step": 1}),
+                "timeout_ms": (
+                    "INT",
+                    {"default": 120000, "min": 1000, "max": 1200000, "step": 1000},
+                ),
+                "force_run_nonce": (
+                    "INT",
+                    {"default": 0, "min": 0, "max": 2147483647, "step": 1},
+                ),
+            }
+        }
+
+    RETURN_TYPES = ("STRING", "STRING", "STRING", "STRING")
+    RETURN_NAMES = ("output_path", "output_json", "result_json", "status")
+    FUNCTION = "run"
+    CATEGORY = "H-Gripe/API"
+
+    def run(
+        self,
+        model: str,
+        version: str,
+        input_json: str,
+        base_url: str,
+        profile_ref: str,
+        credentials_ref: str,
+        auth_mode: str,
+        api_key_env: str,
+        api_key: str,
+        extra_body_json: str,
+        download_outputs: str,
+        output_extension: str,
+        max_polls: int,
+        poll_interval_ms: int,
+        max_attempts: int,
+        timeout_ms: int,
+        force_run_nonce: int,
+    ):
+        model = model.strip()
+        version = version.strip()
+        if not model and not version:
+            raise ValueError("Replicate node requires model (owner/name) or version")
+
+        model_input = _parse_json_object(input_json, "input_json")
+        extra_body = _parse_json_object(extra_body_json, "extra_body_json")
+
+        params: dict[str, Any] = {
+            "base_url": base_url,
+            "input": model_input,
+            "extra_body": extra_body,
+            "download_outputs": download_outputs == "enable",
+            "max_polls": max_polls,
+            "poll_interval_ms": poll_interval_ms,
+        }
+        if model:
+            params["model"] = model
+        if version:
+            params["version"] = version
+        if profile_ref.strip():
+            params["profile_ref"] = profile_ref.strip()
+        if output_extension.strip():
+            params["output_extension"] = output_extension.strip()
+
+        task_credentials_ref = _apply_openai_auth(
+            params, auth_mode, credentials_ref, api_key_env, api_key
+        )
+
+        task = {
+            "id": f"comfy-replicate-{uuid.uuid4()}",
+            "provider": "replicate",
+            "operation": "run",
+            "inputs": {"force_run_nonce": force_run_nonce},
+            "params": params,
+            "credentials_ref": task_credentials_ref,
+            "output_type": "files",
+            "cache_policy": {"enabled": False, "ttl_seconds": None, "key": None},
+            "retry_policy": {
+                "max_attempts": max_attempts,
+                "backoff_ms": 500,
+                "timeout_ms": timeout_ms,
+            },
+        }
+
+        result = run_task(task)
+        _raise_if_failed(result, "H-Gripe Replicate Run")
+        status = str(result.get("status", "unknown"))
+        output_files = result.get("output_files") or []
+        output_path = ""
+        if output_files and isinstance(output_files[0], dict):
+            output_path = str(output_files[0].get("path") or "")
+        output_json = result.get("output_json") or {}
+        output_value = json.dumps(
+            output_json.get("output"), ensure_ascii=False, indent=2
+        )
+        return (
+            output_path,
+            output_value,
+            json.dumps(result, ensure_ascii=False, indent=2),
+            status,
+        )
+
+
 NODE_CLASS_MAPPINGS = {
     "HGripeCustomHttpApi": HGripeCustomHttpApi,
     "HGripeCustomHttpMultipartApi": HGripeCustomHttpMultipartApi,
@@ -1355,6 +1484,7 @@ NODE_CLASS_MAPPINGS = {
     "HGripeOpenAICompatibleAudioSpeech": HGripeOpenAICompatibleAudioSpeech,
     "HGripeOpenAICompatibleAudioText": HGripeOpenAICompatibleAudioText,
     "HGripeOpenAICompatibleVision": HGripeOpenAICompatibleVision,
+    "HGripeReplicateRun": HGripeReplicateRun,
 }
 
 NODE_DISPLAY_NAME_MAPPINGS = {
@@ -1367,4 +1497,5 @@ NODE_DISPLAY_NAME_MAPPINGS = {
     "HGripeOpenAICompatibleAudioSpeech": "H-Gripe OpenAI Compatible Audio Speech",
     "HGripeOpenAICompatibleAudioText": "H-Gripe OpenAI Compatible Audio Text",
     "HGripeOpenAICompatibleVision": "H-Gripe OpenAI Compatible Vision",
+    "HGripeReplicateRun": "H-Gripe Replicate Run",
 }

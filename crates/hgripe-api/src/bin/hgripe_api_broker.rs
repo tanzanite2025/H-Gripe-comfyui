@@ -1,6 +1,7 @@
 use hgripe_api::providers::custom_http::CustomHttpProvider;
 use hgripe_api::providers::mock::MockProvider;
 use hgripe_api::providers::openai_compatible::OpenAiCompatibleProvider;
+use hgripe_api::providers::replicate::ReplicateProvider;
 use hgripe_api::{record_task_failure, record_task_result, ApiBroker, ApiTask};
 use serde_json::json;
 use std::io::{self, Read};
@@ -31,6 +32,7 @@ async fn run() -> Result<(), String> {
     broker.register_provider(CustomHttpProvider::default());
     broker.register_provider(MockProvider);
     broker.register_provider(OpenAiCompatibleProvider::default());
+    broker.register_provider(ReplicateProvider::default());
 
     match broker.execute(task).await {
         Ok(result) => {

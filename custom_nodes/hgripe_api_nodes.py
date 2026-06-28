@@ -1474,7 +1474,177 @@ class HGripeReplicateRun:
         )
 
 
+class HGripeImageGenerate:
+    """Semantic image node: text-to-image and reference image-to-image.
+
+    The concrete backend (OpenAI-compatible API, Flux, a local GPU service, etc.)
+    is selected by ``profile_ref`` rather than by a per-vendor node. Provide a
+    ``reference_image`` to switch from ``image.generate`` to ``image.edit``.
+    """
+
+    @classmethod
+    def INPUT_TYPES(cls):
+        return {
+            "required": {
+                "prompt": ("STRING", {"multiline": True, "default": "A clean product photo"}),
+                "profile_ref": ("STRING", {"default": ""}),
+                "model": ("STRING", {"default": ""}),
+                "base_url": ("STRING", {"default": ""}),
+                "credentials_ref": ("STRING", {"default": "openai-main"}),
+                "auth_mode": (
+                    ["credentials_ref", "env_or_key", "no_auth"],
+                    {"default": "credentials_ref"},
+                ),
+                "api_key_env": ("STRING", {"default": "OPENAI_API_KEY"}),
+                "api_key": ("STRING", {"default": ""}),
+                "operation": (
+                    ["auto", "image.generate", "image.edit"],
+                    {"default": "auto"},
+                ),
+                "size": ("STRING", {"default": "1024x1024"}),
+                "n": ("INT", {"default": 1, "min": 1, "max": 8, "step": 1}),
+                "response_format": (
+                    ["provider_default", "b64_json", "url"],
+                    {"default": "provider_default"},
+                ),
+                "quality": (
+                    ["provider_default", "auto", "standard", "hd", "low", "medium", "high"],
+                    {"default": "provider_default"},
+                ),
+                "style": (
+                    ["provider_default", "vivid", "natural"],
+                    {"default": "provider_default"},
+                ),
+                "output_format": (
+                    ["provider_default", "png", "jpeg", "webp"],
+                    {"default": "provider_default"},
+                ),
+                "reference_image_format": (["png", "jpeg", "webp"], {"default": "png"}),
+                "reference_image_index": ("INT", {"default": 0, "min": 0, "max": 4095, "step": 1}),
+                "save_outputs": (["enable", "disable"], {"default": "enable"}),
+                "download_url_outputs": (["enable", "disable"], {"default": "enable"}),
+                "advanced_json": ("STRING", {"multiline": True, "default": "{}"}),
+                "max_attempts": ("INT", {"default": 2, "min": 1, "max": 10, "step": 1}),
+                "timeout_ms": (
+                    "INT",
+                    {"default": 180000, "min": 1000, "max": 1200000, "step": 1000},
+                ),
+                "force_run_nonce": (
+                    "INT",
+                    {"default": 0, "min": 0, "max": 2147483647, "step": 1},
+                ),
+            },
+            "optional": {
+                "reference_image": ("IMAGE",),
+                "mask": ("MASK",),
+            },
+        }
+
+    RETURN_TYPES = ("IMAGE", "STRING", "STRING")
+    RETURN_NAMES = ("image", "result_json", "status")
+    FUNCTION = "run"
+    CATEGORY = "H-Gripe/API"
+
+    def run(
+        self,
+        prompt: str,
+        profile_ref: str,
+        model: str,
+        base_url: str,
+        credentials_ref: str,
+        auth_mode: str,
+        api_key_env: str,
+        api_key: str,
+        operation: str,
+        size: str,
+        n: int,
+        response_format: str,
+        quality: str,
+        style: str,
+        output_format: str,
+        reference_image_format: str,
+        reference_image_index: int,
+        save_outputs: str,
+        download_url_outputs: str,
+        advanced_json: str,
+        max_attempts: int,
+        timeout_ms: int,
+        force_run_nonce: int,
+        reference_image=None,
+        mask=None,
+    ):
+        extra_body = _parse_json_object(advanced_json, "advanced_json")
+
+        if operation == "auto":
+            resolved_operation = "image.edit" if reference_image is not None else "image.generate"
+        else:
+            resolved_operation = operation
+        if resolved_operation == "image.edit" and reference_image is None:
+            raise ValueError("operation 'image.edit' requires a reference_image input")
+
+        params: dict[str, Any] = {
+            "base_url": base_url,
+            "n": n,
+            "extra_body": extra_body,
+            "save_outputs": save_outputs == "enable",
+            "download_url_outputs": download_url_outputs == "enable",
+        }
+        if model.strip():
+            params["model"] = model.strip()
+        if profile_ref.strip():
+            params["profile_ref"] = profile_ref.strip()
+
+        task_credentials_ref = _apply_openai_auth(
+            params, auth_mode, credentials_ref, api_key_env, api_key
+        )
+
+        if size.strip() and size.strip() != "provider_default":
+            params["size"] = size.strip()
+        if response_format != "provider_default":
+            params["response_format"] = response_format
+        if quality != "provider_default":
+            params["quality"] = quality
+        if style != "provider_default" and resolved_operation == "image.generate":
+            params["style"] = style
+        if output_format != "provider_default":
+            params["output_format"] = output_format
+
+        inputs: dict[str, Any] = {
+            "prompt": prompt,
+            "force_run_nonce": force_run_nonce,
+        }
+        if resolved_operation == "image.edit":
+            inputs["image_data_url"] = _tensor_image_to_data_url(
+                reference_image, reference_image_index, reference_image_format
+            )
+            if mask is not None:
+                inputs["mask_data_url"] = _mask_to_data_url(mask, reference_image_index)
+
+        task = {
+            "id": f"comfy-image-generate-{uuid.uuid4()}",
+            "provider": "openai_compatible",
+            "operation": resolved_operation,
+            "inputs": inputs,
+            "params": params,
+            "credentials_ref": task_credentials_ref,
+            "output_type": "image",
+            "cache_policy": {"enabled": False, "ttl_seconds": None, "key": None},
+            "retry_policy": {
+                "max_attempts": max_attempts,
+                "backoff_ms": 500,
+                "timeout_ms": timeout_ms,
+            },
+        }
+
+        result = run_task(task)
+        _raise_if_failed(result, "H-Gripe Image Generate")
+        status = str(result.get("status", "unknown"))
+        image = _images_to_tensor(result, timeout_ms)
+        return (image, json.dumps(result, ensure_ascii=False, indent=2), status)
+
+
 NODE_CLASS_MAPPINGS = {
+    "HGripeImageGenerate": HGripeImageGenerate,
     "HGripeCustomHttpApi": HGripeCustomHttpApi,
     "HGripeCustomHttpMultipartApi": HGripeCustomHttpMultipartApi,
     "HGripeCustomHttpAsyncJob": HGripeCustomHttpAsyncJob,
@@ -1488,6 +1658,7 @@ NODE_CLASS_MAPPINGS = {
 }
 
 NODE_DISPLAY_NAME_MAPPINGS = {
+    "HGripeImageGenerate": "H-Gripe Image Generate",
     "HGripeCustomHttpApi": "H-Gripe Custom HTTP API",
     "HGripeCustomHttpMultipartApi": "H-Gripe Custom HTTP Multipart API",
     "HGripeCustomHttpAsyncJob": "H-Gripe Custom HTTP Async Job",

@@ -140,6 +140,60 @@ Workflow examples can be found on the [Examples page](https://comfyanonymous.git
 
 # Installing
 
+## Windows Local Development
+
+Use the project virtual environment directly so packages do not accidentally install into the global Python interpreter.
+
+```powershell
+cd C:\Users\P16V\Desktop\Github\H-Gripe-comfyui
+
+py -3.10 -m venv .venv
+.\.venv\Scripts\python.exe -m pip install --upgrade pip
+```
+
+For the local NVIDIA RTX 2000 Ada 8GB setup, install the CUDA PyTorch build:
+
+```powershell
+.\.venv\Scripts\python.exe -m pip install torch torchvision torchaudio --index-url https://download.pytorch.org/whl/cu128
+```
+
+This repository may have an empty `requirements.txt` while H-Gripe is being split from upstream. Until a curated dependency file is committed, install the upstream ComfyUI dependencies into the virtual environment:
+
+```powershell
+Invoke-WebRequest https://raw.githubusercontent.com/comfyanonymous/ComfyUI/master/requirements.txt -OutFile requirements.upstream.txt
+.\.venv\Scripts\python.exe -m pip install -r requirements.upstream.txt
+```
+
+Verify CUDA:
+
+```powershell
+.\.venv\Scripts\python.exe -c "import torch; print(torch.__version__); print(torch.cuda.is_available()); print(torch.cuda.get_device_name(0) if torch.cuda.is_available() else 'NO CUDA')"
+```
+
+Port `8188` can be occupied by local proxy tools such as `verge-mihomo`. Use `8199` for local development:
+
+```powershell
+.\.venv\Scripts\python.exe main.py --listen 127.0.0.1 --port 8199 --preview-method auto --verbose INFO
+```
+
+Open:
+
+```text
+http://127.0.0.1:8199
+```
+
+For small local GPU models on an 8GB card, start with low VRAM mode:
+
+```powershell
+.\.venv\Scripts\python.exe main.py --listen 127.0.0.1 --port 8199 --lowvram --preview-method auto
+```
+
+For a quick startup check:
+
+```powershell
+.\.venv\Scripts\python.exe main.py --quick-test-for-ci --cpu --disable-all-custom-nodes --disable-api-nodes
+```
+
 ## Manual Install (Windows, Linux)
 
 Python 3.14 works but some custom nodes may have issues. The free threaded variant works but some dependencies will enable the GIL so it's not fully supported.
@@ -287,7 +341,13 @@ For models compatible with Iluvatar Extension for PyTorch. Here's a step-by-step
 
 # Running
 
-```python main.py```
+Recommended local development command:
+
+```powershell
+.\.venv\Scripts\python.exe main.py --listen 127.0.0.1 --port 8199 --preview-method auto --verbose INFO
+```
+
+Then open `http://127.0.0.1:8199`.
 
 ### For AMD cards not officially supported by ROCm
 

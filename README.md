@@ -80,6 +80,7 @@ user/hgripe/outputs
 `custom_http` supports multipart form fields and local file uploads for APIs that accept images, audio, video, PDFs, or dataset files.
 `custom_http async_job` can submit an async API job, poll a status endpoint, and download a final result URL into `output_files`.
 `custom_http` can use `credentials_ref` for `base_url`, bearer API keys, env-based API keys, and secret/non-secret headers, keeping them out of workflow JSON.
+`replicate run` creates a Replicate prediction (by `model` owner/name or `version`), polls until it succeeds or fails, and downloads each output URL into `output_files`, returning the raw prediction body through `output_json`. It accepts `credentials_ref`/`profile_ref` (provider `replicate`), `HGRIPE_REPLICATE_API_KEY`/`REPLICATE_API_TOKEN`, and `HGRIPE_REPLICATE_BASE_URL`.
 
 Useful environment overrides:
 
@@ -91,6 +92,8 @@ $env:HGRIPE_HISTORY_DISABLED="1"
 $env:HGRIPE_PROVIDER_PROFILES_FILE="C:\path\to\provider_profiles.json"
 $env:HGRIPE_CUSTOM_HTTP_BASE_URL="https://api.example.com"
 $env:HGRIPE_CUSTOM_HTTP_API_KEY="..."
+$env:HGRIPE_REPLICATE_BASE_URL="https://api.replicate.com"
+$env:HGRIPE_REPLICATE_API_KEY="..."
 ```
 
 Local verification:
@@ -113,6 +116,7 @@ cargo build -p hgripe-api --bins
 .\.venv\Scripts\python.exe python\bridge\openai_compatible_vision_node_example.py
 .\.venv\Scripts\python.exe python\bridge\openai_compatible_credentials_ref_example.py
 .\.venv\Scripts\python.exe python\bridge\openai_compatible_profile_example.py
+.\.venv\Scripts\python.exe python\bridge\replicate_run_node_example.py
 .\.venv\Scripts\python.exe python\bridge\history_tail_example.py
 .\.venv\Scripts\python.exe python\bridge\history_tail_example.py --provider openai_compatible --limit 10
 .\.venv\Scripts\python.exe python\bridge\history_tail_example.py --operation image.generate --has-output-files yes

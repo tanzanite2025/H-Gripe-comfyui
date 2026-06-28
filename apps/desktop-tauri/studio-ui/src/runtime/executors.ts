@@ -41,6 +41,9 @@ export const defaultExecutors: ExecutorRegistry = {
   // Pass-through relay: forwards whatever arrives on `in` to `out` unchanged.
   reroute: async (ctx) => ({ out: ctx.inputs.in ?? null }),
 
+  // Group container is purely organisational: no ports, no work at run time.
+  group: async () => ({}),
+
   generate: async (ctx) => {
     const prompt = (ctx.inputs.prompt as string | undefined) ?? "";
     const reference = ctx.inputs.reference as string | undefined;

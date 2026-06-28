@@ -17,6 +17,7 @@ import {
 import "@xyflow/react/dist/style.css";
 
 import { HgripeNode } from "./HgripeNode";
+import { GroupNode } from "./GroupNode";
 import { DND_NODE_KIND } from "./Palette";
 import { nodeSpec } from "../graph/nodeSpecs";
 import { arePortsCompatible } from "../graph/model";
@@ -34,6 +35,8 @@ interface FlowCanvasProps {
   onAddNode: (kind: string, position: { x: number; y: number }) => void;
   /** Called right before a new edge is created, so the host can snapshot. */
   onBeforeConnect?: () => void;
+  /** Called after a node finishes dragging, so the host can (re)assign groups. */
+  onNodeDragStop?: (node: Node) => void;
 }
 
 export function FlowCanvas({
@@ -45,9 +48,10 @@ export function FlowCanvas({
   onSelect,
   onAddNode,
   onBeforeConnect,
+  onNodeDragStop,
 }: FlowCanvasProps) {
   // Declared once so React does not re-create the map each render.
-  const nodeTypes = useMemo(() => ({ hgripe: HgripeNode }), []);
+  const nodeTypes = useMemo(() => ({ hgripe: HgripeNode, group: GroupNode }), []);
   const { screenToFlowPosition } = useReactFlow();
 
   const portType = useCallback(
@@ -108,6 +112,7 @@ export function FlowCanvas({
       onNodesChange={onNodesChange}
       onEdgesChange={onEdgesChange}
       onConnect={onConnect}
+      onNodeDragStop={(_, node) => onNodeDragStop?.(node)}
       isValidConnection={isValidConnection}
       onSelectionChange={({ nodes: sel }) => onSelect(sel[0]?.id ?? null)}
       onDragOver={onDragOver}

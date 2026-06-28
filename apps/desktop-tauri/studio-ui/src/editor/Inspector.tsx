@@ -22,6 +22,24 @@ export function Inspector({ node, onParamChange }: InspectorProps) {
   }
 
   const data = node.data as HgripeNodeData;
+
+  // Group container: no ports/params, just a rename field.
+  if (data.kind === "group") {
+    return (
+      <aside className="inspector">
+        <h2>Group</h2>
+        <p className="muted">A container frame. Drag nodes in/out; members move with it.</p>
+        <label className="field">
+          <span>Label</span>
+          <input
+            value={String(data.params.label ?? "")}
+            onChange={(e) => onParamChange(node.id, "label", e.target.value)}
+          />
+        </label>
+      </aside>
+    );
+  }
+
   const spec = nodeSpec(data.kind);
 
   return (

@@ -104,6 +104,9 @@ cargo build -p hgripe-api --bins
 .\target\debug\hgripe-api-config.exe profiles list
 .\target\debug\hgripe-api-config.exe profiles show <profile_ref>
 .\target\debug\hgripe-api-config.exe profiles validate
+.\target\debug\hgripe-api-config.exe credentials list
+.\target\debug\hgripe-api-config.exe credentials show <credential_ref>
+.\target\debug\hgripe-api-config.exe credentials validate
 .\target\debug\hgripe-api-history.exe list --limit 10
 .\target\debug\hgripe-api-history.exe show <task_id>
 .\target\debug\hgripe-api-history.exe rerun-task <task_id>
@@ -113,6 +116,8 @@ cargo build -p hgripe-api --bins
 ```
 
 `hgripe-api-history cleanup` defaults to dry-run. It only changes SQLite/JSONL history when `--apply` is provided. Output files are preserved unless `--delete-output-files` is also provided.
+
+`hgripe-api-config credentials show` redacts inline API keys and secret-like headers before printing JSON.
 
 ComfyUI is the AI creation engine for visual professionals who demand control over every model, every parameter, and every output. Its powerful and modular node graph interface empowers creatives to generate images, videos, 3D models, audio, and more...
 - ComfyUI natively supports the latest open-source state of the art models.

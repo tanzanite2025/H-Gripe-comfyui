@@ -8,7 +8,11 @@ pub mod provider;
 pub mod providers;
 
 pub use broker::ApiBroker;
-pub use credentials::{load_credential_ref, CredentialEntry};
+pub use credentials::{
+    credentials_file_path, get_redacted_credential_ref, list_credential_summaries,
+    load_credential_ref, load_credentials, validate_credentials, CredentialEntry,
+    CredentialSummary, CredentialValidationIssue, CredentialsValidation, RedactedCredentialEntry,
+};
 pub use history::{
     append_history_record, apply_history_cleanup, build_history_cleanup_plan, build_history_record,
     build_rerun_task_from_record, get_history_detail, get_history_record,

@@ -68,10 +68,93 @@ fn config_cli_lists_shows_and_validates_provider_profiles() {
     let _ = fs::remove_file(profiles_file);
 }
 
+#[test]
+fn config_cli_lists_shows_and_validates_credentials_redacted() {
+    let credentials_file = temp_credentials_path();
+    fs::write(
+        &credentials_file,
+        serde_json::to_string_pretty(&json!({
+            "profiles": {
+                "openai-main": {
+                    "provider": "openai_compatible",
+                    "base_url": "https://api.openai.com/v1",
+                    "api_key": "sk-do-not-leak",
+                    "headers": {
+                        "Authorization": "Bearer do-not-leak",
+                        "X-Org": "visible"
+                    }
+                }
+            }
+        }))
+        .unwrap(),
+    )
+    .expect("credentials file should write");
+
+    let list_output = Command::new(env!("CARGO_BIN_EXE_hgripe-api-config"))
+        .arg("credentials")
+        .arg("list")
+        .arg("--credentials-file")
+        .arg(&credentials_file)
+        .output()
+        .expect("config CLI credentials list should run");
+    assert!(list_output.status.success());
+    let list_text = String::from_utf8_lossy(&list_output.stdout);
+    let list_json: serde_json::Value =
+        serde_json::from_slice(&list_output.stdout).expect("list output should be JSON");
+    assert_eq!(list_json["credentials"][0]["credential_ref"], "openai-main");
+    assert_eq!(list_json["credentials"][0]["api_key_configured"], true);
+    assert!(!list_text.contains("sk-do-not-leak"));
+
+    let show_output = Command::new(env!("CARGO_BIN_EXE_hgripe-api-config"))
+        .arg("credentials")
+        .arg("show")
+        .arg("openai-main")
+        .arg("--credentials-file")
+        .arg(&credentials_file)
+        .output()
+        .expect("config CLI credentials show should run");
+    assert!(show_output.status.success());
+    let show_text = String::from_utf8_lossy(&show_output.stdout);
+    let show_json: serde_json::Value =
+        serde_json::from_slice(&show_output.stdout).expect("show output should be JSON");
+    assert_eq!(show_json["credential_ref"], "openai-main");
+    assert_eq!(show_json["credential"]["api_key"], "<redacted>");
+    assert_eq!(
+        show_json["credential"]["headers"]["Authorization"],
+        "<redacted>"
+    );
+    assert_eq!(show_json["credential"]["headers"]["X-Org"], "visible");
+    assert!(!show_text.contains("sk-do-not-leak"));
+    assert!(!show_text.contains("Bearer do-not-leak"));
+
+    let validate_output = Command::new(env!("CARGO_BIN_EXE_hgripe-api-config"))
+        .arg("credentials")
+        .arg("validate")
+        .arg("--credentials-file")
+        .arg(&credentials_file)
+        .output()
+        .expect("config CLI credentials validate should run");
+    assert!(validate_output.status.success());
+    let validate_json: serde_json::Value =
+        serde_json::from_slice(&validate_output.stdout).expect("validate output should be JSON");
+    assert_eq!(validate_json["validation"]["ok"], true);
+    assert_eq!(validate_json["validation"]["credential_count"], 1);
+
+    let _ = fs::remove_file(credentials_file);
+}
+
 fn temp_profiles_path() -> std::path::PathBuf {
     let nonce = SystemTime::now()
         .duration_since(UNIX_EPOCH)
         .expect("system time should be valid")
         .as_nanos();
     std::env::temp_dir().join(format!("hgripe-config-cli-profiles-test-{nonce}.json"))
+}
+
+fn temp_credentials_path() -> std::path::PathBuf {
+    let nonce = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .expect("system time should be valid")
+        .as_nanos();
+    std::env::temp_dir().join(format!("hgripe-config-cli-credentials-test-{nonce}.json"))
 }

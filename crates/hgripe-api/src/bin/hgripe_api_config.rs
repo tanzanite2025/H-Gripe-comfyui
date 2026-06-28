@@ -1,6 +1,7 @@
 use hgripe_api::{
-    get_provider_profile, list_provider_profile_summaries, provider_profiles_path,
-    validate_provider_profiles,
+    credentials_file_path, get_provider_profile, get_redacted_credential_ref,
+    list_credential_summaries, list_provider_profile_summaries, provider_profiles_path,
+    validate_credentials, validate_provider_profiles,
 };
 use serde::Serialize;
 use serde_json::json;
@@ -27,6 +28,7 @@ fn run() -> Result<(), String> {
     let group = args.remove(0);
     match group.as_str() {
         "profiles" => run_profiles(args),
+        "credentials" => run_credentials(args),
         _ => Err(format!(
             "unknown config group '{group}'. Run `hgripe-api-config --help`."
         )),
@@ -91,6 +93,64 @@ fn run_profiles_validate(args: Vec<String>) -> Result<(), String> {
     }))
 }
 
+fn run_credentials(mut args: Vec<String>) -> Result<(), String> {
+    if args.is_empty() || matches!(args[0].as_str(), "-h" | "--help") {
+        print_help();
+        return Ok(());
+    }
+
+    let command = args.remove(0);
+    match command.as_str() {
+        "list" => run_credentials_list(args),
+        "show" => run_credentials_show(args),
+        "validate" => run_credentials_validate(args),
+        _ => Err(format!(
+            "unknown credentials command '{command}'. Run `hgripe-api-config --help`."
+        )),
+    }
+}
+
+fn run_credentials_list(args: Vec<String>) -> Result<(), String> {
+    let credentials_file = parse_credentials_file_only(args)?;
+    let path = credentials_file_path(credentials_file.as_deref());
+    let credentials =
+        list_credential_summaries(credentials_file.as_deref()).map_err(|err| err.to_string())?;
+
+    print_json(&json!({
+        "credentials_file": path,
+        "credentials": credentials,
+    }))
+}
+
+fn run_credentials_show(args: Vec<String>) -> Result<(), String> {
+    let ParsedCredentialCommand {
+        credentials_file,
+        credential_ref,
+    } = parse_credential_command(args)?;
+    let path = credentials_file_path(credentials_file.as_deref());
+    let credential = get_redacted_credential_ref(&credential_ref, credentials_file.as_deref())
+        .map_err(|err| err.to_string())?
+        .ok_or_else(|| format!("credential ref '{credential_ref}' was not found"))?;
+
+    print_json(&json!({
+        "credentials_file": path,
+        "credential_ref": credential_ref,
+        "credential": credential,
+    }))
+}
+
+fn run_credentials_validate(args: Vec<String>) -> Result<(), String> {
+    let credentials_file = parse_credentials_file_only(args)?;
+    let path = credentials_file_path(credentials_file.as_deref());
+    let validation =
+        validate_credentials(credentials_file.as_deref()).map_err(|err| err.to_string())?;
+
+    print_json(&json!({
+        "credentials_file": path,
+        "validation": validation,
+    }))
+}
+
 #[derive(Debug, Clone)]
 struct ParsedProfileCommand {
     profiles_file: Option<String>,
@@ -142,6 +202,57 @@ fn parse_profiles_file_only(args: Vec<String>) -> Result<Option<String>, String>
     Ok(profiles_file)
 }
 
+#[derive(Debug, Clone)]
+struct ParsedCredentialCommand {
+    credentials_file: Option<String>,
+    credential_ref: String,
+}
+
+fn parse_credential_command(args: Vec<String>) -> Result<ParsedCredentialCommand, String> {
+    let mut credentials_file = None;
+    let mut credential_ref = None;
+    let mut index = 0;
+
+    while index < args.len() {
+        match args[index].as_str() {
+            "--credentials-file" => {
+                credentials_file = Some(option_value(&args, index)?);
+                index += 2;
+            }
+            value if value.starts_with('-') => return Err(format!("unknown option '{value}'")),
+            value => {
+                if credential_ref.is_some() {
+                    return Err(format!("unexpected extra argument '{value}'"));
+                }
+                credential_ref = Some(value.to_string());
+                index += 1;
+            }
+        }
+    }
+
+    Ok(ParsedCredentialCommand {
+        credentials_file,
+        credential_ref: credential_ref.ok_or_else(|| "missing credential_ref".to_string())?,
+    })
+}
+
+fn parse_credentials_file_only(args: Vec<String>) -> Result<Option<String>, String> {
+    let mut credentials_file = None;
+    let mut index = 0;
+
+    while index < args.len() {
+        match args[index].as_str() {
+            "--credentials-file" => {
+                credentials_file = Some(option_value(&args, index)?);
+                index += 2;
+            }
+            value => return Err(format!("unknown option or argument '{value}'")),
+        }
+    }
+
+    Ok(credentials_file)
+}
+
 fn option_value(args: &[String], index: usize) -> Result<String, String> {
     args.get(index + 1)
         .filter(|value| !value.starts_with('-'))
@@ -162,6 +273,9 @@ fn print_help() {
   hgripe-api-config profiles list [--profiles-file PATH]
   hgripe-api-config profiles show <profile_ref> [--profiles-file PATH]
   hgripe-api-config profiles validate [--profiles-file PATH]
+  hgripe-api-config credentials list [--credentials-file PATH]
+  hgripe-api-config credentials show <credential_ref> [--credentials-file PATH]
+  hgripe-api-config credentials validate [--credentials-file PATH]
 "#
     );
 }

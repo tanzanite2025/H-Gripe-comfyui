@@ -7,12 +7,17 @@ from pathlib import Path
 
 import torch
 from PIL import Image
-from psd_tools import PSDImage
-from psd_tools.api.layers import PixelLayer
 
 ROOT_DIR = Path(__file__).resolve().parents[2]
 if str(ROOT_DIR) not in sys.path:
     sys.path.insert(0, str(ROOT_DIR))
+# Use the vendored psd_tools (third_party/) like the nodes do.
+_VENDOR_DIR = ROOT_DIR / "third_party"
+if _VENDOR_DIR.is_dir() and str(_VENDOR_DIR) not in sys.path:
+    sys.path.insert(0, str(_VENDOR_DIR))
+
+from psd_tools import PSDImage
+from psd_tools.api.layers import PixelLayer
 
 from custom_nodes.hgripe_psd_nodes import (
     HGripePsdCompose,

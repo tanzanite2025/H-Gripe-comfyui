@@ -399,10 +399,17 @@ fn open_path(path: String) -> Result<(), String> {
     open_external(trimmed)
 }
 
+// NOTE: Long term this should move to the official `tauri-plugin-opener`
+// (Tauri 2) so opening files/URLs goes through a vetted, permissioned path
+// rather than spawning a child process here. Until then we invoke the OS
+// handler directly without going through `cmd /C start`, whose shell re-parses
+// metacharacters (`&`, `^`, `%`, …) in the target. `rundll32 url.dll,
+// FileProtocolHandler` opens http(s) URLs, files, and folders via the default
+// handler and receives the target as a single, un-reparsed argv element.
 #[cfg(target_os = "windows")]
 fn open_external(url: &str) -> Result<(), String> {
-    std::process::Command::new("cmd")
-        .args(["/C", "start", "", url])
+    std::process::Command::new("rundll32.exe")
+        .args(["url.dll,FileProtocolHandler", url])
         .spawn()
         .map(|_| ())
         .map_err(|err| err.to_string())

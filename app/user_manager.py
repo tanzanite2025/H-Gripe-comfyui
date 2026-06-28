@@ -1,7 +1,4 @@
-import json
 import os
-import re
-import uuid
 import glob
 import shutil
 import logging
@@ -14,6 +11,8 @@ from .app_settings import AppSettings
 from typing import TypedDict
 
 default_user = "default"
+local_workspace_name = "Local Workspace"
+account_creation_disabled = "Account creation is disabled; H-Gripe uses a single local workspace."
 
 
 class FileInfo(TypedDict):
@@ -39,34 +38,17 @@ class UserManager():
         self.settings = AppSettings(self)
         if not os.path.exists(user_directory):
             os.makedirs(user_directory, exist_ok=True)
-            if not args.multi_user:
-                logging.warning("****** User settings have been changed to be stored on the server instead of browser storage. ******")
-                logging.warning("****** For multi-user setups add the --multi-user CLI argument to enable multiple user profiles. ******")
 
-        if args.multi_user:
-            if os.path.isfile(self.get_users_file()):
-                with open(self.get_users_file()) as f:
-                    self.users = json.load(f)
-            else:
-                self.users = {}
-        else:
-            self.users = {"default": "default"}
+        if getattr(args, "multi_user", False):
+            logging.warning("--multi-user is ignored in H-Gripe; using the single local workspace.")
+
+        self.users = {default_user: local_workspace_name}
 
     def get_users_file(self):
         return os.path.join(folder_paths.get_user_directory(), "users.json")
 
     def get_request_user_id(self, request):
-        user = "default"
-        if args.multi_user and "comfy-user" in request.headers:
-            user = request.headers["comfy-user"]
-            # Block System Users (use same error message to prevent probing)
-            if user.startswith(folder_paths.SYSTEM_USER_PREFIX):
-                raise KeyError("Unknown user: " + user)
-
-        if user not in self.users:
-            raise KeyError("Unknown user: " + user)
-
-        return user
+        return default_user
 
     def get_request_user_filepath(self, request, file, type="userdata", create_dir=True):
         if type == "userdata":
@@ -102,49 +84,25 @@ class UserManager():
         return path
 
     def add_user(self, name):
-        name = name.strip()
-        if not name:
-            raise ValueError("username not provided")
-        if name.startswith(folder_paths.SYSTEM_USER_PREFIX):
-            raise ValueError("System User prefix not allowed")
-        user_id = re.sub("[^a-zA-Z0-9-_]+", '-', name)
-        if user_id.startswith(folder_paths.SYSTEM_USER_PREFIX):
-            raise ValueError("System User prefix not allowed")
-        user_id = user_id + "_" + str(uuid.uuid4())
-
-        self.users[user_id] = name
-
-        with open(self.get_users_file(), "w") as f:
-            json.dump(self.users, f)
-
-        return user_id
+        raise ValueError(account_creation_disabled)
 
     def add_routes(self, routes):
         self.settings.add_routes(routes)
 
         @routes.get("/users")
         async def get_users(request):
-            if args.multi_user:
-                return web.json_response({"storage": "server", "users": self.users})
-            else:
-                user_dir = self.get_request_user_filepath(request, None, create_dir=False)
-                return web.json_response({
-                    "storage": "server",
-                    "migrated": os.path.exists(user_dir)
-                })
+            user_dir = self.get_request_user_filepath(request, None, create_dir=False)
+            return web.json_response({
+                "storage": "server",
+                "mode": "local_workspace",
+                "default": default_user,
+                "users": self.users,
+                "migrated": bool(user_dir and os.path.exists(user_dir)),
+            })
 
         @routes.post("/users")
         async def post_users(request):
-            body = await request.json()
-            username = body["username"]
-            if username in self.users.values():
-                return web.json_response({"error": "Duplicate username."}, status=400)
-
-            try:
-                user_id = self.add_user(username)
-            except ValueError as e:
-                return web.json_response({"error": str(e)}, status=400)
-            return web.json_response(user_id)
+            return web.json_response({"error": account_creation_disabled}, status=400)
 
         @routes.get("/userdata")
         async def listuserdata(request):

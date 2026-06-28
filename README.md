@@ -15,6 +15,7 @@ H-Gripe ComfyUI is an independent source branch based on ComfyUI. The project ke
 - Introduce Rust for API broker infrastructure, provider adapters, retry/caching, task state, and later Tauri desktop integration.
 - Start with small, reversible Rust broker modules called from Python, keeping the existing ComfyUI path available while the migration is in progress.
 - Avoid changing user-facing workflow behavior while replacing internal execution pieces step by step.
+- Use a single local workspace instead of cloud accounts or multi-user profiles. Workflow files, credentials, profiles, history, and outputs remain local-first.
 
 ## Rust Migration Targets
 
@@ -41,6 +42,10 @@ The current prototype adds a Rust API broker plus thin Python/ComfyUI bridge nod
 - ComfyUI nodes: `custom_nodes/hgripe_api_nodes.py`
 - Credential ref example: `docs/credentials.example.json`
 - Provider profile example: `docs/provider_profiles.example.json`
+
+## Local Workspace Mode
+
+H-Gripe is local-first and personal-use oriented. The legacy ComfyUI `/users` endpoint is kept only as a compatibility route, but account creation is disabled and the `comfy-user` request header is ignored. Userdata, settings, workflows, credentials, profiles, history, and generated outputs are stored under the single local workspace rooted at `user/default` and `user/hgripe`.
 
 Credential refs keep API keys out of workflow files. `openai_compatible` and `custom_http` tasks/nodes can use them. The default local credential file is ignored by git:
 

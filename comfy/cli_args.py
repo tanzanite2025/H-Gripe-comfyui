@@ -184,7 +184,7 @@ parser.add_argument("--disable-all-custom-nodes", action="store_true", help="Dis
 parser.add_argument("--whitelist-custom-nodes", type=str, nargs='+', default=[], help="Specify custom node folders to load even when --disable-all-custom-nodes is enabled.")
 parser.add_argument("--disable-api-nodes", action="store_true", help="Disable loading all api nodes. Also prevents the frontend from communicating with the internet.")
 
-parser.add_argument("--multi-user", action="store_true", help="Enables per-user storage.")
+parser.add_argument("--multi-user", action="store_true", help="Deprecated no-op in H-Gripe. A single local workspace is always used.")
 
 parser.add_argument("--verbose", default='INFO', const='DEBUG', nargs="?", choices=['DEBUG', 'INFO', 'WARNING', 'ERROR', 'CRITICAL'], help='Set the logging level')
 parser.add_argument("--log-stdout", action="store_true", help="Send normal process output to stdout instead of stderr (default).")

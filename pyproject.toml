@@ -25,6 +25,9 @@ lint.select = [
 
 lint.ignore = ["E501", "E722", "E731", "E712", "E402", "E741"]
 
+# Bridge scripts under python/bridge are runnable examples that print results.
+lint.per-file-ignores = { "python/bridge/*" = ["T201"] }
+
 exclude = ["*.ipynb", "**/generated/*.pyi"]
 
 [tool.pylint]

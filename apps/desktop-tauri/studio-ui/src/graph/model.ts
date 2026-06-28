@@ -45,6 +45,11 @@ export interface GraphNode {
   params: Record<string, unknown>;
   /** Media references keyed by port/field id. */
   media?: Record<string, MediaRef>;
+  /** Id of the containing group frame, when this node is grouped. */
+  parentId?: string;
+  /** Frame size — only meaningful for `group` container nodes. */
+  width?: number;
+  height?: number;
 }
 
 export interface GraphEdge {

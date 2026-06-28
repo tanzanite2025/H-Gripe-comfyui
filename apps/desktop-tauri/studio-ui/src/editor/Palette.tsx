@@ -41,6 +41,21 @@ export function Palette({ onAdd }: PaletteProps) {
           ))}
         </div>
       ))}
+      <div className="palette-group">
+        <h3>Containers</h3>
+        <button
+          className="palette-item"
+          draggable
+          onDragStart={(e) => {
+            e.dataTransfer.setData(DND_NODE_KIND, "group");
+            e.dataTransfer.effectAllowed = "move";
+          }}
+          onClick={() => onAdd("group")}
+          title="A resizable frame. Drag nodes inside to group them; members move together."
+        >
+          Group
+        </button>
+      </div>
       <p className="muted palette-hint">Drag onto the canvas, or click to add.</p>
     </aside>
   );

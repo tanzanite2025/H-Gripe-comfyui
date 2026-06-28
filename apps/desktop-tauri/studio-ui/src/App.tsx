@@ -15,6 +15,14 @@ import { Palette } from "./editor/Palette";
 import { NodeEditingContext } from "./editor/editingContext";
 import { useHistory } from "./editor/useHistory";
 import { buildPaste, clipFromSelection, type Clip } from "./editor/clipboard";
+import {
+  detachChildren,
+  findContainingGroup,
+  isGroupNode,
+  makeGroupNode,
+  orderNodes,
+  reparentNode,
+} from "./editor/grouping";
 import type { HgripeNodeData } from "./editor/HgripeNode";
 import { fromWorkflowGraph, toWorkflowGraph } from "./editor/adapter";
 import { clearPersistedGraph, loadPersistedGraph, persistGraph } from "./editor/persist";
@@ -119,9 +127,34 @@ function Studio() {
       const id = newNodeId(kind);
       // Click-to-add cascades nodes so they do not stack exactly.
       const pos = position ?? { x: 80 + (idSeq.current % 6) * 36, y: 80 + (idSeq.current % 6) * 36 };
+      if (kind === "group") {
+        // Group frames go to the front of the array (painted behind, parents
+        // before children).
+        setNodes((ns) => orderNodes([makeGroupNode(id, pos.x, pos.y), ...ns]));
+        return;
+      }
       setNodes((ns) => ns.concat(makeNode(id, kind, pos.x, pos.y)));
     },
     [setNodes, takeSnapshot, newNodeId],
+  );
+
+  // After a drag, (re)assign the node to whatever group frame now contains it,
+  // or detach it when dropped outside every group. Groups themselves are never
+  // reparented. The pre-drag snapshot (taken on drag start) covers the undo.
+  const handleNodeDragStop = useCallback(
+    (dragged: Node) => {
+      if (isGroupNode(dragged)) return;
+      setNodes((ns) => {
+        const merged = ns.map((n) =>
+          n.id === dragged.id
+            ? { ...n, position: dragged.position, parentId: dragged.parentId, measured: dragged.measured ?? n.measured }
+            : n,
+        );
+        const groupId = findContainingGroup(dragged.id, merged);
+        return reparentNode(merged, dragged.id, groupId);
+      });
+    },
+    [setNodes],
   );
 
   // Snapshot before structural changes that React Flow applies itself
@@ -130,6 +163,15 @@ function Studio() {
     (changes) => {
       if (changes.some((c) => c.type === "remove")) {
         takeSnapshot();
+        // When a group frame is deleted, free its members (back to absolute
+        // coords) so they survive instead of becoming orphaned children.
+        const removed = new Set(changes.filter((c) => c.type === "remove").map((c) => c.id));
+        const removedGroups = new Set(
+          nodes.filter((n) => removed.has(n.id) && isGroupNode(n)).map((n) => n.id),
+        );
+        if (removedGroups.size > 0) {
+          setNodes((ns) => detachChildren(ns, removedGroups));
+        }
       } else if (changes.some((c) => c.type === "position" && c.dragging) && !dragging.current) {
         dragging.current = true;
         takeSnapshot();
@@ -139,7 +181,7 @@ function Studio() {
       }
       onNodesChange(changes);
     },
-    [onNodesChange, takeSnapshot],
+    [onNodesChange, takeSnapshot, nodes, setNodes],
   );
 
   const handleEdgesChange = useCallback<OnEdgesChange>(
@@ -162,7 +204,7 @@ function Studio() {
     if (!clip || clip.nodes.length === 0) return;
     takeSnapshot();
     const pasted = buildPaste(clip, { x: 40, y: 40 }, newNodeId);
-    setNodes((ns) => ns.map((n): Node => ({ ...n, selected: false })).concat(pasted.nodes));
+    setNodes((ns) => orderNodes(ns.map((n): Node => ({ ...n, selected: false })).concat(pasted.nodes)));
     setEdges((es) => es.map((e): Edge => ({ ...e, selected: false })).concat(pasted.edges));
     setSelectedId(pasted.nodes[0]?.id ?? null);
     setMessage(`pasted ${pasted.nodes.length} node${pasted.nodes.length > 1 ? "s" : ""}`);
@@ -395,6 +437,7 @@ function Studio() {
               onSelect={setSelectedId}
               onAddNode={addNode}
               onBeforeConnect={takeSnapshot}
+              onNodeDragStop={handleNodeDragStop}
             />
           </div>
           <Inspector node={selectedNode} onParamChange={onParamChange} />

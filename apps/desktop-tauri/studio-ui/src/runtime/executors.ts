@@ -38,6 +38,9 @@ export const defaultExecutors: ExecutorRegistry = {
 
   number: async (ctx) => ({ value: Number(ctx.params.value ?? 0) }),
 
+  // Pass-through relay: forwards whatever arrives on `in` to `out` unchanged.
+  reroute: async (ctx) => ({ out: ctx.inputs.in ?? null }),
+
   generate: async (ctx) => {
     const prompt = (ctx.inputs.prompt as string | undefined) ?? "";
     const reference = ctx.inputs.reference as string | undefined;

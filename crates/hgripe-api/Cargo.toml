@@ -11,6 +11,10 @@ path = "src/bin/hgripe_api_broker.rs"
 name = "hgripe-api-history"
 path = "src/bin/hgripe_api_history.rs"
 
+[[bin]]
+name = "hgripe-api-config"
+path = "src/bin/hgripe_api_config.rs"
+
 [dependencies]
 async-trait = "0.1"
 base64 = "0.22"

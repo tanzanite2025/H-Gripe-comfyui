@@ -22,5 +22,9 @@ pub use model::{
     RetryPolicy,
 };
 pub use outputs::{output_dir_from_env, write_task_output_bytes};
-pub use profiles::{load_provider_profile, ProviderProfile};
+pub use profiles::{
+    get_provider_profile, list_provider_profile_summaries, load_provider_profile,
+    load_provider_profiles, provider_profiles_path, validate_provider_profiles, ProviderProfile,
+    ProviderProfileSummary, ProviderProfileValidationIssue, ProviderProfilesValidation,
+};
 pub use provider::{Provider, ProviderRegistry};

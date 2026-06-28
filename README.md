@@ -101,6 +101,9 @@ cargo build -p hgripe-api --bins
 .\.venv\Scripts\python.exe python\bridge\history_tail_example.py --provider openai_compatible --limit 10
 .\.venv\Scripts\python.exe python\bridge\history_tail_example.py --operation image.generate --has-output-files yes
 .\.venv\Scripts\python.exe python\bridge\history_rerun_example.py <task_id>
+.\target\debug\hgripe-api-config.exe profiles list
+.\target\debug\hgripe-api-config.exe profiles show <profile_ref>
+.\target\debug\hgripe-api-config.exe profiles validate
 .\target\debug\hgripe-api-history.exe list --limit 10
 .\target\debug\hgripe-api-history.exe show <task_id>
 .\target\debug\hgripe-api-history.exe rerun-task <task_id>

@@ -211,6 +211,7 @@ Tauri 不只是一个壳，应该承担桌面体验：
 - 已实现 `custom_http` provider，支持通用 HTTP GET/POST、headers、query、JSON body、timeout、重试和 2xx/4xx/5xx 状态分流。
 - 已实现 `openai_compatible` provider，支持 `chat.completions`、`text.generate`、`vision.analyze`、`image.generate`，可配置 `base_url`、API key/env、额外请求体和本地/代理 OpenAI-compatible 服务。
 - 已新增 provider profile 第一版：OpenAI-compatible 任务可用 `profile_ref` 引用本地 `user/hgripe/provider_profiles.json`，把 `base_url`、`model`、默认参数、headers、`extra_body`、`credentials_ref` 或 `no_auth` 从 workflow/node 参数里抽出来。
+- 已新增 provider profile 管理入口：`hgripe-api-config profiles list/show/validate` 可列出、查看、校验本地 profile，后续可直接接入 Tauri 设置页。
 - 已新增 CLI 桥：`hgripe-api-broker`，支持 stdin 输入 `ApiTask` JSON，stdout 输出 `ApiResult` JSON。
 - 已新增 Python 桥接示例：`python/bridge/hgripe_api_bridge.py`。
 - 已新增本地 HTTP 验证示例：`python/bridge/custom_http_example.py`，不依赖外部网络服务。
@@ -243,6 +244,9 @@ cargo build -p hgripe-api --bins
 .\.venv\Scripts\python.exe python\bridge\history_tail_example.py --provider openai_compatible --limit 10
 .\.venv\Scripts\python.exe python\bridge\history_tail_example.py --operation image.generate --has-output-files yes
 .\.venv\Scripts\python.exe python\bridge\history_rerun_example.py <task_id>
+.\target\debug\hgripe-api-config.exe profiles list
+.\target\debug\hgripe-api-config.exe profiles show <profile_ref>
+.\target\debug\hgripe-api-config.exe profiles validate
 .\target\debug\hgripe-api-history.exe list --limit 10
 .\target\debug\hgripe-api-history.exe show <task_id>
 .\target\debug\hgripe-api-history.exe rerun-task <task_id>

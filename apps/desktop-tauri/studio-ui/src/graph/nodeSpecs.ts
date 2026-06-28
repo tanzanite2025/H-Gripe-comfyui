@@ -38,7 +38,7 @@ export interface NodeSpec {
   /** Short description shown in the inspector / node palette. */
   description: string;
   /** Palette grouping. */
-  category: "input" | "generate" | "output" | "utility";
+  category: "input" | "generate" | "control" | "output" | "utility";
   inputs: PortSpec[];
   outputs: PortSpec[];
   params: ParamSpec[];
@@ -186,6 +186,51 @@ export const NODE_SPECS: Record<string, NodeSpec> = {
       },
     ],
   },
+  if: {
+    kind: "if",
+    title: "If",
+    description:
+      "Conditional gate: forwards `value` to the `true` or `false` output based on a condition. The branch that is not taken is pruned (its downstream nodes are skipped).",
+    category: "control",
+    inputs: [port("value", "value", "any"), port("cond", "cond", "any")],
+    outputs: [port("true", "true", "any"), port("false", "false", "any")],
+    params: [
+      {
+        key: "cond",
+        label: "Condition (when no input wired)",
+        control: "select",
+        options: ["true", "false"],
+        defaultValue: "true",
+        hint: "If a `cond` input is connected, its truthiness wins.",
+        inline: true,
+      },
+    ],
+  },
+  switch: {
+    kind: "switch",
+    title: "Switch",
+    description:
+      "Multi-way router: forwards `value` to the output matching `index` (0/1/2), else to `default`. Unselected branches are pruned (skipped).",
+    category: "control",
+    inputs: [port("value", "value", "any"), port("index", "index", "number")],
+    outputs: [
+      port("0", "0", "any"),
+      port("1", "1", "any"),
+      port("2", "2", "any"),
+      port("default", "default", "any"),
+    ],
+    params: [
+      {
+        key: "index",
+        label: "Index (when no input wired)",
+        control: "number",
+        defaultValue: 0,
+        min: 0,
+        step: 1,
+        inline: true,
+      },
+    ],
+  },
   reroute: {
     kind: "reroute",
     title: "Reroute",
@@ -284,7 +329,7 @@ export function defaultParams(kind: string): Record<string, unknown> {
 
 /** Node kinds grouped by palette category, in display order. */
 export function paletteGroups(): { category: NodeSpec["category"]; specs: NodeSpec[] }[] {
-  const order: NodeSpec["category"][] = ["input", "generate", "utility", "output"];
+  const order: NodeSpec["category"][] = ["input", "generate", "control", "utility", "output"];
   return order.map((category) => ({
     category,
     specs: Object.values(NODE_SPECS).filter((s) => s.category === category),

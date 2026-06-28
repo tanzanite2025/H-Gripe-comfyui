@@ -105,3 +105,101 @@ describe("runGraph", () => {
     expect(statuses.get("preview-1")).toBe("succeeded");
   });
 });
+
+describe("conditional branch execution", () => {
+  // prompt -> if -> { true: prev-true, false: prev-false }
+  const branched = (cond: "true" | "false") =>
+    graph({
+      nodes: [
+        { id: "p", kind: "prompt", position: { x: 0, y: 0 }, params: { text: "hi" } },
+        { id: "if", kind: "if", position: { x: 0, y: 0 }, params: { cond } },
+        { id: "t", kind: "preview", position: { x: 0, y: 0 }, params: {} },
+        { id: "f", kind: "preview", position: { x: 0, y: 0 }, params: {} },
+      ],
+      edges: [
+        { id: "e0", source: "p", sourcePort: "text", target: "if", targetPort: "value" },
+        { id: "e1", source: "if", sourcePort: "true", target: "t", targetPort: "image" },
+        { id: "e2", source: "if", sourcePort: "false", target: "f", targetPort: "image" },
+      ],
+    });
+
+  // Tracks which nodes actually executed.
+  const tracker = (ran: string[]): ExecutorRegistry => ({
+    prompt: async (c) => ({ text: String(c.params.text ?? "") }),
+    preview: async (c) => {
+      ran.push(c.nodeId);
+      return { image: c.inputs.image ?? null };
+    },
+    if: async (c) => {
+      const active = String(c.params.cond ?? "true") === "true";
+      return active ? { true: c.inputs.value } : { false: c.inputs.value };
+    },
+  });
+
+  it("runs only the taken branch and skips the other", async () => {
+    const ran: string[] = [];
+    const { statuses, outputs } = await runGraph(branched("true"), tracker(ran));
+    expect(ran).toEqual(["t"]);
+    expect(statuses.get("t")).toBe("succeeded");
+    expect(statuses.get("f")).toBe("skipped");
+    expect(outputs.has("f")).toBe(false);
+  });
+
+  it("prunes the other branch when the condition flips", async () => {
+    const ran: string[] = [];
+    const { statuses } = await runGraph(branched("false"), tracker(ran));
+    expect(ran).toEqual(["f"]);
+    expect(statuses.get("t")).toBe("skipped");
+    expect(statuses.get("f")).toBe("succeeded");
+  });
+
+  it("propagates skipping transitively down a pruned branch", async () => {
+    const g = graph({
+      nodes: [
+        { id: "p", kind: "prompt", position: { x: 0, y: 0 }, params: { text: "hi" } },
+        { id: "if", kind: "if", position: { x: 0, y: 0 }, params: { cond: "true" } },
+        { id: "r", kind: "reroute", position: { x: 0, y: 0 }, params: {} },
+        { id: "f", kind: "preview", position: { x: 0, y: 0 }, params: {} },
+      ],
+      edges: [
+        { id: "e0", source: "p", sourcePort: "text", target: "if", targetPort: "value" },
+        { id: "e1", source: "if", sourcePort: "false", target: "r", targetPort: "in" },
+        { id: "e2", source: "r", sourcePort: "out", target: "f", targetPort: "image" },
+      ],
+    });
+    const ran: string[] = [];
+    const reg: ExecutorRegistry = {
+      ...tracker(ran),
+      reroute: async (c) => {
+        ran.push(c.nodeId);
+        return { out: c.inputs.in ?? null };
+      },
+    };
+    const { statuses } = await runGraph(g, reg);
+    expect(ran).toEqual([]);
+    expect(statuses.get("r")).toBe("skipped");
+    expect(statuses.get("f")).toBe("skipped");
+  });
+
+  it("keeps a merge node alive when at least one incoming branch survives", async () => {
+    // if -> { true: merge, false: merge }: only one port fires, but the merge
+    // has one live incoming edge, so it must still run.
+    const g = graph({
+      nodes: [
+        { id: "p", kind: "prompt", position: { x: 0, y: 0 }, params: { text: "hi" } },
+        { id: "if", kind: "if", position: { x: 0, y: 0 }, params: { cond: "true" } },
+        { id: "m", kind: "preview", position: { x: 0, y: 0 }, params: {} },
+      ],
+      edges: [
+        { id: "e0", source: "p", sourcePort: "text", target: "if", targetPort: "value" },
+        { id: "e1", source: "if", sourcePort: "true", target: "m", targetPort: "image" },
+        { id: "e2", source: "if", sourcePort: "false", target: "m", targetPort: "image" },
+      ],
+    });
+    const ran: string[] = [];
+    const { statuses, outputs } = await runGraph(g, tracker(ran));
+    expect(ran).toEqual(["m"]);
+    expect(statuses.get("m")).toBe("succeeded");
+    expect(outputs.get("m")).toEqual({ image: "hi" });
+  });
+});

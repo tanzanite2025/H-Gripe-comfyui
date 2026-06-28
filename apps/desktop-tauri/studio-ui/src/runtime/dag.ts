@@ -11,7 +11,16 @@
 import { arePortsCompatible, type GraphEdge, type WorkflowGraph } from "../graph/model";
 import { nodeSpec } from "../graph/nodeSpecs";
 
-export type NodeStatus = "idle" | "queued" | "running" | "succeeded" | "failed" | "cached";
+export type NodeStatus =
+  | "idle"
+  | "queued"
+  | "running"
+  | "succeeded"
+  | "failed"
+  | "cached"
+  // Pruned by control flow: it sits on a branch that was not taken, so it is
+  // intentionally not executed.
+  | "skipped";
 
 export interface NodeExecutionContext {
   nodeId: string;
@@ -205,12 +214,33 @@ export async function runGraph(
   };
   for (const n of graph.nodes) setStatus(n.id, "queued");
 
+  // Nodes pruned by control flow (a branch that was not taken). Pruning
+  // propagates downstream: a node is pruned iff it has incoming edges and every
+  // one of them is "dead".
+  const pruned = new Set<string>();
+  // An edge is dead when its source was pruned, or the source ran but did not
+  // emit a value on `sourcePort` (how control nodes signal a non-taken branch —
+  // they only emit on the selected output port). Merge points stay alive as
+  // long as at least one incoming edge delivers a value.
+  const isDeadEdge = (edge: GraphEdge): boolean => {
+    if (pruned.has(edge.source)) return true;
+    const upstream = outputs.get(edge.source);
+    return !upstream || !(edge.sourcePort in upstream);
+  };
+
   for (const level of topoLevels(graph)) {
     await Promise.all(
       level.map(async (id) => {
+        const edges = incoming.get(id) ?? [];
+        if (edges.length > 0 && edges.every(isDeadEdge)) {
+          pruned.add(id);
+          setStatus(id, "skipped");
+          return;
+        }
+
         const node = byId.get(id)!;
         const inputs: Record<string, unknown> = {};
-        for (const edge of incoming.get(id) ?? []) {
+        for (const edge of edges) {
           const upstream = outputs.get(edge.source);
           if (upstream && edge.sourcePort in upstream) {
             inputs[edge.targetPort] = upstream[edge.sourcePort];

@@ -80,3 +80,41 @@ describe("save sink", () => {
     expect(out).toEqual({ image: "/out/x.png", template: "/t.psd", filename: "fox.png" });
   });
 });
+
+describe("psdExport sink", () => {
+  // Outside Tauri, composePsd returns a mocked succeeded result built from the
+  // request, so we can assert how the executor mapped node params to paths.
+  it("composes the image into the template and returns export paths", async () => {
+    const out = await defaultExecutors.psdExport(
+      ctx(
+        "psdExport",
+        { filename: "poster", output_dir: "/out", smart_object_mode: "replace_content" },
+        { image: "/gen/x.png", template: "/t.psd" },
+      ),
+    );
+    expect(out).toEqual({
+      psdPath: "/out/poster.psd",
+      previewPath: "/out/poster_preview.png",
+      metadataPath: "/out/poster_metadata.json",
+      placeholderKind: "smartobject",
+      smartObjectMode: "replace_content",
+    });
+  });
+
+  it("falls back to the configured output dir when none is set", async () => {
+    const out = (await defaultExecutors.psdExport(
+      ctx("psdExport", { filename: "final" }, { image: "/gen/x.png", template: "/t.psd" }),
+    )) as { psdPath: string };
+    // getOutputDir's browser mock resolves to /mock/outputs.
+    expect(out.psdPath).toBe("/mock/outputs/final.psd");
+  });
+
+  it("requires both an image and a template input", async () => {
+    await expect(
+      defaultExecutors.psdExport(ctx("psdExport", {}, { template: "/t.psd" })),
+    ).rejects.toThrow(/image input/);
+    await expect(
+      defaultExecutors.psdExport(ctx("psdExport", {}, { image: "/gen/x.png" })),
+    ).rejects.toThrow(/template input/);
+  });
+});

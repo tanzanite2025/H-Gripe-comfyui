@@ -168,3 +168,73 @@ export async function listPsdOutputs(dir: string): Promise<PsdOutput[]> {
   }
   return (await invoke("list_psd_outputs", { dir })) as PsdOutput[];
 }
+
+// --- PSD compose / export ---------------------------------------------------
+// Wraps the Rust `compose_psd` command, which shells out to the torch-free
+// `compose_psd_cli.py` helper to write the generated image into a PSD
+// template's placeholder (true smart-object content replacement when possible)
+// and export `<filename>.psd` + `_preview.png` + `_metadata.json`.
+
+export interface ComposePsdRequest {
+  /** Path to the `.psd` template. */
+  template: string;
+  /** Path to the generated image to place into the placeholder. */
+  image: string;
+  /** Directory the exported files are written to. */
+  outputDir: string;
+  /** Base name for the exported triplet (default `final`). */
+  filename?: string;
+  /** JSON: `{"name": "<layer>"}` or `{left,top,width,height}`. */
+  placeholder?: string;
+  fitMode?: "contain" | "cover" | "stretch";
+  zOrder?: "above_background" | "placeholder" | "top";
+  smartObjectMode?: "disable" | "replace_content";
+  hidePlaceholder?: "enable" | "disable";
+  /** JSON object merged into the exported metadata. */
+  metadata?: string;
+  savePreview?: boolean;
+}
+
+// Fields are snake_case to match the Rust `ComposePsdResult` serialization.
+export interface ComposePsdResult {
+  status: string;
+  psd_path: string;
+  /** Empty string when preview generation was disabled. */
+  preview_path: string;
+  metadata_path: string;
+  placeholder_kind: string | null;
+  smart_object_mode: string;
+}
+
+/**
+ * Compose + export a PSD via the backend (`compose_psd`). Outside Tauri there is
+ * no Python/psd-tools pipeline, so this returns a mocked succeeded result so the
+ * editor stays runnable in browser dev.
+ */
+export async function composePsd(req: ComposePsdRequest): Promise<ComposePsdResult> {
+  const invoke = tauriInvoke();
+  if (!invoke) {
+    const base = `${req.outputDir}/${req.filename ?? "final"}`;
+    return {
+      status: "succeeded",
+      psd_path: `${base}.psd`,
+      preview_path: req.savePreview === false ? "" : `${base}_preview.png`,
+      metadata_path: `${base}_metadata.json`,
+      placeholder_kind: req.smartObjectMode === "replace_content" ? "smartobject" : "pixel",
+      smart_object_mode: req.smartObjectMode ?? "disable",
+    };
+  }
+  return (await invoke("compose_psd", {
+    template: req.template,
+    image: req.image,
+    outputDir: req.outputDir,
+    filename: req.filename ?? null,
+    placeholder: req.placeholder ?? null,
+    fitMode: req.fitMode ?? null,
+    zOrder: req.zOrder ?? null,
+    smartObjectMode: req.smartObjectMode ?? null,
+    hidePlaceholder: req.hidePlaceholder ?? null,
+    metadata: req.metadata ?? null,
+    savePreview: req.savePreview ?? null,
+  })) as ComposePsdResult;
+}

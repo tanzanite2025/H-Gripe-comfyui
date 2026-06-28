@@ -70,6 +70,37 @@ describe("reroute", () => {
   });
 });
 
+describe("if gate", () => {
+  it("emits value only on the selected branch (param fallback)", async () => {
+    expect(await defaultExecutors.if(ctx("if", { cond: "true" }, { value: "x" }))).toEqual({ true: "x" });
+    expect(await defaultExecutors.if(ctx("if", { cond: "false" }, { value: "x" }))).toEqual({ false: "x" });
+  });
+
+  it("prefers the wired cond input (truthiness) over the param", async () => {
+    expect(await defaultExecutors.if(ctx("if", { cond: "true" }, { value: "x", cond: 0 }))).toEqual({
+      false: "x",
+    });
+    expect(await defaultExecutors.if(ctx("if", { cond: "false" }, { value: "x", cond: 1 }))).toEqual({
+      true: "x",
+    });
+  });
+});
+
+describe("switch router", () => {
+  it("routes to the port matching index, else default", async () => {
+    expect(await defaultExecutors.switch(ctx("switch", { index: 1 }, { value: "v" }))).toEqual({ "1": "v" });
+    expect(await defaultExecutors.switch(ctx("switch", { index: 9 }, { value: "v" }))).toEqual({
+      default: "v",
+    });
+  });
+
+  it("prefers the wired index input over the param", async () => {
+    expect(await defaultExecutors.switch(ctx("switch", { index: 0 }, { value: "v", index: 2 }))).toEqual({
+      "2": "v",
+    });
+  });
+});
+
 describe("generate", () => {
   // Outside Tauri, runTaskJson echoes the task back as output_json.task, so we
   // can assert how the executor composed the broker task.

@@ -44,6 +44,24 @@ export const defaultExecutors: ExecutorRegistry = {
   // Group container is purely organisational: no ports, no work at run time.
   group: async () => ({}),
 
+  // Conditional gate. Emits `value` on exactly one output port; the other port
+  // gets nothing, which prunes that branch (its subtree is skipped). The wired
+  // `cond` input (truthiness) wins over the param fallback.
+  if: async (ctx) => {
+    const active =
+      "cond" in ctx.inputs ? !!ctx.inputs.cond : String(ctx.params.cond ?? "true") === "true";
+    const value = ctx.inputs.value ?? null;
+    return active ? { true: value } : { false: value };
+  },
+
+  // Multi-way router. Emits `value` on the port matching `index` (0/1/2), else
+  // on `default`; all other ports stay empty so their branches are pruned.
+  switch: async (ctx) => {
+    const idx = "index" in ctx.inputs ? Number(ctx.inputs.index) : Number(ctx.params.index ?? 0);
+    const port = idx === 0 ? "0" : idx === 1 ? "1" : idx === 2 ? "2" : "default";
+    return { [port]: ctx.inputs.value ?? null };
+  },
+
   generate: async (ctx) => {
     const prompt = (ctx.inputs.prompt as string | undefined) ?? "";
     const reference = ctx.inputs.reference as string | undefined;

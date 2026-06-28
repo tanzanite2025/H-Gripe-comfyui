@@ -23,7 +23,14 @@ contents of this directory with a newer release and re-run the PSD example.
 Changes we make on top of the upstream 1.17.2 source are listed here so they can
 be re-applied when upgrading:
 
-- (none yet — initial import is pristine 1.17.2)
+- **Smart-object content replacement** (`api/smart_object.py`, `api/layers.py`):
+  - `SmartObject.replace_contents(data, filetype=None)` — swaps the embedded
+    bytes of a `kind == 'data'` smart object in place (UUID/transform/warp kept).
+  - `SmartObjectLayer.replace_with_image(image, compression=RLE)` — encodes a PIL
+    image as PNG into the embedded source *and* refreshes the layer's cached
+    raster (preserving the SO tagged blocks), then calls `PSDImage._update_record`
+    so the new pixels serialize on `save`. Used by `H-Gripe PSD Compose`'s
+    `smart_object_mode="replace_content"`.
 
 ## Notes
 

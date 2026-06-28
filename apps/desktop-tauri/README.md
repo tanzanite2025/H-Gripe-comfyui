@@ -35,12 +35,23 @@ it is a high-level canvas, not the final main UI. The app opens on
   `ApiResult`.
 - **History** – list / view / rerun / clean up recorded tasks (SQLite history).
 - **PSD** – browse PSD exports (preview / metadata / smart-object markers).
+- **Node Editor** – H-Gripe's own visual workflow canvas (the `studio-ui`
+  React Flow sub-app), embedded as an iframe. This is the in-house production
+  node graph (renderer-agnostic graph model + typed ports + DAG runtime); the
+  **Advanced Canvas** below stays as the ComfyUI escape hatch. See
+  [`studio-ui/`](studio-ui/) for the sub-app. The build is served at
+  `dist/studio/` and loaded lazily on first open.
 - **Advanced Canvas** – start/stop a local ComfyUI server and embed its full
   web UI in an `<iframe>` inside the app (it also offers an "Open in browser"
   escape hatch). This replaces the earlier "open in the system browser" flow.
 
-The frontend is a dependency-free static page (`dist/`) using Tauri's global
-API (`window.__TAURI__`); the Rust backend lives in `src-tauri/`.
+The shell frontend is a dependency-free static page (`dist/`) using Tauri's
+global API (`window.__TAURI__`); the Rust backend lives in `src-tauri/`. The
+**Node Editor** is the one exception: it is a Vite + React + TypeScript sub-app
+in [`studio-ui/`](studio-ui/) whose build output is served at `dist/studio/`
+(gitignored). Its Tauri bridge reaches IPC via the parent window, so the
+embedded editor can call backend commands (e.g. `run_task_json`,
+`generate_thumbnail`).
 
 > **Security TODO (before release):** `tauri.conf.json` currently sets
 > `app.security.csp` to `null`, which disables CSP for development. Before
@@ -58,11 +69,17 @@ API (`window.__TAURI__`); the Rust backend lives in `src-tauri/`.
 ## Build & run
 
 ```sh
+# Build the Node Editor sub-app once (and after changing studio-ui).
+# A plain `cargo run` does NOT build it; the Node Editor tab shows a hint
+# until this has run. The Tauri CLI runs this automatically (before* hooks).
+npm --prefix apps/desktop-tauri/studio-ui ci
+npm --prefix apps/desktop-tauri/studio-ui run build   # -> apps/desktop-tauri/dist/studio
+
 # from the repository root
 cargo run -p hgripe-desktop          # debug run
 cargo build -p hgripe-desktop --release
 
-# or, with the Tauri CLI (npm i -g @tauri-apps/cli)
+# or, with the Tauri CLI (npm i -g @tauri-apps/cli) — builds studio-ui for you
 cd apps/desktop-tauri
 tauri build
 ```

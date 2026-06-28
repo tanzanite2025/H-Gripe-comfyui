@@ -79,7 +79,7 @@ export default function App() {
         const imagePath = (out?.image as string | null) ?? null;
         if (imagePath) {
           const thumb = await generateThumbnail({ path: imagePath, size: 256 });
-          patchNode(node.id, { imagePath, thumbnail: thumb.thumbnailPath });
+          patchNode(node.id, { imagePath, thumbnail: thumb.data_url || null });
         } else {
           patchNode(node.id, { imagePath: null, thumbnail: null });
         }

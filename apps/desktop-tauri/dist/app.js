@@ -25,6 +25,7 @@ $$("#tabs button").forEach((btn) => {
     $(`#${btn.dataset.tab}`).classList.add("active");
     if (btn.dataset.tab === "comfyui") ensureComfyEmbedded();
     if (btn.dataset.tab === "studio") ensureStudioProfiles();
+    if (btn.dataset.tab === "node-editor") ensureNodeEditorEmbedded();
   });
 });
 
@@ -354,6 +355,39 @@ $("#psd-use-output").addEventListener("click", async () => {
     toast(String(err), "err");
   }
 });
+
+// ---- node editor (studio-ui React Flow sub-app) ----
+// Lazily mount the studio-ui build (served at studio/index.html under the same
+// Tauri origin) on first open. Its Tauri bridge reaches IPC via the parent
+// window, so the embedded editor can call run_task_json / generate_thumbnail.
+let nodeEditorEmbedded = false;
+
+async function ensureNodeEditorEmbedded() {
+  if (nodeEditorEmbedded) return;
+  const frame = $("#studio-frame");
+  const placeholder = $("#studio-placeholder");
+  // The editor build (studio/) is produced by `npm run build` in studio-ui.
+  // A plain `cargo run` does not build it, so check first and show a hint
+  // instead of a broken iframe when the build is missing.
+  try {
+    const res = await fetch("studio/index.html", { method: "GET" });
+    if (!res.ok) throw new Error(String(res.status));
+  } catch {
+    placeholder.innerHTML =
+      "<p>Node Editor build not found</p>" +
+      '<p class="hint">Build it once with ' +
+      "<code>npm --prefix apps/desktop-tauri/studio-ui ci &amp;&amp; " +
+      "npm --prefix apps/desktop-tauri/studio-ui run build</code>, then reopen this tab. " +
+      "(The Tauri CLI does this automatically; a plain <code>cargo run</code> does not.)</p>";
+    return;
+  }
+  frame.addEventListener("load", () => {
+    placeholder.classList.add("hidden");
+    frame.classList.remove("hidden");
+  });
+  frame.src = "studio/index.html";
+  nodeEditorEmbedded = true;
+}
 
 // ---- comfyui ----
 let comfyEmbedded = false;

@@ -216,6 +216,55 @@ async fn custom_http_uses_credentials_ref_for_base_url_and_auth_headers() {
 }
 
 #[tokio::test]
+async fn custom_http_uses_provider_profile_defaults() {
+    let (absolute_url, request_rx) = spawn_once_json_server_with_request(
+        "HTTP/1.1 200 OK",
+        r#"{"ok":true,"profile":true}"#,
+        Some("local-profile-request"),
+    )
+    .await;
+    let base_url = absolute_url.trim_end_matches("/multipart").to_string();
+    let credentials_file = write_temp_credentials_file(&base_url);
+    let profiles_file = write_temp_profiles_file();
+
+    let mut broker = ApiBroker::new();
+    broker.register_provider(CustomHttpProvider::default());
+
+    let mut task = ApiTask::new("custom_http", "request");
+    task.params
+        .insert("profile_ref".into(), json!("local-custom-profile"));
+    task.params.insert(
+        "credentials_file".into(),
+        json!(credentials_file.to_string_lossy().to_string()),
+    );
+    task.params.insert(
+        "profiles_file".into(),
+        json!(profiles_file.to_string_lossy().to_string()),
+    );
+
+    let result = broker
+        .execute(task)
+        .await
+        .expect("profile HTTP task should run");
+    let request = request_rx.await.expect("server should capture request");
+    let _ = fs::remove_file(credentials_file);
+    let _ = fs::remove_file(profiles_file);
+
+    assert_eq!(result.status, ApiStatus::Succeeded);
+    assert_eq!(
+        result.provider_request_id.as_deref(),
+        Some("local-profile-request")
+    );
+    assert_eq!(result.output_json.unwrap()["body"]["profile"], json!(true));
+    assert!(request.contains("GET /profile HTTP/1.1"));
+    assert!(request
+        .to_lowercase()
+        .contains("authorization: bearer credential-token"));
+    assert!(request.contains("x-credential-test: yes"));
+    assert!(request.contains("x-profile-test: yes"));
+}
+
+#[tokio::test]
 async fn custom_http_async_job_polls_and_downloads_result() {
     let video_body = b"fake mp4 bytes from async job";
     let base_url = spawn_async_job_server(video_body).await;
@@ -570,6 +619,29 @@ fn write_temp_credentials_file(base_url: &str) -> std::path::PathBuf {
     });
     fs::write(&path, serde_json::to_string_pretty(&document).unwrap())
         .expect("credentials fixture should be written");
+    path
+}
+
+fn write_temp_profiles_file() -> std::path::PathBuf {
+    let path = std::env::temp_dir().join(format!(
+        "hgripe-custom-http-profiles-{}.json",
+        temp_suffix()
+    ));
+    let document = json!({
+        "local-custom-profile": {
+            "provider": "custom_http",
+            "credentials_ref": "local-custom-http",
+            "params": {
+                "method": "GET",
+                "url": "/profile",
+                "headers": {
+                    "X-Profile-Test": "yes"
+                }
+            }
+        }
+    });
+    fs::write(&path, serde_json::to_string_pretty(&document).unwrap())
+        .expect("profiles fixture should be written");
     path
 }
 

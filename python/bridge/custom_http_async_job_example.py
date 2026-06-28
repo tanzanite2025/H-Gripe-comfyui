@@ -82,6 +82,7 @@ try:
     output_path, result_json, status = node.run(
         url=f"{base_url}/submit",
         method="POST",
+        profile_ref="",
         credentials_ref="",
         auth_mode="no_auth",
         api_key_env="",

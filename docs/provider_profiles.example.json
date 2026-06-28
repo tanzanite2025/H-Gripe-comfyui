@@ -18,6 +18,28 @@
       "params": {
         "temperature": 0.2
       }
+    },
+    "custom-http-video-job": {
+      "provider": "custom_http",
+      "credentials_ref": "custom-http-main",
+      "params": {
+        "method": "POST",
+        "url": "/v1/video/jobs",
+        "poll_url": "/v1/video/jobs/{job_id}",
+        "job_id_path": "id",
+        "status_path": "status",
+        "success_values": [
+          "succeeded",
+          "completed"
+        ],
+        "failure_values": [
+          "failed",
+          "error"
+        ],
+        "download_result": true,
+        "download_url_path": "result.video_url",
+        "output_extension": "mp4"
+      }
     }
   }
 }

@@ -1,6 +1,7 @@
 use crate::credentials::{load_credential_ref, CredentialEntry};
 use crate::model::{ApiErrorInfo, ApiResult, ApiStatus, ApiTask, OutputFile};
 use crate::outputs::write_task_output_bytes;
+use crate::profiles::{load_provider_profile, ProviderProfile};
 use crate::provider::{BrokerError, BrokerResult, Provider};
 use async_trait::async_trait;
 use reqwest::header::CONTENT_TYPE;
@@ -49,9 +50,10 @@ impl Provider for CustomHttpProvider {
     }
 
     async fn execute(&self, task: &ApiTask) -> BrokerResult<ApiResult> {
+        let task = apply_provider_profile(task)?;
         match task.operation.as_str() {
-            "async_job" | "http.async_job" => self.execute_async_job(task).await,
-            _ => self.execute_request(task).await,
+            "async_job" | "http.async_job" => self.execute_async_job(&task).await,
+            _ => self.execute_request(&task).await,
         }
     }
 }
@@ -541,6 +543,124 @@ fn value_u64(task: &ApiTask, key: &str) -> Option<u64> {
 
 fn credentials_file(task: &ApiTask) -> Option<&str> {
     value_str(task, "credentials_file")
+}
+
+fn profiles_file(task: &ApiTask) -> Option<&str> {
+    value_str(task, "profiles_file")
+}
+
+fn profile_ref(task: &ApiTask) -> Option<&str> {
+    value_str(task, "profile_ref").or_else(|| value_str(task, "provider_profile_ref"))
+}
+
+fn apply_provider_profile(task: &ApiTask) -> BrokerResult<ApiTask> {
+    let Some(profile_ref) = profile_ref(task)
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+    else {
+        return Ok(task.clone());
+    };
+
+    let profile = load_provider_profile(profile_ref, profiles_file(task))?.ok_or_else(|| {
+        BrokerError::Provider(format!("provider profile '{profile_ref}' was not found"))
+    })?;
+
+    if let Some(provider) = profile.provider.as_deref() {
+        let provider = provider.trim();
+        if !provider.is_empty() && provider != task.provider {
+            return Err(BrokerError::Provider(format!(
+                "provider profile '{profile_ref}' is for provider '{provider}', not '{}'",
+                task.provider
+            )));
+        }
+    }
+
+    Ok(merge_provider_profile(task, &profile))
+}
+
+fn merge_provider_profile(task: &ApiTask, profile: &ProviderProfile) -> ApiTask {
+    let mut merged = task.clone();
+    let task_params = task.params.clone();
+    merged.params = BTreeMap::new();
+
+    if let Some(params) = &profile.params {
+        for (key, value) in params {
+            insert_effective_param(&mut merged.params, key, value.clone());
+        }
+    }
+
+    insert_optional_string(&mut merged.params, "base_url", profile.base_url.as_deref());
+    insert_optional_string(&mut merged.params, "url", profile.path.as_deref());
+    insert_optional_string(
+        &mut merged.params,
+        "api_key_env",
+        profile.api_key_env.as_deref(),
+    );
+    if let Some(no_auth) = profile.no_auth {
+        merged.params.insert("no_auth".to_string(), json!(no_auth));
+    }
+    if let Some(headers) = &profile.headers {
+        merge_task_param(&mut merged.params, "headers".to_string(), json!(headers));
+    }
+
+    for (key, value) in task_params {
+        merge_task_param(&mut merged.params, key, value);
+    }
+
+    if task
+        .credentials_ref
+        .as_deref()
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .is_none()
+    {
+        merged.credentials_ref = profile
+            .credentials_ref
+            .as_deref()
+            .map(str::trim)
+            .filter(|value| !value.is_empty())
+            .map(str::to_string);
+    }
+
+    merged
+}
+
+fn insert_optional_string(params: &mut BTreeMap<String, Value>, key: &str, value: Option<&str>) {
+    if let Some(value) = value.map(str::trim).filter(|value| !value.is_empty()) {
+        params.insert(key.to_string(), json!(value));
+    }
+}
+
+fn insert_effective_param(params: &mut BTreeMap<String, Value>, key: &str, value: Value) {
+    if !value_is_blank_string(&value) {
+        params.insert(key.to_string(), value);
+    }
+}
+
+fn merge_task_param(params: &mut BTreeMap<String, Value>, key: String, value: Value) {
+    if value_is_blank_string(&value) && params.contains_key(&key) {
+        return;
+    }
+
+    if key == "headers" || key.ends_with("_headers") || key == "query" || key.ends_with("_query") {
+        if let (Some(existing), Some(incoming)) = (
+            params.get_mut(&key).and_then(Value::as_object_mut),
+            value.as_object(),
+        ) {
+            for (item_key, item_value) in incoming {
+                if !value_is_blank_string(item_value) {
+                    existing.insert(item_key.clone(), item_value.clone());
+                }
+            }
+            return;
+        }
+    }
+
+    params.insert(key, value);
+}
+
+fn value_is_blank_string(value: &Value) -> bool {
+    value.as_str().map(str::trim).is_some_and(str::is_empty)
 }
 
 fn resolve_credentials(task: &ApiTask) -> BrokerResult<Option<CredentialEntry>> {

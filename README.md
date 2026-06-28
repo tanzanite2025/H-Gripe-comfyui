@@ -50,13 +50,13 @@ user/hgripe/credentials.json
 
 You can also point to another file with `HGRIPE_CREDENTIALS_FILE`.
 
-Provider profiles keep non-secret provider defaults out of workflow files. The default local profile file is ignored by git:
+Provider profiles keep non-secret provider defaults out of workflow files. `openai_compatible` and `custom_http` tasks/nodes can use them. The default local profile file is ignored by git:
 
 ```text
 user/hgripe/provider_profiles.json
 ```
 
-Profiles can define defaults such as `base_url`, `model`, `credentials_ref`, `no_auth`, headers, `params`, and `extra_body`. Use `profile_ref` on OpenAI-compatible tasks/nodes to load one. You can also point to another file with `HGRIPE_PROVIDER_PROFILES_FILE` or task param `profiles_file`.
+Profiles can define defaults such as `base_url`, `model`, `credentials_ref`, `no_auth`, headers, `params`, and `extra_body`. Use `profile_ref` on OpenAI-compatible and Custom HTTP tasks/nodes to load one. You can also point to another file with `HGRIPE_PROVIDER_PROFILES_FILE` or task param `profiles_file`.
 
 Task history is recorded locally as JSONL and indexed into SQLite for UI/query use:
 
@@ -102,6 +102,7 @@ cargo build -p hgripe-api --bins
 .\.venv\Scripts\python.exe python\bridge\custom_http_example.py
 .\.venv\Scripts\python.exe python\bridge\custom_http_binary_output_example.py
 .\.venv\Scripts\python.exe python\bridge\custom_http_credentials_ref_example.py
+.\.venv\Scripts\python.exe python\bridge\custom_http_profile_example.py
 .\.venv\Scripts\python.exe python\bridge\custom_http_multipart_example.py
 .\.venv\Scripts\python.exe python\bridge\custom_http_async_job_example.py
 .\.venv\Scripts\python.exe python\bridge\openai_compatible_text_example.py

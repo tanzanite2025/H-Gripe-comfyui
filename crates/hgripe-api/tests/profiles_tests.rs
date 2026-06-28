@@ -109,6 +109,40 @@ fn provider_profiles_validate_reports_errors_and_warnings() {
 }
 
 #[test]
+fn provider_profiles_validate_accepts_custom_http_without_model() {
+    let path = temp_profiles_path();
+    write_profiles_file(
+        &path,
+        json!({
+            "custom-http": {
+                "provider": "custom_http",
+                "credentials_ref": "custom-http-main",
+                "params": {
+                    "method": "POST",
+                    "url": "/jobs"
+                }
+            }
+        }),
+    );
+
+    let validation = validate_provider_profiles(Some(path.to_str().unwrap()))
+        .expect("profile validation should run");
+
+    assert_eq!(validation.profile_count, 1);
+    assert!(validation.ok);
+    assert!(!validation
+        .issues
+        .iter()
+        .any(|issue| issue.code == "unsupported_provider"));
+    assert!(!validation
+        .issues
+        .iter()
+        .any(|issue| issue.code == "model_not_configured"));
+
+    let _ = fs::remove_file(path);
+}
+
+#[test]
 fn provider_profiles_get_profile_by_ref() {
     let path = temp_profiles_path();
     write_profiles_file(
@@ -254,6 +288,65 @@ fn provider_profiles_resolve_reports_missing_credentials_ref() {
         .issues
         .iter()
         .any(|issue| issue.code == "missing_credentials_ref"));
+
+    let _ = fs::remove_file(profiles_path);
+    let _ = fs::remove_file(credentials_path);
+}
+
+#[test]
+fn provider_profiles_resolve_custom_http_credentials() {
+    let profiles_path = temp_profiles_path();
+    let credentials_path = temp_credentials_path();
+    write_profiles_file(
+        &profiles_path,
+        json!({
+            "custom-http": {
+                "provider": "custom_http",
+                "credentials_ref": "custom-http-main",
+                "params": {
+                    "method": "POST",
+                    "url": "/jobs"
+                }
+            }
+        }),
+    );
+    write_credentials_file(
+        &credentials_path,
+        json!({
+            "custom-http-main": {
+                "provider": "custom_http",
+                "base_url": "https://api.example.test",
+                "api_key": "do-not-leak",
+                "headers": {
+                    "X-Team": "visible"
+                }
+            }
+        }),
+    );
+
+    let resolved = resolve_provider_profile(
+        "custom-http",
+        Some(profiles_path.to_str().unwrap()),
+        Some(credentials_path.to_str().unwrap()),
+    )
+    .expect("custom HTTP profile should resolve");
+
+    assert!(resolved.ok);
+    assert_eq!(resolved.provider, "custom_http");
+    assert_eq!(resolved.credentials_ref_status, "found");
+    assert_eq!(
+        resolved.base_url.as_deref(),
+        Some("https://api.example.test")
+    );
+    assert_eq!(
+        resolved.base_url_source.as_deref(),
+        Some("credentials.base_url")
+    );
+    assert_eq!(resolved.auth_source, "credentials.api_key");
+    assert_eq!(resolved.params["url"], json!("/jobs"));
+
+    let encoded = serde_json::to_string(&resolved).expect("resolved profile should encode");
+    assert!(!encoded.contains("do-not-leak"));
 
     let _ = fs::remove_file(profiles_path);
     let _ = fs::remove_file(credentials_path);

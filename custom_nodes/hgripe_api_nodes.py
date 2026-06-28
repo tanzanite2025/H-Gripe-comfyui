@@ -191,6 +191,7 @@ class HGripeCustomHttpApi:
             "required": {
                 "url": ("STRING", {"default": "http://127.0.0.1:8199/"}),
                 "method": (["GET", "POST", "PUT", "PATCH", "DELETE"], {"default": "GET"}),
+                "profile_ref": ("STRING", {"default": ""}),
                 "credentials_ref": ("STRING", {"default": "custom-http-main"}),
                 "auth_mode": (
                     ["credentials_ref", "env_or_key", "no_auth"],
@@ -224,6 +225,7 @@ class HGripeCustomHttpApi:
         self,
         url: str,
         method: str,
+        profile_ref: str,
         credentials_ref: str,
         auth_mode: str,
         api_key_env: str,
@@ -248,6 +250,8 @@ class HGripeCustomHttpApi:
             "query": query,
             "save_response": save_response == "enable",
         }
+        if profile_ref.strip():
+            params["profile_ref"] = profile_ref.strip()
         task_credentials_ref = _apply_openai_auth(
             params, auth_mode, credentials_ref, api_key_env, api_key
         )
@@ -284,6 +288,7 @@ class HGripeCustomHttpMultipartApi:
             "required": {
                 "url": ("STRING", {"default": "http://127.0.0.1:8199/upload"}),
                 "method": (["POST", "PUT", "PATCH"], {"default": "POST"}),
+                "profile_ref": ("STRING", {"default": ""}),
                 "credentials_ref": ("STRING", {"default": "custom-http-main"}),
                 "auth_mode": (
                     ["credentials_ref", "env_or_key", "no_auth"],
@@ -321,6 +326,7 @@ class HGripeCustomHttpMultipartApi:
         self,
         url: str,
         method: str,
+        profile_ref: str,
         credentials_ref: str,
         auth_mode: str,
         api_key_env: str,
@@ -353,6 +359,8 @@ class HGripeCustomHttpMultipartApi:
             "multipart_fields": fields,
             "save_response": save_response == "enable",
         }
+        if profile_ref.strip():
+            params["profile_ref"] = profile_ref.strip()
         task_credentials_ref = _apply_openai_auth(
             params, auth_mode, credentials_ref, api_key_env, api_key
         )
@@ -398,6 +406,7 @@ class HGripeCustomHttpAsyncJob:
             "required": {
                 "url": ("STRING", {"default": "http://127.0.0.1:8199/submit"}),
                 "method": (["POST", "GET", "PUT", "PATCH", "DELETE"], {"default": "POST"}),
+                "profile_ref": ("STRING", {"default": ""}),
                 "credentials_ref": ("STRING", {"default": "custom-http-main"}),
                 "auth_mode": (
                     ["credentials_ref", "env_or_key", "no_auth"],
@@ -462,6 +471,7 @@ class HGripeCustomHttpAsyncJob:
         self,
         url: str,
         method: str,
+        profile_ref: str,
         credentials_ref: str,
         auth_mode: str,
         api_key_env: str,
@@ -533,6 +543,8 @@ class HGripeCustomHttpAsyncJob:
             "download_url_path": download_url_path,
             "save_response": save_response == "enable",
         }
+        if profile_ref.strip():
+            params["profile_ref"] = profile_ref.strip()
         task_credentials_ref = _apply_openai_auth(
             params, auth_mode, credentials_ref, api_key_env, api_key
         )

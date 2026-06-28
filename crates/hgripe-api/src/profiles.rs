@@ -212,12 +212,12 @@ fn resolve_provider_profile_entry(
     };
     let mut credential = None;
 
-    if provider != "openai_compatible" {
+    if !provider_is_supported(&provider) {
         push_resolved_issue(
             &mut issues,
             "error",
             "unsupported_provider",
-            "only provider 'openai_compatible' is supported by provider profiles right now",
+            "provider profile provider must be 'openai_compatible' or 'custom_http'",
         );
     }
 
@@ -260,8 +260,9 @@ fn resolve_provider_profile_entry(
         }
     }
 
-    let (base_url, base_url_source) = resolved_base_url(profile, credential.as_ref());
+    let (base_url, base_url_source) = resolved_base_url(&provider, profile, credential.as_ref());
     let (auth_source, api_key_env, api_key_env_is_set) = resolved_auth_source(
+        &provider,
         profile,
         credential.as_ref(),
         no_auth,
@@ -297,6 +298,7 @@ fn resolve_provider_profile_entry(
 }
 
 fn resolved_base_url(
+    provider: &str,
     profile: &ProviderProfile,
     credential: Option<&crate::credentials::CredentialEntry>,
 ) -> (Option<String>, Option<String>) {
@@ -306,6 +308,16 @@ fn resolved_base_url(
 
     if let Some(base_url) = credential.and_then(|entry| trimmed_string(entry.base_url.as_deref())) {
         return (Some(base_url), Some("credentials.base_url".to_string()));
+    }
+
+    if provider == "custom_http" {
+        if let Some(base_url) = env_string("HGRIPE_CUSTOM_HTTP_BASE_URL") {
+            return (
+                Some(base_url),
+                Some("env.HGRIPE_CUSTOM_HTTP_BASE_URL".to_string()),
+            );
+        }
+        return (None, None);
     }
 
     if let Some(base_url) = env_string("HGRIPE_OPENAI_COMPATIBLE_BASE_URL") {
@@ -322,6 +334,7 @@ fn resolved_base_url(
 }
 
 fn resolved_auth_source(
+    provider: &str,
     profile: &ProviderProfile,
     credential: Option<&crate::credentials::CredentialEntry>,
     no_auth: bool,
@@ -373,6 +386,14 @@ fn resolved_auth_source(
         {
             return ("credentials.headers".to_string(), None, None);
         }
+    }
+
+    if provider == "custom_http" {
+        return (
+            "environment_fallback".to_string(),
+            Some("HGRIPE_CUSTOM_HTTP_API_KEY".to_string()),
+            Some(env_var_is_set("HGRIPE_CUSTOM_HTTP_API_KEY")),
+        );
     }
 
     (
@@ -451,13 +472,13 @@ fn validate_profile_provider(
         .filter(|value| !value.is_empty())
         .unwrap_or("openai_compatible");
 
-    if provider != "openai_compatible" {
+    if !provider_is_supported(provider) {
         push_issue(
             issues,
             "error",
             profile_ref,
             "unsupported_provider",
-            "only provider 'openai_compatible' is supported by provider profiles right now",
+            "provider profile provider must be 'openai_compatible' or 'custom_http'",
         );
     }
 }
@@ -576,12 +597,20 @@ fn validate_profile_defaults(
     profile: &ProviderProfile,
     issues: &mut Vec<ProviderProfileValidationIssue>,
 ) {
-    if profile
-        .model
+    let provider = profile
+        .provider
         .as_deref()
         .map(str::trim)
         .filter(|value| !value.is_empty())
-        .is_none()
+        .unwrap_or("openai_compatible");
+
+    if provider == "openai_compatible"
+        && profile
+            .model
+            .as_deref()
+            .map(str::trim)
+            .filter(|value| !value.is_empty())
+            .is_none()
     {
         push_issue(
             issues,
@@ -598,6 +627,10 @@ fn validate_profile_defaults(
     if let Some(extra_body) = &profile.extra_body {
         validate_secret_like_value_map(profile_ref, "extra_body", extra_body, issues);
     }
+}
+
+fn provider_is_supported(provider: &str) -> bool {
+    matches!(provider, "openai_compatible" | "custom_http")
 }
 
 fn validate_secret_like_value_map(

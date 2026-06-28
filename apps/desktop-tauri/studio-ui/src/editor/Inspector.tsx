@@ -1,8 +1,10 @@
+import { useState } from "react";
 import type { Node } from "@xyflow/react";
 import { nodeSpec } from "../graph/nodeSpecs";
 import { ParamField } from "./ParamField";
 import { ProfilePicker } from "./ProfilePicker";
 import { OutputPicker } from "./OutputPicker";
+import { MediaViewer } from "./MediaViewer";
 import type { HgripeNodeData } from "./HgripeNode";
 
 interface InspectorProps {
@@ -13,6 +15,8 @@ interface InspectorProps {
 // Right-side panel. Full-resolution media preview belongs here (not inside the
 // node card), so the canvas stays light and previews never blow up node size.
 export function Inspector({ node, onParamChange }: InspectorProps) {
+  const [viewerPath, setViewerPath] = useState<string | null>(null);
+
   if (!node) {
     return (
       <aside className="inspector">
@@ -78,12 +82,23 @@ export function Inspector({ node, onParamChange }: InspectorProps) {
       {data.imagePath && (
         <div className="field">
           <span>Output</span>
-          {data.thumbnail ? (
-            <img className="inspector-img" src={data.thumbnail} alt="output" />
-          ) : null}
+          <button
+            type="button"
+            className="inspector-img-btn"
+            onClick={() => setViewerPath(data.imagePath ?? null)}
+            title="View full size"
+          >
+            {data.thumbnail ? (
+              <img className="inspector-img" src={data.thumbnail} alt="output" />
+            ) : (
+              <div className="inspector-img placeholder">View full size</div>
+            )}
+          </button>
           <code className="path">{data.imagePath}</code>
         </div>
       )}
+
+      {viewerPath && <MediaViewer path={viewerPath} onClose={() => setViewerPath(null)} />}
     </aside>
   );
 }

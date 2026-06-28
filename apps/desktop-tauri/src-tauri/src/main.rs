@@ -214,6 +214,21 @@ struct PsdOutputFile {
     /// PSD file modification time in milliseconds since the Unix epoch.
     modified_ms: Option<u64>,
     size_bytes: u64,
+    /// True when the export's metadata records a true smart-object content
+    /// replacement (`smart_object_mode == "replace_content"`).
+    smart_object: bool,
+}
+
+/// Cheap check for whether a `_metadata.json` records a smart-object content
+/// replacement, without pulling in a JSON parser.
+fn metadata_has_smart_object(metadata_path: &Option<String>) -> bool {
+    let Some(path) = metadata_path else {
+        return false;
+    };
+    match fs::read_to_string(path) {
+        Ok(text) => text.contains("\"smart_object_mode\"") && text.contains("\"replace_content\""),
+        Err(_) => false,
+    }
 }
 
 fn modified_ms(metadata: &fs::Metadata) -> Option<u64> {
@@ -269,6 +284,7 @@ fn list_psd_outputs(dir: String) -> Result<Vec<PsdOutputFile>, String> {
         };
         let preview_path = sibling("_preview.png");
         let metadata_path = sibling("_metadata.json");
+        let smart_object = metadata_has_smart_object(&metadata_path);
 
         let metadata = entry.metadata().ok();
         outputs.push(PsdOutputFile {
@@ -278,6 +294,7 @@ fn list_psd_outputs(dir: String) -> Result<Vec<PsdOutputFile>, String> {
             metadata_path,
             modified_ms: metadata.as_ref().and_then(modified_ms),
             size_bytes: metadata.as_ref().map(|m| m.len()).unwrap_or(0),
+            smart_object,
         });
     }
 

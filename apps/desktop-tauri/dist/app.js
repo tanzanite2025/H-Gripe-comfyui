@@ -273,9 +273,10 @@ async function loadPsdOutputs() {
           o.metadata_path ? "metadata" : null,
         ].filter(Boolean);
         const badges = tags.map((t) => `<span class="badge ok">${t}</span>`).join(" ");
+        const soBadge = o.smart_object ? ` <span class="badge so">smart object</span>` : "";
         return `<div class="card psd-card" data-psd-index="${i}">
           <div class="label">${o.name}.psd</div>
-          <div class="value">${time}<br/>${fmtBytes(o.size_bytes)} ${badges}</div>
+          <div class="value">${time}<br/>${fmtBytes(o.size_bytes)} ${badges}${soBadge}</div>
         </div>`;
       })
       .join("");
@@ -291,6 +292,9 @@ async function showPsdDetail(index) {
   detail.classList.remove("hidden");
   detail.dataset.index = String(index);
   $("#psd-detail-name").textContent = `${o.name}.psd`;
+
+  const soNote = $("#psd-detail-so");
+  if (soNote) soNote.classList.toggle("hidden", !o.smart_object);
 
   const img = $("#psd-detail-preview");
   if (o.preview_path) {

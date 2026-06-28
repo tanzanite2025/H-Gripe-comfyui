@@ -2,10 +2,13 @@ use hgripe_api::providers::openai_compatible::OpenAiCompatibleProvider;
 use hgripe_api::{ApiBroker, ApiStatus, ApiTask};
 use serde_json::json;
 use std::fs;
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::{SystemTime, UNIX_EPOCH};
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::TcpListener;
 use tokio::sync::oneshot;
+
+static TEMP_COUNTER: AtomicU64 = AtomicU64::new(0);
 
 #[tokio::test]
 async fn openai_compatible_chat_generates_text() {
@@ -408,11 +411,7 @@ fn find_subsequence(buffer: &[u8], needle: &[u8]) -> Option<usize> {
 }
 
 fn write_temp_credentials(base_url: &str) -> std::path::PathBuf {
-    let nonce = SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .expect("system time should be valid")
-        .as_nanos();
-    let path = std::env::temp_dir().join(format!("hgripe-credentials-{nonce}.json"));
+    let path = std::env::temp_dir().join(format!("hgripe-credentials-{}.json", temp_suffix()));
     let document = json!({
         "local-openai": {
             "provider": "openai_compatible",
@@ -426,11 +425,8 @@ fn write_temp_credentials(base_url: &str) -> std::path::PathBuf {
 }
 
 fn write_temp_profiles(base_url: &str) -> std::path::PathBuf {
-    let nonce = SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .expect("system time should be valid")
-        .as_nanos();
-    let path = std::env::temp_dir().join(format!("hgripe-provider-profiles-{nonce}.json"));
+    let path =
+        std::env::temp_dir().join(format!("hgripe-provider-profiles-{}.json", temp_suffix()));
     let document = json!({
         "local-profile": {
             "provider": "openai_compatible",
@@ -456,9 +452,14 @@ fn write_temp_profiles(base_url: &str) -> std::path::PathBuf {
 }
 
 fn temp_output_dir() -> std::path::PathBuf {
+    std::env::temp_dir().join(format!("hgripe-output-{}", temp_suffix()))
+}
+
+fn temp_suffix() -> String {
     let nonce = SystemTime::now()
         .duration_since(UNIX_EPOCH)
         .expect("system time should be valid")
         .as_nanos();
-    std::env::temp_dir().join(format!("hgripe-output-{nonce}"))
+    let counter = TEMP_COUNTER.fetch_add(1, Ordering::SeqCst);
+    format!("{nonce}-{counter}")
 }

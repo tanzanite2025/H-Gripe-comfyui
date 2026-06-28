@@ -1,5 +1,6 @@
 pub mod broker;
 pub mod credentials;
+pub mod diagnostics;
 pub mod history;
 pub mod model;
 pub mod outputs;
@@ -12,6 +13,10 @@ pub use credentials::{
     credentials_file_path, get_redacted_credential_ref, list_credential_summaries,
     load_credential_ref, load_credentials, validate_credentials, CredentialEntry,
     CredentialSummary, CredentialValidationIssue, CredentialsValidation, RedactedCredentialEntry,
+};
+pub use diagnostics::{
+    build_doctor_report, ConfigFileDiagnostic, DiagnosticIssue, DoctorOptions, DoctorReport,
+    EnvironmentDiagnostics, PathDiagnostic, RuntimePathDiagnostics,
 };
 pub use history::{
     append_history_record, apply_history_cleanup, build_history_cleanup_plan, build_history_record,

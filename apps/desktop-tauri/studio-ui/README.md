@@ -46,10 +46,14 @@ src/
 
 - **Node palette** (left rail): drag a node kind onto the canvas (drop position
   honoured) or click to add. Kinds are grouped (inputs / generate / outputs).
-- **Node kinds**: `prompt`, `imageSource`, `psdTemplate`, `number`, `generate`,
-  `preview`, `save` (export sink). `generate` forwards all non-reserved params
-  to the broker task and accepts an optional `seed` input that overrides the
-  param.
+- **Node kinds**: `prompt`, `batch`, `imageSource`, `psdTemplate`, `number`,
+  `generate`, `preview`, `save` (export sink). `generate` forwards all
+  non-reserved params to the broker task and accepts an optional `seed` input
+  that overrides the param.
+- **Batch fan-out**: a `batch` node holds a list of text items (one per line)
+  and emits one (`item`, type `text`). A normal Run emits the first item; the
+  toolbar's **Run ×N** runs the graph once per item, sweeping the batch node's
+  `index` via `runGraph`'s `paramOverrides` (the graph itself is never mutated).
 - **Param controls**: `text`, `textarea`, `number`, `select`, `slider`,
   `checkbox`, `path` — rendered by a shared `ParamField` used by both the
   Inspector and the node card.

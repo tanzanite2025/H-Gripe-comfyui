@@ -181,6 +181,13 @@ export async function runGraph(
   graph: WorkflowGraph,
   registry: ExecutorRegistry,
   observer: RunObserver = {},
+  /**
+   * Per-node param overrides merged on top of `node.params` for this run only
+   * (used by batch fan-out to sweep one node across a list without mutating the
+   * graph). Overrides are part of the cache signature, so each sweep value is a
+   * distinct cache entry.
+   */
+  paramOverrides: Map<string, Record<string, unknown>> = new Map(),
 ): Promise<RunResult> {
   const issues = validateGraph(graph);
   const firstError = issues.find((i) => i.severity === "error");
@@ -210,7 +217,9 @@ export async function runGraph(
           }
         }
 
-        const sig = signature(node.kind, node.params, inputs);
+        const override = paramOverrides.get(id);
+        const params = override ? { ...node.params, ...override } : node.params;
+        const sig = signature(node.kind, params, inputs);
         const cached = cache.get(sig);
         if (cached) {
           outputs.set(id, cached);
@@ -226,7 +235,7 @@ export async function runGraph(
 
         setStatus(id, "running");
         try {
-          const result = await executor({ nodeId: id, kind: node.kind, params: node.params, inputs });
+          const result = await executor({ nodeId: id, kind: node.kind, params, inputs });
           outputs.set(id, result);
           cache.set(sig, result);
           setStatus(id, "succeeded");

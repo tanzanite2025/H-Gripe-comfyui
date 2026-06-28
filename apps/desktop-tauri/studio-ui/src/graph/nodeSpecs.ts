@@ -4,12 +4,27 @@
 
 import type { PortDataType, PortSpec } from "./model";
 
+export type ParamControl =
+  | "text"
+  | "textarea"
+  | "number"
+  | "select"
+  | "slider"
+  | "checkbox"
+  | "path";
+
 export interface ParamSpec {
   key: string;
   label: string;
-  control: "text" | "textarea" | "number" | "select";
+  control: ParamControl;
   options?: string[];
   defaultValue?: unknown;
+  /** For `slider` / `number`. */
+  min?: number;
+  max?: number;
+  step?: number;
+  /** Optional hint shown under the control in the inspector. */
+  hint?: string;
 }
 
 export interface NodeSpec {
@@ -17,6 +32,8 @@ export interface NodeSpec {
   title: string;
   /** Short description shown in the inspector / node palette. */
   description: string;
+  /** Palette grouping. */
+  category: "input" | "generate" | "output";
   inputs: PortSpec[];
   outputs: PortSpec[];
   params: ParamSpec[];
@@ -31,6 +48,7 @@ export const NODE_SPECS: Record<string, NodeSpec> = {
     kind: "prompt",
     title: "Prompt",
     description: "A text prompt fed into generation nodes.",
+    category: "input",
     inputs: [],
     outputs: [port("text", "text", "text")],
     params: [
@@ -42,14 +60,61 @@ export const NODE_SPECS: Record<string, NodeSpec> = {
       },
     ],
   },
+  imageSource: {
+    kind: "imageSource",
+    title: "Image Source",
+    description: "An image file on disk, used as a reference / input image.",
+    category: "input",
+    inputs: [],
+    outputs: [port("image", "image", "image")],
+    params: [
+      {
+        key: "path",
+        label: "Image path",
+        control: "path",
+        defaultValue: "",
+        hint: "absolute path to an image file",
+      },
+    ],
+  },
+  psdTemplate: {
+    kind: "psdTemplate",
+    title: "PSD Template",
+    description: "A .psd template path carried through to export.",
+    category: "input",
+    inputs: [],
+    outputs: [port("template", "template", "any")],
+    params: [
+      {
+        key: "path",
+        label: "Template path",
+        control: "path",
+        defaultValue: "",
+        hint: "absolute path to a .psd template",
+      },
+    ],
+  },
+  number: {
+    kind: "number",
+    title: "Number",
+    description: "A numeric value (seed, count, …) fed into other nodes.",
+    category: "input",
+    inputs: [],
+    outputs: [port("value", "value", "number")],
+    params: [
+      { key: "value", label: "Value", control: "number", defaultValue: 0 },
+    ],
+  },
   generate: {
     kind: "generate",
     title: "Generate",
     description:
       "Run an image generation operation through the H-Gripe broker.",
+    category: "generate",
     inputs: [
       port("prompt", "prompt", "text"),
       port("reference", "reference", "image"),
+      port("seed", "seed", "number"),
     ],
     outputs: [port("image", "image", "image")],
     params: [
@@ -63,6 +128,22 @@ export const NODE_SPECS: Record<string, NodeSpec> = {
       },
       { key: "model", label: "Model", control: "text", defaultValue: "" },
       { key: "size", label: "Size", control: "text", defaultValue: "1024x1024" },
+      {
+        key: "steps",
+        label: "Steps",
+        control: "slider",
+        defaultValue: 20,
+        min: 1,
+        max: 50,
+        step: 1,
+      },
+      {
+        key: "seed",
+        label: "Seed",
+        control: "number",
+        defaultValue: 0,
+        hint: "overridden by a connected seed input",
+      },
     ],
   },
   preview: {
@@ -70,9 +151,25 @@ export const NODE_SPECS: Record<string, NodeSpec> = {
     title: "Preview",
     description:
       "Display a thumbnail of an image. The original path is preserved for export.",
+    category: "output",
     inputs: [port("image", "image", "image")],
     outputs: [],
     params: [],
+  },
+  save: {
+    kind: "save",
+    title: "Export",
+    description:
+      "Sink node: collects the resulting image path (and optional PSD template) for export.",
+    category: "output",
+    inputs: [
+      port("image", "image", "image"),
+      port("template", "template", "any"),
+    ],
+    outputs: [],
+    params: [
+      { key: "filename", label: "File name", control: "text", defaultValue: "output.png" },
+    ],
   },
 };
 
@@ -86,4 +183,13 @@ export function defaultParams(kind: string): Record<string, unknown> {
   const out: Record<string, unknown> = {};
   for (const p of nodeSpec(kind).params) out[p.key] = p.defaultValue ?? "";
   return out;
+}
+
+/** Node kinds grouped by palette category, in display order. */
+export function paletteGroups(): { category: NodeSpec["category"]; specs: NodeSpec[] }[] {
+  const order: NodeSpec["category"][] = ["input", "generate", "output"];
+  return order.map((category) => ({
+    category,
+    specs: Object.values(NODE_SPECS).filter((s) => s.category === category),
+  }));
 }

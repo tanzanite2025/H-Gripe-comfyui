@@ -27,26 +27,50 @@ export function Inspector({ node, onParamChange }: InspectorProps) {
       <p className="muted">{spec.description}</p>
 
       {spec.params.map((p) => {
-        const value = (data.params[p.key] ?? "") as string | number;
+        const raw = data.params[p.key];
         const onChange = (v: unknown) => onParamChange(node.id, p.key, v);
         return (
           <label key={p.key} className="field">
             <span>{p.label}</span>
+
             {p.control === "textarea" && (
-              <textarea value={String(value)} onChange={(e) => onChange(e.target.value)} />
+              <textarea value={String(raw ?? "")} onChange={(e) => onChange(e.target.value)} />
             )}
-            {p.control === "text" && (
-              <input value={String(value)} onChange={(e) => onChange(e.target.value)} />
+            {(p.control === "text" || p.control === "path") && (
+              <input value={String(raw ?? "")} onChange={(e) => onChange(e.target.value)} />
             )}
             {p.control === "number" && (
               <input
                 type="number"
-                value={String(value)}
+                value={String(raw ?? 0)}
+                min={p.min}
+                max={p.max}
+                step={p.step}
                 onChange={(e) => onChange(Number(e.target.value))}
               />
             )}
+            {p.control === "slider" && (
+              <span className="slider-row">
+                <input
+                  type="range"
+                  value={Number(raw ?? p.min ?? 0)}
+                  min={p.min ?? 0}
+                  max={p.max ?? 100}
+                  step={p.step ?? 1}
+                  onChange={(e) => onChange(Number(e.target.value))}
+                />
+                <output>{String(raw ?? p.min ?? 0)}</output>
+              </span>
+            )}
+            {p.control === "checkbox" && (
+              <input
+                type="checkbox"
+                checked={Boolean(raw)}
+                onChange={(e) => onChange(e.target.checked)}
+              />
+            )}
             {p.control === "select" && (
-              <select value={String(value)} onChange={(e) => onChange(e.target.value)}>
+              <select value={String(raw ?? "")} onChange={(e) => onChange(e.target.value)}>
                 {(p.options ?? []).map((o) => (
                   <option key={o} value={o}>
                     {o}
@@ -54,6 +78,8 @@ export function Inspector({ node, onParamChange }: InspectorProps) {
                 ))}
               </select>
             )}
+
+            {p.hint && <small className="hint">{p.hint}</small>}
           </label>
         );
       })}

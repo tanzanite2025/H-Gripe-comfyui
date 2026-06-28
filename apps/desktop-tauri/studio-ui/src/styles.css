@@ -129,3 +129,42 @@ button:disabled { opacity: 0.6; cursor: default; }
 .port-number { background: var(--t-number); }
 .port-latent { background: var(--t-latent); }
 .port-any { background: var(--t-any); }
+
+/* palette (left rail) */
+.palette {
+  width: 168px;
+  border-right: 1px solid var(--border);
+  background: var(--panel);
+  padding: 12px;
+  overflow: auto;
+}
+.palette h2 { margin: 0 0 8px; font-size: 14px; }
+.palette-group { margin-bottom: 12px; }
+.palette-group h3 {
+  margin: 0 0 6px;
+  font-size: 11px;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  color: var(--muted);
+}
+.palette-item {
+  display: block;
+  width: 100%;
+  text-align: left;
+  margin-bottom: 4px;
+  cursor: grab;
+}
+.palette-hint { font-size: 11px; margin-top: 8px; }
+
+/* inspector control extras */
+.slider-row { display: flex; align-items: center; gap: 8px; }
+.slider-row input[type="range"] { flex: 1; }
+.slider-row output { min-width: 28px; text-align: right; color: var(--muted); }
+.field input[type="checkbox"] { width: 16px; height: 16px; align-self: flex-start; }
+.field small.hint { color: var(--muted); font-size: 11px; }
+
+/* toolbar validation marker */
+.issues { color: var(--running); font-size: 12px; cursor: help; }
+
+/* node thumbnail wrapper (lazy) */
+.node-thumb-wrap { width: 100%; }

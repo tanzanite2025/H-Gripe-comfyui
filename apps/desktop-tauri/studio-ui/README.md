@@ -39,7 +39,27 @@ src/
   an `ApiTask` and runs it through the existing broker via `run_task_json`.
 - **editor/** – React Flow nodes are memoized, connections are validated by port
   type and acyclicity (`isValidConnection`), and `onlyRenderVisibleElements` is
-  on. The adapter converts render state <-> `WorkflowGraph`.
+  on. The adapter converts render state <-> `WorkflowGraph` (both directions:
+  `toWorkflowGraph` / `fromWorkflowGraph` for save/load).
+
+## Editor features
+
+- **Node palette** (left rail): drag a node kind onto the canvas (drop position
+  honoured) or click to add. Kinds are grouped (inputs / generate / outputs).
+- **Node kinds**: `prompt`, `imageSource`, `psdTemplate`, `number`, `generate`,
+  `preview`, `save` (export sink). `generate` forwards all non-reserved params
+  to the broker task and accepts an optional `seed` input that overrides the
+  param.
+- **Param controls**: `text`, `textarea`, `number`, `select`, `slider`,
+  `checkbox`, `path` (rendered by the Inspector).
+- **Save / Load / Clear**: serialize the graph to `workflow.json` and load it
+  back (params are merged over the kind's current defaults). Delete removes the
+  selected node/edge.
+- **Lazy thumbnails**: preview nodes request `generate_thumbnail` only when they
+  scroll into view (IntersectionObserver), so the graph data stays light (only
+  the original path) and off-screen media is never decoded.
+- **Validation**: `validateGraph` issues (type mismatch, cycle, dangling edge)
+  are surfaced in the toolbar and block Run.
 
 ## Media / thumbnail discipline (why previews never blur)
 

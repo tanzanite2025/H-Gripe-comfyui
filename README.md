@@ -101,6 +101,8 @@ cargo build -p hgripe-api --bins
 .\.venv\Scripts\python.exe python\bridge\history_tail_example.py --provider openai_compatible --limit 10
 .\.venv\Scripts\python.exe python\bridge\history_tail_example.py --operation image.generate --has-output-files yes
 .\.venv\Scripts\python.exe python\bridge\history_rerun_example.py <task_id>
+.\target\debug\hgripe-api-config.exe init --dry-run
+.\target\debug\hgripe-api-config.exe init
 .\target\debug\hgripe-api-config.exe doctor
 .\target\debug\hgripe-api-config.exe profiles list
 .\target\debug\hgripe-api-config.exe profiles show <profile_ref>
@@ -120,6 +122,7 @@ cargo build -p hgripe-api --bins
 
 `hgripe-api-config credentials show` redacts inline API keys and secret-like headers before printing JSON.
 `hgripe-api-config doctor` summarizes config validation, runtime paths, broker location, and H-Gripe env overrides without printing secret values.
+`hgripe-api-config init` creates local config/history/output directories and starter credentials/profile templates. Existing files are preserved unless `--force` is provided.
 
 ComfyUI is the AI creation engine for visual professionals who demand control over every model, every parameter, and every output. Its powerful and modular node graph interface empowers creatives to generate images, videos, 3D models, audio, and more...
 - ComfyUI natively supports the latest open-source state of the art models.

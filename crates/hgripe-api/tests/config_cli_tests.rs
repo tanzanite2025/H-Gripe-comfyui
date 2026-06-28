@@ -217,6 +217,50 @@ fn config_cli_doctor_reports_paths_and_validation() {
     let _ = fs::remove_dir_all(root);
 }
 
+#[test]
+fn config_cli_init_dry_run_and_apply() {
+    let root = temp_init_dir();
+
+    let dry_run_output = Command::new(env!("CARGO_BIN_EXE_hgripe-api-config"))
+        .arg("init")
+        .arg("--root")
+        .arg(&root)
+        .arg("--dry-run")
+        .output()
+        .expect("config CLI init dry-run should run");
+    assert!(dry_run_output.status.success());
+    let dry_run_json: serde_json::Value =
+        serde_json::from_slice(&dry_run_output.stdout).expect("dry-run output should be JSON");
+    assert_eq!(dry_run_json["dry_run"], true);
+    assert!(dry_run_json["would_create_count"].as_u64().unwrap_or(0) >= 5);
+    assert!(!root.exists());
+
+    let init_output = Command::new(env!("CARGO_BIN_EXE_hgripe-api-config"))
+        .arg("init")
+        .arg("--root")
+        .arg(&root)
+        .output()
+        .expect("config CLI init should run");
+    assert!(init_output.status.success());
+    let init_json: serde_json::Value =
+        serde_json::from_slice(&init_output.stdout).expect("init output should be JSON");
+    assert_eq!(init_json["dry_run"], false);
+    assert!(init_json["created_count"].as_u64().unwrap_or(0) >= 5);
+
+    assert!(root
+        .join("user")
+        .join("hgripe")
+        .join("credentials.json")
+        .exists());
+    assert!(root
+        .join("user")
+        .join("hgripe")
+        .join("provider_profiles.json")
+        .exists());
+
+    let _ = fs::remove_dir_all(root);
+}
+
 fn temp_profiles_path() -> std::path::PathBuf {
     let nonce = SystemTime::now()
         .duration_since(UNIX_EPOCH)
@@ -239,4 +283,12 @@ fn temp_doctor_dir() -> std::path::PathBuf {
         .expect("system time should be valid")
         .as_nanos();
     std::env::temp_dir().join(format!("hgripe-config-cli-doctor-test-{nonce}"))
+}
+
+fn temp_init_dir() -> std::path::PathBuf {
+    let nonce = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .expect("system time should be valid")
+        .as_nanos();
+    std::env::temp_dir().join(format!("hgripe-config-cli-init-test-{nonce}"))
 }

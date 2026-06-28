@@ -214,6 +214,7 @@ Tauri 不只是一个壳，应该承担桌面体验：
 - 已新增 provider profile 管理入口：`hgripe-api-config profiles list/show/validate` 可列出、查看、校验本地 profile，后续可直接接入 Tauri 设置页。
 - 已新增 credentials 管理入口：`hgripe-api-config credentials list/show/validate` 可列出、脱敏查看、校验本地 credentials，`show` 不输出明文 API key 或 secret-like header。
 - 已新增桌面预检入口：`hgripe-api-config doctor` 汇总 credentials/profile 校验、broker 路径、history/output 路径和 H-Gripe 环境变量覆盖情况，后续可作为 Tauri 启动/设置页诊断数据源。
+- 已新增首次启动初始化入口：`hgripe-api-config init` 可创建本地 config/history/output 目录和 starter credentials/profile 模板；默认不覆盖已有文件，`--dry-run` 可预览，`--force` 才覆盖。
 - 已新增 CLI 桥：`hgripe-api-broker`，支持 stdin 输入 `ApiTask` JSON，stdout 输出 `ApiResult` JSON。
 - 已新增 Python 桥接示例：`python/bridge/hgripe_api_bridge.py`。
 - 已新增本地 HTTP 验证示例：`python/bridge/custom_http_example.py`，不依赖外部网络服务。
@@ -246,6 +247,8 @@ cargo build -p hgripe-api --bins
 .\.venv\Scripts\python.exe python\bridge\history_tail_example.py --provider openai_compatible --limit 10
 .\.venv\Scripts\python.exe python\bridge\history_tail_example.py --operation image.generate --has-output-files yes
 .\.venv\Scripts\python.exe python\bridge\history_rerun_example.py <task_id>
+.\target\debug\hgripe-api-config.exe init --dry-run
+.\target\debug\hgripe-api-config.exe init
 .\target\debug\hgripe-api-config.exe doctor
 .\target\debug\hgripe-api-config.exe profiles list
 .\target\debug\hgripe-api-config.exe profiles show <profile_ref>

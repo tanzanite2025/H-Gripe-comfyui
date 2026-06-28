@@ -7,6 +7,7 @@ pub mod outputs;
 pub mod profiles;
 pub mod provider;
 pub mod providers;
+pub mod setup;
 
 pub use broker::ApiBroker;
 pub use credentials::{
@@ -37,3 +38,4 @@ pub use profiles::{
     ProviderProfileSummary, ProviderProfileValidationIssue, ProviderProfilesValidation,
 };
 pub use provider::{Provider, ProviderRegistry};
+pub use setup::{initialize_local_config, InitAction, InitOptions, InitReport};

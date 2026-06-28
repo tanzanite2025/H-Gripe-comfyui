@@ -1,7 +1,8 @@
 use hgripe_api::{
     build_doctor_report, credentials_file_path, get_provider_profile, get_redacted_credential_ref,
-    list_credential_summaries, list_provider_profile_summaries, provider_profiles_path,
-    validate_credentials, validate_provider_profiles, DoctorOptions,
+    initialize_local_config, list_credential_summaries, list_provider_profile_summaries,
+    provider_profiles_path, validate_credentials, validate_provider_profiles, DoctorOptions,
+    InitOptions,
 };
 use serde::Serialize;
 use serde_json::json;
@@ -27,6 +28,7 @@ fn run() -> Result<(), String> {
 
     let group = args.remove(0);
     match group.as_str() {
+        "init" => run_init(args),
         "doctor" => run_doctor(args),
         "profiles" => run_profiles(args),
         "credentials" => run_credentials(args),
@@ -34,6 +36,13 @@ fn run() -> Result<(), String> {
             "unknown config group '{group}'. Run `hgripe-api-config --help`."
         )),
     }
+}
+
+fn run_init(args: Vec<String>) -> Result<(), String> {
+    let options = parse_init_options(args)?;
+    let report = initialize_local_config(options).map_err(|err| err.to_string())?;
+
+    print_json(&report)
 }
 
 fn run_doctor(args: Vec<String>) -> Result<(), String> {
@@ -298,6 +307,51 @@ fn parse_doctor_options(args: Vec<String>) -> Result<DoctorOptions, String> {
     Ok(options)
 }
 
+fn parse_init_options(args: Vec<String>) -> Result<InitOptions, String> {
+    let mut options = InitOptions::default();
+    let mut index = 0;
+
+    while index < args.len() {
+        match args[index].as_str() {
+            "--root" => {
+                options.root_dir = Some(option_value(&args, index)?);
+                index += 2;
+            }
+            "--credentials-file" => {
+                options.credentials_file = Some(option_value(&args, index)?);
+                index += 2;
+            }
+            "--profiles-file" => {
+                options.profiles_file = Some(option_value(&args, index)?);
+                index += 2;
+            }
+            "--history-file" => {
+                options.history_file = Some(option_value(&args, index)?);
+                index += 2;
+            }
+            "--history-db" => {
+                options.history_db = Some(option_value(&args, index)?);
+                index += 2;
+            }
+            "--output-dir" => {
+                options.output_dir = Some(option_value(&args, index)?);
+                index += 2;
+            }
+            "--force" => {
+                options.force = true;
+                index += 1;
+            }
+            "--dry-run" => {
+                options.dry_run = true;
+                index += 1;
+            }
+            value => return Err(format!("unknown init option '{value}'")),
+        }
+    }
+
+    Ok(options)
+}
+
 fn option_value(args: &[String], index: usize) -> Result<String, String> {
     args.get(index + 1)
         .filter(|value| !value.starts_with('-'))
@@ -315,6 +369,7 @@ fn print_json<T: Serialize>(value: &T) -> Result<(), String> {
 fn print_help() {
     println!(
         r#"Usage:
+  hgripe-api-config init [--root PATH] [--credentials-file PATH] [--profiles-file PATH] [--history-file PATH] [--history-db PATH] [--output-dir PATH] [--dry-run] [--force]
   hgripe-api-config doctor [--credentials-file PATH] [--profiles-file PATH] [--history-file PATH] [--history-db PATH] [--output-dir PATH] [--broker PATH]
   hgripe-api-config profiles list [--profiles-file PATH]
   hgripe-api-config profiles show <profile_ref> [--profiles-file PATH]

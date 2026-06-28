@@ -35,6 +35,15 @@ def _parse_json_object(raw: str, field_name: str) -> dict[str, Any]:
     return value
 
 
+def _parse_json_string_list(raw: str, field_name: str, default: list[str]) -> list[str]:
+    value = _parse_json_field(raw, field_name, default)
+    if isinstance(value, str):
+        return [item.strip() for item in value.split(",") if item.strip()]
+    if isinstance(value, list):
+        return [str(item) for item in value if str(item).strip()]
+    raise ValueError(f"{field_name} must be a JSON array or comma-separated string")
+
+
 def _apply_openai_auth(
     params: dict[str, Any],
     auth_mode: str,
@@ -151,6 +160,30 @@ def _tensor_image_to_data_url(image: Any, image_index: int, image_format: str) -
     return f"data:{mime_type};base64,{encoded}"
 
 
+def _mask_to_data_url(mask: Any, image_index: int) -> str:
+    import numpy as np
+    from PIL import Image
+
+    if len(mask.shape) == 2:
+        selected = mask
+    else:
+        batch_size = int(mask.shape[0])
+        if image_index < 0 or image_index >= batch_size:
+            raise ValueError(f"image_index must be between 0 and {batch_size - 1}")
+        selected = mask[image_index]
+
+    array = selected.detach().cpu().numpy()
+    array = np.clip(array, 0.0, 1.0)
+    alpha = ((1.0 - array) * 255.0).astype(np.uint8)
+    rgba = np.zeros((alpha.shape[0], alpha.shape[1], 4), dtype=np.uint8)
+    rgba[:, :, 3] = alpha
+
+    buffer = BytesIO()
+    Image.fromarray(rgba, mode="RGBA").save(buffer, format="PNG")
+    encoded = base64.b64encode(buffer.getvalue()).decode("ascii")
+    return f"data:image/png;base64,{encoded}"
+
+
 class HGripeCustomHttpApi:
     @classmethod
     def INPUT_TYPES(cls):
@@ -161,6 +194,8 @@ class HGripeCustomHttpApi:
                 "headers_json": ("STRING", {"multiline": True, "default": "{}"}),
                 "query_json": ("STRING", {"multiline": True, "default": "{}"}),
                 "body_json": ("STRING", {"multiline": True, "default": ""}),
+                "save_response": (["disable", "enable"], {"default": "disable"}),
+                "output_extension": ("STRING", {"default": ""}),
                 "max_attempts": ("INT", {"default": 2, "min": 1, "max": 10, "step": 1}),
                 "timeout_ms": (
                     "INT",
@@ -185,6 +220,8 @@ class HGripeCustomHttpApi:
         headers_json: str,
         query_json: str,
         body_json: str,
+        save_response: str,
+        output_extension: str,
         max_attempts: int,
         timeout_ms: int,
         force_run_nonce: int,
@@ -198,9 +235,12 @@ class HGripeCustomHttpApi:
             "method": method,
             "headers": headers,
             "query": query,
+            "save_response": save_response == "enable",
         }
         if body is not None:
             params["json"] = body
+        if output_extension.strip():
+            params["output_extension"] = output_extension.strip()
 
         task = {
             "id": f"comfy-http-{uuid.uuid4()}",
@@ -221,6 +261,158 @@ class HGripeCustomHttpApi:
         result = run_task(task)
         status = str(result.get("status", "unknown"))
         return (json.dumps(result, ensure_ascii=False, indent=2), status)
+
+
+class HGripeCustomHttpAsyncJob:
+    @classmethod
+    def INPUT_TYPES(cls):
+        return {
+            "required": {
+                "url": ("STRING", {"default": "http://127.0.0.1:8199/submit"}),
+                "method": (["POST", "GET", "PUT", "PATCH", "DELETE"], {"default": "POST"}),
+                "headers_json": ("STRING", {"multiline": True, "default": "{}"}),
+                "query_json": ("STRING", {"multiline": True, "default": "{}"}),
+                "body_json": ("STRING", {"multiline": True, "default": "{}"}),
+                "poll_url": (
+                    "STRING",
+                    {"default": "http://127.0.0.1:8199/jobs/{job_id}"},
+                ),
+                "poll_method": (["GET", "POST"], {"default": "GET"}),
+                "poll_headers_json": ("STRING", {"multiline": True, "default": "{}"}),
+                "poll_query_json": ("STRING", {"multiline": True, "default": "{}"}),
+                "poll_body_json": ("STRING", {"multiline": True, "default": ""}),
+                "job_id_path": ("STRING", {"default": "id"}),
+                "status_path": ("STRING", {"default": "status"}),
+                "success_values_json": (
+                    "STRING",
+                    {"multiline": True, "default": '["succeeded", "completed", "done"]'},
+                ),
+                "failure_values_json": (
+                    "STRING",
+                    {"multiline": True, "default": '["failed", "error", "cancelled"]'},
+                ),
+                "result_path": ("STRING", {"default": "result"}),
+                "download_result": (["disable", "enable"], {"default": "disable"}),
+                "download_url_path": ("STRING", {"default": "result.url"}),
+                "save_response": (["disable", "enable"], {"default": "disable"}),
+                "output_extension": ("STRING", {"default": ""}),
+                "max_polls": ("INT", {"default": 30, "min": 1, "max": 10000, "step": 1}),
+                "poll_interval_ms": (
+                    "INT",
+                    {"default": 2000, "min": 0, "max": 3600000, "step": 100},
+                ),
+                "max_attempts": ("INT", {"default": 2, "min": 1, "max": 10, "step": 1}),
+                "timeout_ms": (
+                    "INT",
+                    {"default": 60000, "min": 1000, "max": 1200000, "step": 1000},
+                ),
+                "force_run_nonce": (
+                    "INT",
+                    {"default": 0, "min": 0, "max": 2147483647, "step": 1},
+                ),
+            }
+        }
+
+    RETURN_TYPES = ("STRING", "STRING", "STRING")
+    RETURN_NAMES = ("output_path", "result_json", "status")
+    FUNCTION = "run"
+    CATEGORY = "H-Gripe/API"
+
+    def run(
+        self,
+        url: str,
+        method: str,
+        headers_json: str,
+        query_json: str,
+        body_json: str,
+        poll_url: str,
+        poll_method: str,
+        poll_headers_json: str,
+        poll_query_json: str,
+        poll_body_json: str,
+        job_id_path: str,
+        status_path: str,
+        success_values_json: str,
+        failure_values_json: str,
+        result_path: str,
+        download_result: str,
+        download_url_path: str,
+        save_response: str,
+        output_extension: str,
+        max_polls: int,
+        poll_interval_ms: int,
+        max_attempts: int,
+        timeout_ms: int,
+        force_run_nonce: int,
+    ):
+        headers = _parse_json_object(headers_json, "headers_json")
+        query = _parse_json_object(query_json, "query_json")
+        body = _parse_json_field(body_json, "body_json", None)
+        poll_headers = _parse_json_object(poll_headers_json, "poll_headers_json")
+        poll_query = _parse_json_object(poll_query_json, "poll_query_json")
+        poll_body = _parse_json_field(poll_body_json, "poll_body_json", None)
+        success_values = _parse_json_string_list(
+            success_values_json,
+            "success_values_json",
+            ["succeeded", "completed", "done"],
+        )
+        failure_values = _parse_json_string_list(
+            failure_values_json,
+            "failure_values_json",
+            ["failed", "error", "cancelled"],
+        )
+
+        params: dict[str, Any] = {
+            "url": url,
+            "method": method,
+            "headers": headers,
+            "query": query,
+            "poll_url": poll_url,
+            "poll_method": poll_method,
+            "poll_headers": poll_headers,
+            "poll_query": poll_query,
+            "job_id_path": job_id_path,
+            "status_path": status_path,
+            "success_values": success_values,
+            "failure_values": failure_values,
+            "max_polls": max_polls,
+            "poll_interval_ms": poll_interval_ms,
+            "download_result": download_result == "enable",
+            "download_url_path": download_url_path,
+            "save_response": save_response == "enable",
+        }
+        if body is not None:
+            params["json"] = body
+        if poll_body is not None:
+            params["poll_json"] = poll_body
+        if result_path.strip():
+            params["result_path"] = result_path.strip()
+        if output_extension.strip():
+            params["output_extension"] = output_extension.strip()
+
+        task = {
+            "id": f"comfy-http-async-job-{uuid.uuid4()}",
+            "provider": "custom_http",
+            "operation": "async_job",
+            "inputs": {"force_run_nonce": force_run_nonce},
+            "params": params,
+            "credentials_ref": None,
+            "output_type": "files",
+            "cache_policy": {"enabled": False, "ttl_seconds": None, "key": None},
+            "retry_policy": {
+                "max_attempts": max_attempts,
+                "backoff_ms": 500,
+                "timeout_ms": timeout_ms,
+            },
+        }
+
+        result = run_task(task)
+        status = str(result.get("status", "unknown"))
+        output_files = result.get("output_files") or []
+        output_path = ""
+        if output_files and isinstance(output_files[0], dict):
+            output_path = str(output_files[0].get("path") or "")
+        return (output_path, json.dumps(result, ensure_ascii=False, indent=2), status)
 
 
 class HGripeOpenAICompatibleText:
@@ -512,7 +704,10 @@ class HGripeOpenAICompatibleImageEdit:
                     "INT",
                     {"default": 0, "min": 0, "max": 2147483647, "step": 1},
                 ),
-            }
+            },
+            "optional": {
+                "mask": ("MASK",),
+            },
         }
 
     RETURN_TYPES = ("IMAGE", "STRING", "STRING")
@@ -544,6 +739,7 @@ class HGripeOpenAICompatibleImageEdit:
         max_attempts: int,
         timeout_ms: int,
         force_run_nonce: int,
+        mask=None,
     ):
         extra_body = _parse_json_object(extra_body_json, "extra_body_json")
         image_data_url = _tensor_image_to_data_url(image, image_index, image_format)
@@ -590,12 +786,252 @@ class HGripeOpenAICompatibleImageEdit:
                 "timeout_ms": timeout_ms,
             },
         }
+        if mask is not None:
+            task["inputs"]["mask_data_url"] = _mask_to_data_url(mask, image_index)
 
         result = run_task(task)
         _raise_if_failed(result, "H-Gripe OpenAI Compatible Image Edit")
         status = str(result.get("status", "unknown"))
         edited_image = _images_to_tensor(result, timeout_ms)
         return (edited_image, json.dumps(result, ensure_ascii=False, indent=2), status)
+
+
+class HGripeOpenAICompatibleAudioSpeech:
+    @classmethod
+    def INPUT_TYPES(cls):
+        return {
+            "required": {
+                "base_url": (
+                    "STRING",
+                    {"default": ""},
+                ),
+                "profile_ref": ("STRING", {"default": ""}),
+                "model": ("STRING", {"default": "gpt-4o-mini-tts"}),
+                "credentials_ref": ("STRING", {"default": "openai-main"}),
+                "auth_mode": (
+                    ["credentials_ref", "env_or_key", "no_auth"],
+                    {"default": "credentials_ref"},
+                ),
+                "api_key_env": ("STRING", {"default": "OPENAI_API_KEY"}),
+                "api_key": ("STRING", {"default": ""}),
+                "voice": ("STRING", {"default": "alloy"}),
+                "text": ("STRING", {"multiline": True, "default": "Hello from H-Gripe."}),
+                "response_format": (
+                    ["mp3", "wav", "opus", "aac", "flac", "pcm"],
+                    {"default": "mp3"},
+                ),
+                "speed": (
+                    "FLOAT",
+                    {"default": 1.0, "min": 0.25, "max": 4.0, "step": 0.05},
+                ),
+                "instructions": ("STRING", {"multiline": True, "default": ""}),
+                "save_outputs": (["enable", "disable"], {"default": "enable"}),
+                "extra_body_json": ("STRING", {"multiline": True, "default": "{}"}),
+                "max_attempts": ("INT", {"default": 2, "min": 1, "max": 10, "step": 1}),
+                "timeout_ms": (
+                    "INT",
+                    {"default": 180000, "min": 1000, "max": 1200000, "step": 1000},
+                ),
+                "force_run_nonce": (
+                    "INT",
+                    {"default": 0, "min": 0, "max": 2147483647, "step": 1},
+                ),
+            }
+        }
+
+    RETURN_TYPES = ("STRING", "STRING", "STRING")
+    RETURN_NAMES = ("audio_path", "result_json", "status")
+    FUNCTION = "run"
+    CATEGORY = "H-Gripe/API"
+
+    def run(
+        self,
+        base_url: str,
+        profile_ref: str,
+        model: str,
+        credentials_ref: str,
+        auth_mode: str,
+        api_key_env: str,
+        api_key: str,
+        voice: str,
+        text: str,
+        response_format: str,
+        speed: float,
+        instructions: str,
+        save_outputs: str,
+        extra_body_json: str,
+        max_attempts: int,
+        timeout_ms: int,
+        force_run_nonce: int,
+    ):
+        extra_body = _parse_json_object(extra_body_json, "extra_body_json")
+        params: dict[str, Any] = {
+            "base_url": base_url,
+            "model": model,
+            "voice": voice,
+            "response_format": response_format,
+            "speed": speed,
+            "extra_body": extra_body,
+            "save_outputs": save_outputs == "enable",
+        }
+        if profile_ref.strip():
+            params["profile_ref"] = profile_ref.strip()
+        if instructions.strip():
+            params["instructions"] = instructions
+
+        task_credentials_ref = _apply_openai_auth(
+            params, auth_mode, credentials_ref, api_key_env, api_key
+        )
+
+        task = {
+            "id": f"comfy-openai-audio-speech-{uuid.uuid4()}",
+            "provider": "openai_compatible",
+            "operation": "audio.speech",
+            "inputs": {
+                "input": text,
+                "force_run_nonce": force_run_nonce,
+            },
+            "params": params,
+            "credentials_ref": task_credentials_ref,
+            "output_type": "audio",
+            "cache_policy": {"enabled": False, "ttl_seconds": None, "key": None},
+            "retry_policy": {
+                "max_attempts": max_attempts,
+                "backoff_ms": 500,
+                "timeout_ms": timeout_ms,
+            },
+        }
+
+        result = run_task(task)
+        _raise_if_failed(result, "H-Gripe OpenAI Compatible Audio Speech")
+        status = str(result.get("status", "unknown"))
+        output_files = result.get("output_files") or []
+        audio_path = ""
+        if output_files and isinstance(output_files[0], dict):
+            audio_path = str(output_files[0].get("path") or "")
+        return (audio_path, json.dumps(result, ensure_ascii=False, indent=2), status)
+
+
+class HGripeOpenAICompatibleAudioText:
+    @classmethod
+    def INPUT_TYPES(cls):
+        return {
+            "required": {
+                "audio_path": ("STRING", {"default": ""}),
+                "operation": (
+                    ["audio.transcriptions", "audio.translations"],
+                    {"default": "audio.transcriptions"},
+                ),
+                "base_url": (
+                    "STRING",
+                    {"default": ""},
+                ),
+                "profile_ref": ("STRING", {"default": ""}),
+                "model": ("STRING", {"default": "gpt-4o-mini-transcribe"}),
+                "credentials_ref": ("STRING", {"default": "openai-main"}),
+                "auth_mode": (
+                    ["credentials_ref", "env_or_key", "no_auth"],
+                    {"default": "credentials_ref"},
+                ),
+                "api_key_env": ("STRING", {"default": "OPENAI_API_KEY"}),
+                "api_key": ("STRING", {"default": ""}),
+                "language": ("STRING", {"default": ""}),
+                "prompt": ("STRING", {"multiline": True, "default": ""}),
+                "response_format": (
+                    ["provider_default", "json", "text", "srt", "verbose_json", "vtt"],
+                    {"default": "json"},
+                ),
+                "temperature": (
+                    "FLOAT",
+                    {"default": 0.0, "min": 0.0, "max": 2.0, "step": 0.1},
+                ),
+                "extra_body_json": ("STRING", {"multiline": True, "default": "{}"}),
+                "max_attempts": ("INT", {"default": 2, "min": 1, "max": 10, "step": 1}),
+                "timeout_ms": (
+                    "INT",
+                    {"default": 180000, "min": 1000, "max": 1200000, "step": 1000},
+                ),
+                "force_run_nonce": (
+                    "INT",
+                    {"default": 0, "min": 0, "max": 2147483647, "step": 1},
+                ),
+            }
+        }
+
+    RETURN_TYPES = ("STRING", "STRING", "STRING")
+    RETURN_NAMES = ("text", "result_json", "status")
+    FUNCTION = "run"
+    CATEGORY = "H-Gripe/API"
+
+    def run(
+        self,
+        audio_path: str,
+        operation: str,
+        base_url: str,
+        profile_ref: str,
+        model: str,
+        credentials_ref: str,
+        auth_mode: str,
+        api_key_env: str,
+        api_key: str,
+        language: str,
+        prompt: str,
+        response_format: str,
+        temperature: float,
+        extra_body_json: str,
+        max_attempts: int,
+        timeout_ms: int,
+        force_run_nonce: int,
+    ):
+        audio_path = audio_path.strip()
+        if not audio_path:
+            raise ValueError("audio_path is required")
+
+        extra_body = _parse_json_object(extra_body_json, "extra_body_json")
+        params: dict[str, Any] = {
+            "base_url": base_url,
+            "model": model,
+            "temperature": temperature,
+            "extra_body": extra_body,
+        }
+        if profile_ref.strip():
+            params["profile_ref"] = profile_ref.strip()
+        if language.strip():
+            params["language"] = language.strip()
+        if prompt.strip():
+            params["prompt"] = prompt
+        if response_format != "provider_default":
+            params["response_format"] = response_format
+
+        task_credentials_ref = _apply_openai_auth(
+            params, auth_mode, credentials_ref, api_key_env, api_key
+        )
+
+        task = {
+            "id": f"comfy-openai-audio-text-{uuid.uuid4()}",
+            "provider": "openai_compatible",
+            "operation": operation,
+            "inputs": {
+                "audio_path": audio_path,
+                "force_run_nonce": force_run_nonce,
+            },
+            "params": params,
+            "credentials_ref": task_credentials_ref,
+            "output_type": "text",
+            "cache_policy": {"enabled": False, "ttl_seconds": None, "key": None},
+            "retry_policy": {
+                "max_attempts": max_attempts,
+                "backoff_ms": 500,
+                "timeout_ms": timeout_ms,
+            },
+        }
+
+        result = run_task(task)
+        _raise_if_failed(result, "H-Gripe OpenAI Compatible Audio Text")
+        status = str(result.get("status", "unknown"))
+        output_json = result.get("output_json") or {}
+        text = str(output_json.get("text") or "")
+        return (text, json.dumps(result, ensure_ascii=False, indent=2), status)
 
 
 class HGripeOpenAICompatibleVision:
@@ -734,16 +1170,22 @@ class HGripeOpenAICompatibleVision:
 
 NODE_CLASS_MAPPINGS = {
     "HGripeCustomHttpApi": HGripeCustomHttpApi,
+    "HGripeCustomHttpAsyncJob": HGripeCustomHttpAsyncJob,
     "HGripeOpenAICompatibleText": HGripeOpenAICompatibleText,
     "HGripeOpenAICompatibleImage": HGripeOpenAICompatibleImage,
     "HGripeOpenAICompatibleImageEdit": HGripeOpenAICompatibleImageEdit,
+    "HGripeOpenAICompatibleAudioSpeech": HGripeOpenAICompatibleAudioSpeech,
+    "HGripeOpenAICompatibleAudioText": HGripeOpenAICompatibleAudioText,
     "HGripeOpenAICompatibleVision": HGripeOpenAICompatibleVision,
 }
 
 NODE_DISPLAY_NAME_MAPPINGS = {
     "HGripeCustomHttpApi": "H-Gripe Custom HTTP API",
+    "HGripeCustomHttpAsyncJob": "H-Gripe Custom HTTP Async Job",
     "HGripeOpenAICompatibleText": "H-Gripe OpenAI Compatible Text",
     "HGripeOpenAICompatibleImage": "H-Gripe OpenAI Compatible Image",
     "HGripeOpenAICompatibleImageEdit": "H-Gripe OpenAI Compatible Image Edit",
+    "HGripeOpenAICompatibleAudioSpeech": "H-Gripe OpenAI Compatible Audio Speech",
+    "HGripeOpenAICompatibleAudioText": "H-Gripe OpenAI Compatible Audio Text",
     "HGripeOpenAICompatibleVision": "H-Gripe OpenAI Compatible Vision",
 }

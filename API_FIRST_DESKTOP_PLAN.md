@@ -208,8 +208,8 @@ Tauri 不只是一个壳，应该承担桌面体验：
 - 已定义统一任务/结果契约：`ApiTask`、`ApiResult`、`CachePolicy`、`RetryPolicy`。
 - 已定义 Provider 注册层和 `Provider` trait。
 - 已实现内存缓存、基础重试框架和 `mock` provider。
-- 已实现 `custom_http` provider，支持通用 HTTP GET/POST、headers、query、JSON body、timeout、重试和 2xx/4xx/5xx 状态分流。
-- 已实现 `openai_compatible` provider，支持 `chat.completions`、`text.generate`、`vision.analyze`、`image.generate`，可配置 `base_url`、API key/env、额外请求体和本地/代理 OpenAI-compatible 服务。
+- 已实现 `custom_http` provider，支持通用 HTTP GET/POST、headers、query、JSON body、timeout、重试、2xx/4xx/5xx 状态分流、成功响应原始 bytes 落盘，以及 `async_job` 提交-轮询-结果下载流程。
+- 已实现 `openai_compatible` provider，支持 `chat.completions`、`text.generate`、`vision.analyze`、`image.generate`、`image.edit`、`audio.speech`、`audio.transcriptions` 和 `audio.translations`，可配置 `base_url`、API key/env、额外请求体和本地/代理 OpenAI-compatible 服务。
 - 已新增 provider profile 第一版：OpenAI-compatible 任务可用 `profile_ref` 引用本地 `user/hgripe/provider_profiles.json`，把 `base_url`、`model`、默认参数、headers、`extra_body`、`credentials_ref` 或 `no_auth` 从 workflow/node 参数里抽出来。
 - 已新增 provider profile 管理入口：`hgripe-api-config profiles list/show/resolve/validate` 可列出、查看、解析预览、校验本地 profile；`resolve` 不输出 API key 或 header 值，后续可直接接入 Tauri 设置页。
 - 已新增 credentials 管理入口：`hgripe-api-config credentials list/show/validate` 可列出、脱敏查看、校验本地 credentials，`show` 不输出明文 API key 或 secret-like header。
@@ -217,11 +217,14 @@ Tauri 不只是一个壳，应该承担桌面体验：
 - 已新增首次启动初始化入口：`hgripe-api-config init` 可创建本地 config/history/output 目录和 starter credentials/profile 模板；默认不覆盖已有文件，`--dry-run` 可预览，`--force` 才覆盖。
 - 已新增 CLI 桥：`hgripe-api-broker`，支持 stdin 输入 `ApiTask` JSON，stdout 输出 `ApiResult` JSON。
 - 已新增 Python 桥接示例：`python/bridge/hgripe_api_bridge.py`。
-- 已新增本地 HTTP 验证示例：`python/bridge/custom_http_example.py`，不依赖外部网络服务。
-- 已新增 OpenAI-compatible 本地验证示例：`python/bridge/openai_compatible_text_example.py`，用本地临时服务模拟 chat completions。
-- 已新增 ComfyUI 薄节点：`custom_nodes/hgripe_api_nodes.py`，当前提供 `H-Gripe Custom HTTP API`、`H-Gripe OpenAI Compatible Text`、`H-Gripe OpenAI Compatible Image`、`H-Gripe OpenAI Compatible Image Edit` 和 `H-Gripe OpenAI Compatible Vision`，把参数组装成 `ApiTask` 后交给 Rust broker。
+- 已新增本地 HTTP 验证示例：`python/bridge/custom_http_example.py`、`python/bridge/custom_http_binary_output_example.py` 和 `python/bridge/custom_http_async_job_example.py`，不依赖外部网络服务。
+- 已新增 OpenAI-compatible 本地验证示例：`python/bridge/openai_compatible_text_example.py`、`python/bridge/openai_compatible_audio_speech_node_example.py` 等，用本地临时服务模拟 provider 响应。
+- 已新增 ComfyUI 薄节点：`custom_nodes/hgripe_api_nodes.py`，当前提供 `H-Gripe Custom HTTP API`、`H-Gripe Custom HTTP Async Job`、`H-Gripe OpenAI Compatible Text`、`H-Gripe OpenAI Compatible Image`、`H-Gripe OpenAI Compatible Image Edit`、`H-Gripe OpenAI Compatible Audio Speech`、`H-Gripe OpenAI Compatible Audio Text` 和 `H-Gripe OpenAI Compatible Vision`，把参数组装成 `ApiTask` 后交给 Rust broker。
+- `H-Gripe Custom HTTP Async Job` 支持通用异步 API：先提交任务，再用 `{job_id}` 轮询状态字段，命中成功状态后可按 JSON path 下载最终文件，适合作为视频生成、本地 GPU 小服务和第三方任务队列 API 的底层通道。
 - `H-Gripe OpenAI Compatible Image` 支持 `b64_json` 和 `url` 返回，并转换为 ComfyUI `IMAGE` tensor，同时保留完整 `result_json` 和 `status` 输出。
-- `H-Gripe OpenAI Compatible Image Edit` 支持把 ComfyUI `IMAGE` tensor 编码后交给 OpenAI-compatible `/images/edits` multipart 接口，并复用图片输出落盘和 tensor 转换逻辑。
+- `H-Gripe OpenAI Compatible Image Edit` 支持把 ComfyUI `IMAGE` tensor 编码后交给 OpenAI-compatible `/images/edits` multipart 接口，也支持可选 `MASK` 输入，并复用图片输出落盘和 tensor 转换逻辑。
+- `H-Gripe OpenAI Compatible Audio Speech` 支持调用 OpenAI-compatible `/audio/speech`，把返回音频 bytes 保存到本地输出目录，并返回本地音频路径。
+- `H-Gripe OpenAI Compatible Audio Text` 支持把本地音频文件上传到 OpenAI-compatible `/audio/transcriptions` 或 `/audio/translations`，返回识别/翻译后的文本和完整 `result_json`。
 - `H-Gripe OpenAI Compatible Vision` 支持把 ComfyUI `IMAGE` tensor 编码为 data URL，通过 OpenAI-compatible chat/vision 接口返回文本分析。
 - 已新增 credential ref 第一版：OpenAI-compatible 节点可用 `credentials_ref` 引用本地凭据，默认读取被 git 忽略的 `user/hgripe/credentials.json`，也支持 `HGRIPE_CREDENTIALS_FILE` 指向其他文件。
 - 已新增本地任务历史第一版：CLI broker 每次执行后追加 JSONL 记录到 `user/hgripe/history/tasks.jsonl`，记录 provider、operation、status、duration、request id、输出文件列表和输出摘要。
@@ -231,6 +234,10 @@ Tauri 不只是一个壳，应该承担桌面体验：
 - 已新增历史清理第一版：`hgripe-api-history cleanup` 支持按最新保留条数、时间、provider、operation、status、是否有输出文件筛选清理；默认 dry-run，只有 `--apply` 才会改 SQLite/JSONL，输出文件需要额外 `--delete-output-files` 才会删除。
 - 已新增本地输出根目录约定：默认 `user/hgripe/outputs`，也支持 `HGRIPE_OUTPUT_DIR` 指定其他目录。
 - `openai_compatible image.generate` 已支持输出落盘：`b64_json` 图片可直接保存，`url` 图片可通过 `download_url_outputs` 下载保存，并写入 `output_files` 和 `images[*].local_path`。
+- `openai_compatible audio.speech` 已支持输出落盘：音频 bytes 默认保存为本地文件，并写入 `output_files` 和 `audio.local_path`。
+- `openai_compatible audio.transcriptions` 和 `audio.translations` 已支持本地音频文件 multipart 上传，返回文本写入 `output_json.text`，适合语音转文字、字幕、音频理解前置处理等个人工作流。
+- `custom_http` 已支持通用响应落盘：`save_response=true` 时会把成功响应的原始 bytes 保存到本地输出根目录，并写入 `output_files`，可用于直接返回图片、音频、视频、PDF 等文件的 API。
+- `custom_http async_job` 已支持提交、轮询、成功/失败状态判断、最终结果 URL 下载和 `output_files` 落盘，是后续接 Kling、Runway、Veo、Replicate 或本地 GPU 服务的通用基座。
 
 当前验证命令：
 
@@ -239,9 +246,13 @@ cargo test -p hgripe-api
 cargo build -p hgripe-api --bins
 .\.venv\Scripts\python.exe python\bridge\mock_task_example.py
 .\.venv\Scripts\python.exe python\bridge\custom_http_example.py
+.\.venv\Scripts\python.exe python\bridge\custom_http_binary_output_example.py
+.\.venv\Scripts\python.exe python\bridge\custom_http_async_job_example.py
 .\.venv\Scripts\python.exe python\bridge\openai_compatible_text_example.py
 .\.venv\Scripts\python.exe python\bridge\openai_compatible_image_node_example.py
 .\.venv\Scripts\python.exe python\bridge\openai_compatible_image_edit_node_example.py
+.\.venv\Scripts\python.exe python\bridge\openai_compatible_audio_speech_node_example.py
+.\.venv\Scripts\python.exe python\bridge\openai_compatible_audio_text_node_example.py
 .\.venv\Scripts\python.exe python\bridge\openai_compatible_vision_node_example.py
 .\.venv\Scripts\python.exe python\bridge\openai_compatible_credentials_ref_example.py
 .\.venv\Scripts\python.exe python\bridge\openai_compatible_profile_example.py
@@ -270,8 +281,8 @@ cargo build -p hgripe-api --bins
 
 - 后续把 credential ref 从本地 JSON 文件升级到 Tauri/系统 keychain，并把 provider profile 管理接入桌面设置页。
 - 把历史列表、详情、重跑和清理接入 Tauri 桌面 UI。
-- 把输出落盘能力扩展到通用下载、视频、音频和 Image Edit 节点。
-- 把 ComfyUI 节点继续扩展为更多常用 API 专用节点，例如 OpenAI-compatible Image Edit、Video、Audio。
+- 把输出落盘能力继续扩展到更多专用视频、音频节点。
+- 把 ComfyUI 节点继续扩展为更多常用 API 专用节点，例如 OpenAI-compatible Video、Audio Transcription、Provider-specific Video/Image APIs。
 
 ### Phase 2: Tauri Shell
 

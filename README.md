@@ -74,6 +74,10 @@ user/hgripe/outputs
 ```
 
 `openai_compatible image.generate` can save `b64_json` and downloaded `url` image outputs there and return those paths through `output_files`.
+`openai_compatible audio.speech` saves generated audio bytes there by default and returns the local audio file through `output_files`.
+`openai_compatible audio.transcriptions` and `audio.translations` upload local audio files with multipart requests and return extracted text through `output_json.text`.
+`custom_http` can also save raw successful response bytes when `save_response=true`, which is useful for API endpoints that directly return images, audio, video, PDFs, or other files.
+`custom_http async_job` can submit an async API job, poll a status endpoint, and download a final result URL into `output_files`.
 
 Useful environment overrides:
 
@@ -92,9 +96,13 @@ cargo test -p hgripe-api
 cargo build -p hgripe-api --bins
 .\.venv\Scripts\python.exe python\bridge\mock_task_example.py
 .\.venv\Scripts\python.exe python\bridge\custom_http_example.py
+.\.venv\Scripts\python.exe python\bridge\custom_http_binary_output_example.py
+.\.venv\Scripts\python.exe python\bridge\custom_http_async_job_example.py
 .\.venv\Scripts\python.exe python\bridge\openai_compatible_text_example.py
 .\.venv\Scripts\python.exe python\bridge\openai_compatible_image_node_example.py
 .\.venv\Scripts\python.exe python\bridge\openai_compatible_image_edit_node_example.py
+.\.venv\Scripts\python.exe python\bridge\openai_compatible_audio_speech_node_example.py
+.\.venv\Scripts\python.exe python\bridge\openai_compatible_audio_text_node_example.py
 .\.venv\Scripts\python.exe python\bridge\openai_compatible_vision_node_example.py
 .\.venv\Scripts\python.exe python\bridge\openai_compatible_credentials_ref_example.py
 .\.venv\Scripts\python.exe python\bridge\openai_compatible_profile_example.py

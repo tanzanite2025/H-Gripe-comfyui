@@ -26,6 +26,13 @@ struct JsonResponse {
     provider_request_id: Option<String>,
 }
 
+struct BinaryResponse {
+    status: StatusCode,
+    body: Vec<u8>,
+    content_type: Option<String>,
+    provider_request_id: Option<String>,
+}
+
 struct MultipartImage {
     bytes: Vec<u8>,
     filename: String,
@@ -61,6 +68,9 @@ impl Provider for OpenAiCompatibleProvider {
         matches!(
             operation,
             "chat.completions"
+                | "audio.speech"
+                | "audio.transcriptions"
+                | "audio.translations"
                 | "chat.generate"
                 | "text.generate"
                 | "vision.analyze"
@@ -72,6 +82,8 @@ impl Provider for OpenAiCompatibleProvider {
     async fn execute(&self, task: &ApiTask) -> BrokerResult<ApiResult> {
         let task = apply_provider_profile(task)?;
         match task.operation.as_str() {
+            "audio.speech" => self.execute_audio_speech(&task).await,
+            "audio.transcriptions" | "audio.translations" => self.execute_audio_text(&task).await,
             "image.edit" => self.execute_image_edit(&task).await,
             "image.generate" => self.execute_image(&task).await,
             _ => self.execute_chat(&task).await,
@@ -80,6 +92,117 @@ impl Provider for OpenAiCompatibleProvider {
 }
 
 impl OpenAiCompatibleProvider {
+    async fn execute_audio_speech(&self, task: &ApiTask) -> BrokerResult<ApiResult> {
+        let mut body = Map::new();
+        body.insert("model".to_string(), json!(required_str(task, "model")?));
+        body.insert("input".to_string(), json!(required_audio_input(task)?));
+        body.insert("voice".to_string(), json!(required_str(task, "voice")?));
+
+        copy_optional_fields(
+            task,
+            &mut body,
+            &[
+                "response_format",
+                "speed",
+                "instructions",
+                "user",
+                "voice_settings",
+            ],
+        );
+        merge_extra_body(task, &mut body)?;
+
+        let path = value_str(task, "path").unwrap_or("/audio/speech");
+        let response = self
+            .send_json_bytes(task, path, Value::Object(body))
+            .await?;
+
+        if response.status.is_server_error() {
+            return Err(BrokerError::Provider(format!(
+                "server error {} from OpenAI-compatible provider",
+                response.status.as_u16()
+            )));
+        }
+
+        if response.status.is_success() {
+            let save_outputs = value_bool(task, "save_outputs").unwrap_or(true);
+            let output_files = if save_outputs {
+                vec![save_audio_output(
+                    task,
+                    &response.body,
+                    response.content_type.as_deref(),
+                )?]
+            } else {
+                Vec::new()
+            };
+            let audio = audio_output_json(output_files.first(), response.content_type.as_deref());
+            let mut result = ApiResult::succeeded(
+                task.id.clone(),
+                Some(json!({
+                    "audio": audio,
+                    "content_type": response.content_type.clone(),
+                    "size_bytes": response.body.len(),
+                    "saved": !output_files.is_empty(),
+                })),
+            );
+            result.provider_request_id = response.provider_request_id;
+            result.output_files = output_files;
+            Ok(result)
+        } else {
+            Ok(failed_binary_result(task, response))
+        }
+    }
+
+    async fn execute_audio_text(&self, task: &ApiTask) -> BrokerResult<ApiResult> {
+        let audio_file = multipart_audio_file_from_task(task)?.ok_or_else(|| {
+            BrokerError::Provider(
+                "audio transcription/translation requires audio_path, file_path, audio_data_url, audio_b64, or audio_base64"
+                    .to_string(),
+            )
+        })?;
+
+        let mut form = Form::new()
+            .part("file", audio_file.into_part()?)
+            .text("model", required_str(task, "model")?.to_string());
+
+        form = copy_optional_form_fields(
+            task,
+            form,
+            &[
+                "language",
+                "prompt",
+                "response_format",
+                "temperature",
+                "timestamp_granularities",
+                "include",
+                "stream",
+                "chunking_strategy",
+            ],
+        );
+        form = merge_extra_body_form(task, form)?;
+
+        let default_path = match task.operation.as_str() {
+            "audio.translations" => "/audio/translations",
+            _ => "/audio/transcriptions",
+        };
+        let path = value_str(task, "path").unwrap_or(default_path);
+        let response = self.send_multipart(task, path, form).await?;
+
+        if response.status.is_success() {
+            let text = extract_audio_text(&response.body);
+            let mut result = ApiResult::succeeded(
+                task.id.clone(),
+                Some(json!({
+                    "text": text,
+                    "raw": response.body,
+                })),
+            );
+            result.provider_request_id = response.provider_request_id;
+            Ok(result)
+        } else {
+            Ok(failed_result(task, response))
+        }
+    }
+
     async fn execute_chat(&self, task: &ApiTask) -> BrokerResult<ApiResult> {
         if value_bool(task, "stream").unwrap_or(false) {
             return Err(BrokerError::Provider(
@@ -429,6 +552,70 @@ impl OpenAiCompatibleProvider {
         })
     }
 
+    async fn send_json_bytes(
+        &self,
+        task: &ApiTask,
+        path: &str,
+        request_body: Value,
+    ) -> BrokerResult<BinaryResponse> {
+        let credentials = resolve_credentials(task)?;
+        let url = endpoint_url(task, path, credentials.as_ref());
+        let mut request = self.client.post(url).json(&request_body);
+
+        if let Some(timeout_ms) = task.retry_policy.timeout_ms {
+            request = request.timeout(Duration::from_millis(timeout_ms));
+        }
+
+        if let Some(api_key) = resolve_api_key(task, credentials.as_ref())? {
+            request = request.bearer_auth(api_key);
+        }
+
+        if let Some(headers) = credentials
+            .as_ref()
+            .and_then(|entry| entry.headers.as_ref())
+        {
+            for (name, header_value) in headers {
+                request = request.header(name, header_value);
+            }
+        }
+
+        if let Some(headers) = value(task, "headers").and_then(Value::as_object) {
+            for (name, header_value) in headers {
+                if let Some(header_value) = header_value.as_str() {
+                    request = request.header(name, header_value);
+                }
+            }
+        }
+
+        let response = request.send().await.map_err(|err| {
+            BrokerError::Provider(format!("OpenAI-compatible request failed: {err}"))
+        })?;
+        let status = response.status();
+        let headers = response.headers().clone();
+        let provider_request_id = headers
+            .get("x-request-id")
+            .or_else(|| headers.get("request-id"))
+            .or_else(|| headers.get("openai-request-id"))
+            .and_then(|value| value.to_str().ok())
+            .map(str::to_string);
+        let content_type = headers
+            .get(CONTENT_TYPE)
+            .and_then(|value| value.to_str().ok())
+            .map(normalized_content_type);
+        let body = response
+            .bytes()
+            .await
+            .map_err(|err| BrokerError::Provider(format!("failed to read audio body: {err}")))?
+            .to_vec();
+
+        Ok(BinaryResponse {
+            status,
+            body,
+            content_type,
+            provider_request_id,
+        })
+    }
+
     async fn send_multipart(
         &self,
         task: &ApiTask,
@@ -589,6 +776,82 @@ fn multipart_image_from_task(task: &ApiTask, prefix: &str) -> BrokerResult<Optio
     Ok(None)
 }
 
+fn multipart_audio_file_from_task(task: &ApiTask) -> BrokerResult<Option<MultipartImage>> {
+    if let Some(data_url) = value_str(task, "audio_data_url")
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+    {
+        let (mime_type, bytes) = decode_data_url(data_url)?;
+        return Ok(Some(MultipartImage {
+            bytes,
+            filename: multipart_filename(task, "audio", &mime_type),
+            mime_type,
+        }));
+    }
+
+    for key in ["audio_b64", "audio_base64"] {
+        if let Some(encoded) = value_str(task, key)
+            .map(str::trim)
+            .filter(|value| !value.is_empty())
+        {
+            let bytes = BASE64_STANDARD.decode(encoded).map_err(|err| {
+                BrokerError::Provider(format!("failed to decode {key} audio: {err}"))
+            })?;
+            let mime_type = value_str(task, "audio_mime_type")
+                .map(str::trim)
+                .filter(|value| !value.is_empty())
+                .map(str::to_string)
+                .or_else(|| audio_mime_type_from_extension("wav"))
+                .unwrap_or_else(|| "application/octet-stream".to_string());
+            return Ok(Some(MultipartImage {
+                bytes,
+                filename: multipart_filename(task, "audio", &mime_type),
+                mime_type,
+            }));
+        }
+    }
+
+    let Some(path) = value_str(task, "audio_path")
+        .or_else(|| value_str(task, "file_path"))
+        .or_else(|| value_str(task, "input_audio_path"))
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+    else {
+        return Ok(None);
+    };
+
+    let path = Path::new(path);
+    let bytes = fs::read(path).map_err(|err| {
+        BrokerError::Provider(format!(
+            "failed to read audio file {}: {err}",
+            path.display()
+        ))
+    })?;
+    let mime_type = value_str(task, "audio_mime_type")
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .map(str::to_string)
+        .or_else(|| audio_mime_type_from_path(path))
+        .unwrap_or_else(|| "application/octet-stream".to_string());
+    let filename = value_str(task, "audio_filename")
+        .or_else(|| value_str(task, "file_filename"))
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .map(str::to_string)
+        .or_else(|| {
+            path.file_name()
+                .and_then(|name| name.to_str())
+                .map(str::to_string)
+        })
+        .unwrap_or_else(|| filename_for_mime_type("audio", &mime_type));
+
+    Ok(Some(MultipartImage {
+        bytes,
+        filename,
+        mime_type,
+    }))
+}
+
 fn decode_data_url(data_url: &str) -> BrokerResult<(String, Vec<u8>)> {
     let (metadata, encoded) = data_url
         .split_once(',')
@@ -623,6 +886,15 @@ fn multipart_filename(task: &ApiTask, prefix: &str, mime_type: &str) -> String {
 
 fn filename_for_mime_type(prefix: &str, mime_type: &str) -> String {
     let extension = match mime_type {
+        "audio/aac" => "aac",
+        "audio/flac" => "flac",
+        "audio/mp4" => "m4a",
+        "audio/mpeg" => "mp3",
+        "audio/ogg" => "ogg",
+        "audio/opus" => "opus",
+        "audio/pcm" => "pcm",
+        "audio/wav" => "wav",
+        "audio/webm" => "webm",
         "image/jpeg" => "jpg",
         "image/webp" => "webp",
         "image/gif" => "gif",
@@ -630,6 +902,14 @@ fn filename_for_mime_type(prefix: &str, mime_type: &str) -> String {
         _ => "bin",
     };
     format!("{prefix}.{extension}")
+}
+
+fn audio_mime_type_from_path(path: &Path) -> Option<String> {
+    path.extension()
+        .and_then(|extension| extension.to_str())
+        .map(|extension| extension.to_ascii_lowercase())
+        .as_deref()
+        .and_then(audio_mime_type_from_extension)
 }
 
 fn mime_type_from_path(path: &Path) -> Option<String> {
@@ -822,6 +1102,14 @@ fn required_prompt(task: &ApiTask) -> BrokerResult<&str> {
         })
 }
 
+fn required_audio_input(task: &ApiTask) -> BrokerResult<&str> {
+    value_str(task, "input")
+        .or_else(|| value_str(task, "text"))
+        .or_else(|| value_str(task, "prompt"))
+        .filter(|value| !value.trim().is_empty())
+        .ok_or_else(|| BrokerError::Provider("audio.speech requires input/text/prompt".to_string()))
+}
+
 fn prompt_messages(task: &ApiTask) -> BrokerResult<Vec<Value>> {
     let prompt = required_prompt(task)?;
     let mut messages = Vec::new();
@@ -889,6 +1177,94 @@ fn multipart_value_to_string(value: &Value) -> String {
         .as_str()
         .map(str::to_string)
         .unwrap_or_else(|| value.to_string())
+}
+
+fn save_audio_output(
+    task: &ApiTask,
+    audio_bytes: &[u8],
+    content_type: Option<&str>,
+) -> BrokerResult<OutputFile> {
+    let extension = audio_output_extension(task, content_type);
+    let mime_type = content_type
+        .map(str::to_string)
+        .or_else(|| audio_mime_type_from_extension(&extension));
+    write_task_output_bytes(
+        value_str(task, "output_dir"),
+        task,
+        0,
+        audio_bytes,
+        mime_type.as_deref(),
+        &extension,
+    )
+}
+
+fn audio_output_json(output_file: Option<&OutputFile>, content_type: Option<&str>) -> Value {
+    let Some(output_file) = output_file else {
+        return json!({
+            "local_path": Value::Null,
+            "content_type": content_type,
+        });
+    };
+
+    json!({
+        "local_path": output_file.path,
+        "mime_type": output_file.mime_type,
+        "size_bytes": output_file.size_bytes,
+        "sha256": output_file.sha256,
+    })
+}
+
+fn audio_output_extension(task: &ApiTask, content_type: Option<&str>) -> String {
+    if let Some(extension) = value_str(task, "output_extension")
+        .or_else(|| value_str(task, "output_format"))
+        .or_else(|| value_str(task, "response_format"))
+        .map(str::trim)
+        .filter(|value| !value.is_empty() && *value != "provider_default")
+    {
+        return match extension {
+            "mpeg" => "mp3".to_string(),
+            value => value.trim_start_matches('.').to_ascii_lowercase(),
+        };
+    }
+
+    match content_type.unwrap_or("").to_ascii_lowercase().as_str() {
+        "audio/aac" => "aac",
+        "audio/flac" => "flac",
+        "audio/mpeg" | "audio/mp3" => "mp3",
+        "audio/ogg" | "audio/opus" => "opus",
+        "audio/wav" | "audio/x-wav" => "wav",
+        "audio/webm" => "webm",
+        _ => "bin",
+    }
+    .to_string()
+}
+
+fn audio_mime_type_from_extension(extension: &str) -> Option<String> {
+    match extension {
+        "aac" => Some("audio/aac".to_string()),
+        "flac" => Some("audio/flac".to_string()),
+        "m4a" => Some("audio/mp4".to_string()),
+        "mp3" => Some("audio/mpeg".to_string()),
+        "mp4" => Some("audio/mp4".to_string()),
+        "mpeg" => Some("audio/mpeg".to_string()),
+        "oga" => Some("audio/ogg".to_string()),
+        "ogg" => Some("audio/ogg".to_string()),
+        "opus" => Some("audio/opus".to_string()),
+        "pcm" => Some("audio/pcm".to_string()),
+        "wav" => Some("audio/wav".to_string()),
+        "webm" => Some("audio/webm".to_string()),
+        _ => None,
+    }
+}
+
+fn normalized_content_type(value: &str) -> String {
+    value
+        .split(';')
+        .next()
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .unwrap_or(value)
+        .to_string()
 }
 
 fn endpoint_url(task: &ApiTask, path: &str, credentials: Option<&CredentialEntry>) -> String {
@@ -993,6 +1369,22 @@ fn extract_chat_text(body: &Value) -> String {
         .to_string()
 }
 
+fn extract_audio_text(body: &Value) -> String {
+    if let Some(text) = body.as_str() {
+        return text.to_string();
+    }
+
+    body.get("text")
+        .and_then(Value::as_str)
+        .or_else(|| {
+            body.get("transcription")
+                .and_then(|value| value.get("text"))
+                .and_then(Value::as_str)
+        })
+        .unwrap_or("")
+        .to_string()
+}
+
 fn failed_result(task: &ApiTask, response: JsonResponse) -> ApiResult {
     let error = response.body.get("error");
     let code = error
@@ -1018,6 +1410,51 @@ fn failed_result(task: &ApiTask, response: JsonResponse) -> ApiResult {
         output_json: Some(json!({
             "status_code": response.status.as_u16(),
             "raw": response.body,
+        })),
+        metadata: BTreeMap::new(),
+        cost: None,
+        duration_ms: 0,
+        provider_request_id: response.provider_request_id,
+        cache_hit: false,
+        error: Some(ApiErrorInfo {
+            code,
+            message,
+            retryable: false,
+        }),
+    }
+}
+
+fn failed_binary_result(task: &ApiTask, response: BinaryResponse) -> ApiResult {
+    let body = if response.content_type.as_deref() == Some("application/json") {
+        serde_json::from_slice::<Value>(&response.body)
+            .unwrap_or_else(|_| json!(String::from_utf8_lossy(&response.body).to_string()))
+    } else {
+        json!(String::from_utf8_lossy(&response.body).to_string())
+    };
+    let error = body.get("error");
+    let code = error
+        .and_then(|error| error.get("code"))
+        .and_then(Value::as_str)
+        .map(str::to_string)
+        .unwrap_or_else(|| response.status.as_u16().to_string());
+    let message = error
+        .and_then(|error| error.get("message"))
+        .and_then(Value::as_str)
+        .map(str::to_string)
+        .unwrap_or_else(|| {
+            format!(
+                "OpenAI-compatible request failed with status {}",
+                response.status.as_u16()
+            )
+        });
+
+    ApiResult {
+        id: task.id.clone(),
+        status: ApiStatus::Failed,
+        output_files: Vec::new(),
+        output_json: Some(json!({
+            "status_code": response.status.as_u16(),
+            "raw": body,
         })),
         metadata: BTreeMap::new(),
         cost: None,

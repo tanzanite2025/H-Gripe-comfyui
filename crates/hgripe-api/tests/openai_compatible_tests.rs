@@ -113,6 +113,163 @@ async fn openai_compatible_image_returns_raw_data() {
 }
 
 #[tokio::test]
+async fn openai_compatible_audio_speech_saves_output_file() {
+    let audio_body = b"ID3 fake mp3 bytes from provider";
+    let (base_url, request_rx) = spawn_once_binary_server(
+        "HTTP/1.1 200 OK",
+        "audio/mpeg",
+        audio_body,
+        Some("openai-audio-speech-test"),
+    )
+    .await;
+    let output_dir = temp_output_dir();
+
+    let mut broker = ApiBroker::new();
+    broker.register_provider(OpenAiCompatibleProvider::default());
+
+    let mut task = ApiTask::new("openai_compatible", "audio.speech");
+    task.id = "audio-speech-test".to_string();
+    task.params.insert("base_url".into(), json!(base_url));
+    task.params.insert("no_auth".into(), json!(true));
+    task.params.insert("model".into(), json!("tts-model"));
+    task.params.insert("voice".into(), json!("alloy"));
+    task.params.insert("response_format".into(), json!("mp3"));
+    task.params.insert(
+        "output_dir".into(),
+        json!(output_dir.to_string_lossy().to_string()),
+    );
+    task.inputs.insert("input".into(), json!("hello audio"));
+
+    let result = broker
+        .execute(task)
+        .await
+        .expect("audio speech task should run");
+    let request = request_rx.await.expect("server should capture request");
+
+    assert_eq!(result.status, ApiStatus::Succeeded);
+    assert_eq!(
+        result.provider_request_id.as_deref(),
+        Some("openai-audio-speech-test")
+    );
+    assert_eq!(result.output_files.len(), 1);
+    let output_file = &result.output_files[0];
+    assert!(output_file.path.ends_with(".mp3"));
+    assert_eq!(output_file.mime_type.as_deref(), Some("audio/mpeg"));
+    assert_eq!(output_file.size_bytes, Some(audio_body.len() as u64));
+    assert_eq!(fs::read(&output_file.path).unwrap(), audio_body);
+
+    let output_json = result.output_json.unwrap();
+    assert_eq!(output_json["saved"], json!(true));
+    assert_eq!(output_json["audio"]["local_path"], json!(output_file.path));
+    assert!(request.contains("POST /audio/speech HTTP/1.1"));
+    assert!(request.contains(r#""model":"tts-model""#));
+    assert!(request.contains(r#""voice":"alloy""#));
+    assert!(request.contains(r#""input":"hello audio""#));
+
+    let _ = fs::remove_dir_all(output_dir);
+}
+
+#[tokio::test]
+async fn openai_compatible_audio_transcription_sends_multipart_audio() {
+    let (base_url, request_rx) = spawn_once_json_server(
+        "HTTP/1.1 200 OK",
+        r#"{"text":"hello transcript"}"#,
+        Some("openai-audio-transcription-test"),
+    )
+    .await;
+    let audio_file = write_temp_audio_file("wav", b"RIFF fake wav bytes");
+
+    let mut broker = ApiBroker::new();
+    broker.register_provider(OpenAiCompatibleProvider::default());
+
+    let mut task = ApiTask::new("openai_compatible", "audio.transcriptions");
+    task.params.insert("base_url".into(), json!(base_url));
+    task.params.insert("no_auth".into(), json!(true));
+    task.params
+        .insert("model".into(), json!("transcribe-model"));
+    task.params.insert("language".into(), json!("zh"));
+    task.params.insert("prompt".into(), json!("domain words"));
+    task.params.insert("response_format".into(), json!("json"));
+    task.inputs.insert(
+        "audio_path".into(),
+        json!(audio_file.to_string_lossy().to_string()),
+    );
+
+    let result = broker
+        .execute(task)
+        .await
+        .expect("audio transcription task should run");
+    let request = request_rx.await.expect("server should capture request");
+    let _ = fs::remove_file(audio_file);
+
+    assert_eq!(result.status, ApiStatus::Succeeded);
+    assert_eq!(
+        result.provider_request_id.as_deref(),
+        Some("openai-audio-transcription-test")
+    );
+    assert_eq!(
+        result.output_json.unwrap()["text"],
+        json!("hello transcript")
+    );
+    assert!(request.contains("POST /audio/transcriptions HTTP/1.1"));
+    assert!(request
+        .to_lowercase()
+        .contains("content-type: multipart/form-data"));
+    assert!(request.contains(r#"name="file"; filename=""#));
+    assert!(request.contains(".wav"));
+    assert!(request.contains(r#"name="model""#));
+    assert!(request.contains("transcribe-model"));
+    assert!(request.contains(r#"name="language""#));
+    assert!(request.contains("zh"));
+    assert!(request.contains(r#"name="prompt""#));
+    assert!(request.contains("domain words"));
+}
+
+#[tokio::test]
+async fn openai_compatible_audio_translation_uses_translation_endpoint() {
+    let (base_url, request_rx) = spawn_once_json_server(
+        "HTTP/1.1 200 OK",
+        r#"{"text":"translated transcript"}"#,
+        Some("openai-audio-translation-test"),
+    )
+    .await;
+    let audio_file = write_temp_audio_file("mp3", b"ID3 fake mp3 bytes");
+
+    let mut broker = ApiBroker::new();
+    broker.register_provider(OpenAiCompatibleProvider::default());
+
+    let mut task = ApiTask::new("openai_compatible", "audio.translations");
+    task.params.insert("base_url".into(), json!(base_url));
+    task.params.insert("no_auth".into(), json!(true));
+    task.params.insert("model".into(), json!("translate-model"));
+    task.inputs.insert(
+        "audio_path".into(),
+        json!(audio_file.to_string_lossy().to_string()),
+    );
+
+    let result = broker
+        .execute(task)
+        .await
+        .expect("audio translation task should run");
+    let request = request_rx.await.expect("server should capture request");
+    let _ = fs::remove_file(audio_file);
+
+    assert_eq!(result.status, ApiStatus::Succeeded);
+    assert_eq!(
+        result.provider_request_id.as_deref(),
+        Some("openai-audio-translation-test")
+    );
+    assert_eq!(
+        result.output_json.unwrap()["text"],
+        json!("translated transcript")
+    );
+    assert!(request.contains("POST /audio/translations HTTP/1.1"));
+    assert!(request.contains(r#"name="file"; filename=""#));
+    assert!(request.contains(".mp3"));
+    assert!(request.contains("translate-model"));
+}
+
+#[tokio::test]
 async fn openai_compatible_image_saves_b64_output_file() {
     let image_b64 = "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+/p9sAAAAASUVORK5CYII=";
     let body = format!(
@@ -188,6 +345,10 @@ async fn openai_compatible_image_edit_sends_multipart_image() {
         "image_data_url".into(),
         json!(format!("data:image/png;base64,{image_b64}")),
     );
+    task.inputs.insert(
+        "mask_data_url".into(),
+        json!(format!("data:image/png;base64,{image_b64}")),
+    );
 
     let result = broker
         .execute(task)
@@ -209,6 +370,7 @@ async fn openai_compatible_image_edit_sends_multipart_image() {
         .to_lowercase()
         .contains("content-type: multipart/form-data"));
     assert!(request.contains(r#"name="image"; filename="image.png""#));
+    assert!(request.contains(r#"name="mask"; filename="mask.png""#));
     assert!(request.contains(r#"name="prompt""#));
     assert!(request.contains("edit a small cat"));
     assert!(request.contains(r#"name="model""#));
@@ -418,6 +580,44 @@ async fn spawn_once_json_server(
     (format!("http://{addr}"), request_rx)
 }
 
+async fn spawn_once_binary_server(
+    status_line: &'static str,
+    content_type: &'static str,
+    body: &'static [u8],
+    request_id: Option<&'static str>,
+) -> (String, oneshot::Receiver<String>) {
+    let listener = TcpListener::bind("127.0.0.1:0")
+        .await
+        .expect("test server should bind");
+    let addr = listener.local_addr().expect("test server should have addr");
+    let (request_tx, request_rx) = oneshot::channel();
+
+    tokio::spawn(async move {
+        let (mut socket, _) = listener.accept().await.expect("test server should accept");
+        let request = read_http_request(&mut socket).await;
+        let _ = request_tx.send(request);
+
+        let request_header = request_id
+            .map(|id| format!("X-Request-Id: {id}\r\n"))
+            .unwrap_or_default();
+        let response_header = format!(
+            "{status_line}\r\nContent-Type: {content_type}\r\n{request_header}Content-Length: {}\r\nConnection: close\r\n\r\n",
+            body.len()
+        );
+
+        socket
+            .write_all(response_header.as_bytes())
+            .await
+            .expect("test server should write response header");
+        socket
+            .write_all(body)
+            .await
+            .expect("test server should write response body");
+    });
+
+    (format!("http://{addr}"), request_rx)
+}
+
 async fn read_http_request(socket: &mut tokio::net::TcpStream) -> String {
     let mut buffer = Vec::new();
     let mut chunk = [0_u8; 1024];
@@ -503,6 +703,12 @@ fn write_temp_profiles(base_url: &str) -> std::path::PathBuf {
     });
     fs::write(&path, serde_json::to_string_pretty(&document).unwrap())
         .expect("provider profiles file should be written");
+    path
+}
+
+fn write_temp_audio_file(extension: &str, bytes: &[u8]) -> std::path::PathBuf {
+    let path = std::env::temp_dir().join(format!("hgripe-audio-{}.{}", temp_suffix(), extension));
+    fs::write(&path, bytes).expect("audio fixture should be written");
     path
 }
 

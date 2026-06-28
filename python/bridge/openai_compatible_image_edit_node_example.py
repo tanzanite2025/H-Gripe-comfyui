@@ -36,8 +36,8 @@ class ExampleHandler(BaseHTTPRequestHandler):
                 {
                     "b64_json": self.image_b64,
                     "revised_prompt": (
-                        "multipart edit received"
-                        if b'name="image"' in request_body
+                        "multipart edit with mask received"
+                        if b'name="image"' in request_body and b'name="mask"' in request_body
                         else "missing image"
                     ),
                 }
@@ -62,6 +62,8 @@ thread.start()
 try:
     image = torch.zeros((1, 3, 2, 3), dtype=torch.float32)
     image[:, :, :, 0] = 1.0
+    mask = torch.zeros((1, 3, 2), dtype=torch.float32)
+    mask[:, 1:, :] = 1.0
 
     node = HGripeOpenAICompatibleImageEdit()
     edited_image, result_json, status = node.run(
@@ -87,6 +89,7 @@ try:
         max_attempts=2,
         timeout_ms=30000,
         force_run_nonce=0,
+        mask=mask,
     )
     result = json.loads(result_json)
     print(

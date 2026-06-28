@@ -60,12 +60,23 @@ def _pil_to_tensor(pil_image):
     return torch.from_numpy(array)[None,]
 
 
+def _is_smart_object(layer) -> bool:
+    return type(layer).__name__ == "SmartObjectLayer" or getattr(layer, "kind", "") == "smartobject"
+
+
 def _layer_descriptor(layer) -> dict[str, Any]:
     left, top, right, bottom = layer.bbox
+    if layer.is_group():
+        kind = "group"
+    elif _is_smart_object(layer):
+        kind = "smartobject"
+    else:
+        kind = "pixel"
     descriptor: dict[str, Any] = {
         "name": layer.name,
-        "kind": "group" if layer.is_group() else "pixel",
+        "kind": kind,
         "visible": bool(layer.visible),
+        "has_mask": bool(layer.has_mask()),
         "bounds": [int(left), int(top), int(right), int(bottom)],
         "size": [int(right - left), int(bottom - top)],
     }
@@ -74,16 +85,57 @@ def _layer_descriptor(layer) -> dict[str, Any]:
     return descriptor
 
 
-def _find_layer_bounds(layers: list[dict[str, Any]], name: str) -> list[int] | None:
-    for layer in layers:
-        if layer.get("name") == name:
-            return layer.get("bounds")
-        children = layer.get("children")
-        if children:
-            found = _find_layer_bounds(children, name)
+def _find_layer(node, name: str):
+    """Recursively find a layer by name; return (layer, parent, index) or None."""
+    for index, layer in enumerate(node):
+        if layer.name == name:
+            return layer, node, index
+        if layer.is_group():
+            found = _find_layer(layer, name)
             if found is not None:
                 return found
     return None
+
+
+def _mask_tensor_to_pil(mask, mask_index: int):
+    """Convert a ComfyUI MASK tensor to an 'L' image (white = visible)."""
+    import numpy as np
+    from PIL import Image
+
+    if len(mask.shape) == 2:
+        selected = mask
+    else:
+        batch_size = int(mask.shape[0])
+        index = max(0, min(mask_index, batch_size - 1))
+        selected = mask[index]
+    array = selected.detach().cpu().numpy()
+    array = np.clip(array * 255.0, 0, 255).astype(np.uint8)
+    return Image.fromarray(array, mode="L")
+
+
+def _render_text_image(text: str, size: tuple[int, int]):
+    """Render text onto a transparent raster image for an in-PSD metadata layer."""
+    from PIL import Image, ImageDraw
+
+    width, height = max(1, int(size[0])), max(1, int(size[1]))
+    image = Image.new("RGBA", (width, height), (0, 0, 0, 0))
+    draw = ImageDraw.Draw(image)
+    margin = 4
+    lines: list[str] = []
+    for raw_line in text.splitlines() or [""]:
+        line = raw_line
+        while len(line) > 0:
+            lines.append(line[:64])
+            line = line[64:]
+        if not raw_line:
+            lines.append("")
+    y = margin
+    for line in lines:
+        draw.text((margin, y), line, fill=(255, 255, 255, 255))
+        y += 12
+        if y > height - margin:
+            break
+    return image
 
 
 def _fit_into_box(pil_image, box_w: int, box_h: int, fit_mode: str):
@@ -175,12 +227,21 @@ class HGripePsdCompose:
                 ),
                 "generated_layer_name": ("STRING", {"default": "generated"}),
                 "fit_mode": (["contain", "cover", "stretch"], {"default": "contain"}),
-                "z_order": (["above_background", "top"], {"default": "above_background"}),
+                "z_order": (
+                    ["above_background", "placeholder", "top"],
+                    {"default": "above_background"},
+                ),
                 "image_index": ("INT", {"default": 0, "min": 0, "max": 4095, "step": 1}),
             },
             "optional": {
                 "reference_image": ("IMAGE",),
                 "candidates": ("IMAGE",),
+                "mask": ("MASK",),
+                "mask_index": ("INT", {"default": 0, "min": 0, "max": 4095, "step": 1}),
+                "inherit_placeholder_mask": (["enable", "disable"], {"default": "disable"}),
+                "hide_placeholder": (["enable", "disable"], {"default": "enable"}),
+                "visible_candidate": ("INT", {"default": 1, "min": 1, "max": 4096, "step": 1}),
+                "write_metadata_layer": (["enable", "disable"], {"default": "disable"}),
                 "metadata_json": ("STRING", {"multiline": True, "default": "{}"}),
             },
         }
@@ -190,21 +251,26 @@ class HGripePsdCompose:
     FUNCTION = "run"
     CATEGORY = "H-Gripe/PSD"
 
-    def _resolve_box(self, template: dict[str, Any], plan: dict[str, Any]):
-        canvas_w, canvas_h = template["size"]
+    def _resolve_placeholder(self, psd, plan: dict[str, Any]):
+        """Return (left, top, w, h, placeholder_layer, parent, index)."""
+        canvas_w, canvas_h = int(psd.width), int(psd.height)
         name = plan.get("name")
         if isinstance(name, str) and name.strip():
-            bounds = _find_layer_bounds(template["layers"], name.strip())
-            if bounds is None:
+            found = _find_layer(psd, name.strip())
+            if found is None:
                 raise ValueError(f"placeholder layer '{name}' was not found in template")
-            left, top, right, bottom = bounds
-            return int(left), int(top), int(right - left), int(bottom - top)
+            layer, parent, index = found
+            left, top, right, bottom = layer.bbox
+            box_w, box_h = int(right - left), int(bottom - top)
+            if box_w <= 0 or box_h <= 0:
+                box_w, box_h = canvas_w, canvas_h
+            return int(left), int(top), box_w, box_h, layer, parent, index
 
         left = int(plan.get("left", 0))
         top = int(plan.get("top", 0))
-        width = int(plan.get("width", 0)) or int(canvas_w)
-        height = int(plan.get("height", 0)) or int(canvas_h)
-        return left, top, width, height
+        width = int(plan.get("width", 0)) or canvas_w
+        height = int(plan.get("height", 0)) or canvas_h
+        return left, top, width, height, None, None, None
 
     def run(
         self,
@@ -217,6 +283,12 @@ class HGripePsdCompose:
         image_index: int,
         reference_image=None,
         candidates=None,
+        mask=None,
+        mask_index: int = 0,
+        inherit_placeholder_mask: str = "disable",
+        hide_placeholder: str = "enable",
+        visible_candidate: int = 1,
+        write_metadata_layer: str = "disable",
         metadata_json: str = "{}",
     ):
         from psd_tools import PSDImage
@@ -230,17 +302,21 @@ class HGripePsdCompose:
         canvas_w, canvas_h = int(psd.width), int(psd.height)
 
         plan = _parse_json_object(placeholder_json, "placeholder_json")
-        left, top, box_w, box_h = self._resolve_box(template, plan)
+        left, top, box_w, box_h, ph_layer, ph_parent, ph_index = self._resolve_placeholder(
+            psd, plan
+        )
+        placeholder_kind = None
+        if ph_layer is not None:
+            placeholder_kind = "smartobject" if _is_smart_object(ph_layer) else "pixel"
 
         generated_group = Group.new(psd, "03_GENERATED")
         gen_pil = _tensor_to_pil(image, image_index)
         fitted, off_x, off_y = _fit_into_box(gen_pil, box_w, box_h, fit_mode)
-        main_layer = PixelLayer.frompil(
-            fitted, psd, generated_layer_name.strip() or "generated", top + off_y, left + off_x
-        )
+        main_name = generated_layer_name.strip() or "generated"
+        main_layer = PixelLayer.frompil(fitted, psd, main_name, top + off_y, left + off_x)
         generated_group.append(main_layer)
 
-        candidate_count = 0
+        candidate_layers = []
         if candidates is not None:
             batch = int(candidates.shape[0]) if len(candidates.shape) == 4 else 1
             for index in range(batch):
@@ -249,12 +325,39 @@ class HGripePsdCompose:
                 candidate_layer = PixelLayer.frompil(
                     cand_fitted, psd, f"candidate_{index + 2:02d}", top + cand_y, left + cand_x
                 )
-                candidate_layer.visible = False
                 generated_group.append(candidate_layer)
-                candidate_count += 1
+                candidate_layers.append(candidate_layer)
 
-        insert_index = min(1, len(psd)) if z_order == "above_background" else len(psd)
-        psd.insert(insert_index, generated_group)
+        # Placeholder-aware z-ordering: drop the generated group into the placeholder's slot.
+        if z_order == "placeholder" and ph_parent is not None:
+            ph_parent.insert(ph_index, generated_group)
+        elif z_order == "above_background":
+            psd.insert(min(1, len(psd)), generated_group)
+        else:
+            psd.append(generated_group)
+
+        if ph_layer is not None and hide_placeholder == "enable":
+            ph_layer.visible = False
+
+        # Multi-candidate visibility: exactly one of [main, candidate_02, ...] is shown.
+        gallery = [main_layer, *candidate_layers]
+        choice = visible_candidate if 1 <= visible_candidate <= len(gallery) else 1
+        for position, layer in enumerate(gallery, start=1):
+            layer.visible = position == choice
+
+        # Mask: explicit MASK input wins; otherwise optionally inherit the placeholder mask.
+        applied_mask = "none"
+        if mask is not None:
+            mask_pil = _mask_tensor_to_pil(mask, mask_index).resize(fitted.size)
+            main_layer.create_mask(mask_pil, top + off_y, left + off_x)
+            applied_mask = "input"
+        elif inherit_placeholder_mask == "enable" and ph_layer is not None and ph_layer.has_mask():
+            placeholder_mask = ph_layer.mask
+            mask_image = placeholder_mask.topil()
+            if mask_image is not None:
+                mleft, mtop = int(placeholder_mask.bbox[0]), int(placeholder_mask.bbox[1])
+                main_layer.create_mask(mask_image.convert("L"), mtop, mleft)
+                applied_mask = "inherited"
 
         has_reference = False
         if reference_image is not None:
@@ -274,13 +377,37 @@ class HGripePsdCompose:
                 "template_path": psd_path,
                 "canvas": [canvas_w, canvas_h],
                 "placeholder": {"left": left, "top": top, "width": box_w, "height": box_h},
-                "generated_layer": generated_layer_name.strip() or "generated",
+                "placeholder_name": plan.get("name"),
+                "placeholder_kind": placeholder_kind,
+                "generated_layer": main_name,
                 "fit_mode": fit_mode,
                 "z_order": z_order,
-                "candidate_count": candidate_count,
+                "candidate_count": len(candidate_layers),
+                "visible_candidate": choice,
+                "applied_mask": applied_mask,
                 "has_reference": has_reference,
             }
         )
+
+        # In-PSD metadata: psd-tools cannot reliably write editable text (TypeLayer),
+        # so the prompt and generation info are rendered to hidden raster layers.
+        if write_metadata_layer == "enable":
+            meta_group = Group.new(psd, "00_META")
+            prompt_text = str(metadata.get("prompt") or "(no prompt)")
+            info_text = json.dumps(metadata, ensure_ascii=False, indent=2)
+            prompt_layer = PixelLayer.frompil(
+                _render_text_image(prompt_text, (canvas_w, canvas_h)), psd, "prompt", 0, 0
+            )
+            prompt_layer.visible = False
+            meta_group.append(prompt_layer)
+            info_layer = PixelLayer.frompil(
+                _render_text_image(info_text, (canvas_w, canvas_h)), psd, "generation_info", 0, 0
+            )
+            info_layer.visible = False
+            meta_group.append(info_layer)
+            meta_group.visible = False
+            psd.append(meta_group)
+            metadata["metadata_layer"] = True
 
         preview = _pil_to_tensor(psd.composite())
         composed = {"psd": psd, "metadata": metadata}

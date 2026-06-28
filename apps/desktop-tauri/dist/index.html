@@ -14,6 +14,7 @@
 
     <nav class="tabs" id="tabs">
       <button data-tab="dashboard" class="active">Dashboard</button>
+      <button data-tab="studio">PSD Studio</button>
       <button data-tab="credentials">Credentials</button>
       <button data-tab="profiles">Profiles</button>
       <button data-tab="run">Run Task</button>
@@ -33,6 +34,85 @@
         <div id="runtime-info" class="cards"></div>
         <h2>Doctor</h2>
         <pre id="doctor-output" class="json">Loading…</pre>
+      </section>
+
+      <!-- PSD Studio: H-Gripe's own production entry point. It composes an
+           ApiTask (provider profile + prompt + reference image + PSD template)
+           and runs it through the existing broker, so production goes through
+           H-Gripe panels rather than the embedded ComfyUI canvas. -->
+      <section id="studio" class="panel">
+        <div class="row wrap">
+          <h2>PSD Studio</h2>
+          <span class="hint">Compose a production job — pick a provider profile, add a prompt / reference image / PSD template, and generate.</span>
+        </div>
+
+        <div class="studio-grid">
+          <div class="studio-field">
+            <label for="studio-profile">Provider profile</label>
+            <select id="studio-profile"><option value="">— none (use provider below) —</option></select>
+            <div id="studio-profile-summary" class="hint"></div>
+          </div>
+          <div class="studio-field">
+            <label for="studio-provider">Provider</label>
+            <input id="studio-provider" placeholder="mock / openai_compatible / custom_http / replicate" />
+          </div>
+          <div class="studio-field">
+            <label for="studio-operation">Operation</label>
+            <select id="studio-operation">
+              <option value="image.generate">image.generate</option>
+              <option value="image.edit">image.edit</option>
+              <option value="text.generate">text.generate</option>
+              <option value="echo">echo (mock)</option>
+            </select>
+          </div>
+          <div class="studio-field">
+            <label for="studio-output">Output type</label>
+            <select id="studio-output">
+              <option value="image">image</option>
+              <option value="json">json</option>
+              <option value="text">text</option>
+              <option value="files">files</option>
+              <option value="any">any</option>
+            </select>
+          </div>
+        </div>
+
+        <label for="studio-prompt">Prompt</label>
+        <textarea id="studio-prompt" spellcheck="false" placeholder="Describe what to generate…"></textarea>
+
+        <div class="studio-grid">
+          <div class="studio-field">
+            <label for="studio-template">PSD template (path)</label>
+            <input id="studio-template" placeholder="path to .psd template (optional)" />
+            <div class="row">
+              <button id="studio-template-from-psd">Pick from PSD outputs</button>
+            </div>
+          </div>
+          <div class="studio-field">
+            <label for="studio-reference">Reference image (path)</label>
+            <input id="studio-reference" placeholder="path to a reference image (optional)" />
+            <div class="row">
+              <button id="studio-reference-preview">Preview</button>
+              <span class="hint">sent as <code>image_path</code> (used by <code>image.edit</code>)</span>
+            </div>
+          </div>
+        </div>
+        <img id="studio-reference-img" class="psd-preview hidden" alt="reference preview" />
+
+        <label for="studio-params">Params (JSON)</label>
+        <textarea id="studio-params" spellcheck="false" placeholder='{ "model": "…", "size": "1024x1024" }'></textarea>
+
+        <div class="row wrap">
+          <button id="studio-preview">Preview task JSON</button>
+          <button id="studio-run" class="primary">Generate</button>
+          <span id="studio-status" class="status"></span>
+        </div>
+
+        <h3>Task</h3>
+        <pre id="studio-task" class="json"></pre>
+        <h3>Result</h3>
+        <pre id="studio-result" class="json"></pre>
+        <div id="studio-outputs" class="cards"></div>
       </section>
 
       <section id="credentials" class="panel">

@@ -24,6 +24,11 @@ it is a high-level canvas, not the final main UI. The app opens on
 ## Tabs
 
 - **Dashboard** (default) – runtime paths + `doctor` diagnostics.
+- **PSD Studio** – H-Gripe's production entry point. Compose a job from a
+  provider profile + prompt + reference image + PSD template, preview the
+  resulting `ApiTask`, run it through the broker, and open the outputs. The PSD
+  template path is carried on the task (as `inputs.template_path`) so a future
+  export step can write the generated image back into the template.
 - **Credentials / Profiles** – view summaries, validate, and edit
   `credentials.json` / `provider_profiles.json` in place.
 - **Run Task** – submit an `ApiTask` JSON payload to the broker and inspect the

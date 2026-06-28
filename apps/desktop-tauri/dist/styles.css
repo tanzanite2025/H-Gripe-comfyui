@@ -179,6 +179,24 @@ tr:hover td { background: var(--panel); }
   color: var(--muted);
 }
 
+/* PSD Studio */
+.studio-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+  gap: 12px;
+  margin: 10px 0;
+}
+.studio-field { display: flex; flex-direction: column; gap: 6px; }
+#studio label,
+.studio-field > label {
+  color: var(--muted);
+  font-size: 12px;
+  margin-top: 6px;
+}
+#studio textarea { min-height: 90px; }
+#studio-prompt { min-height: 110px; }
+#studio-outputs { margin-top: 12px; }
+
 .psd-grid { display: flex; flex-wrap: wrap; gap: 10px; margin-top: 8px; }
 .psd-card { cursor: pointer; min-width: 200px; }
 .psd-card:hover { border-color: var(--accent); }

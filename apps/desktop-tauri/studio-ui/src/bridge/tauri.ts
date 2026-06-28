@@ -90,6 +90,30 @@ export async function generateThumbnail(req: ThumbnailRequest): Promise<Thumbnai
   })) as ThumbnailResult;
 }
 
+export interface PickFileOptions {
+  title?: string;
+  /** Display name for the extension filter (e.g. "Images"). */
+  filterName?: string;
+  /** Bare extensions without the leading dot (e.g. ["png", "jpg"]). */
+  extensions?: string[];
+}
+
+/**
+ * Open the OS-native file-open dialog (`pick_file`) and resolve to the chosen
+ * path, or `null` if the user cancelled. Outside Tauri there is no native
+ * dialog, so this returns `null` (callers keep the manual path input).
+ */
+export async function pickFile(opts: PickFileOptions = {}): Promise<string | null> {
+  const invoke = tauriInvoke();
+  if (!invoke) return null;
+  const path = await invoke("pick_file", {
+    title: opts.title ?? null,
+    filterName: opts.filterName ?? null,
+    extensions: opts.extensions ?? null,
+  });
+  return (path as string | null) ?? null;
+}
+
 // --- PSD Studio integration -------------------------------------------------
 // Reuses the same backend commands the static PSD Studio tab uses, so the node
 // editor shares provider profiles and the output directory rather than

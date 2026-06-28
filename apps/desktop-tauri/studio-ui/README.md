@@ -57,6 +57,10 @@ src/
 - **Param controls**: `text`, `textarea`, `number`, `select`, `slider`,
   `checkbox`, `path` — rendered by a shared `ParamField` used by both the
   Inspector and the node card.
+- **Native file picker**: `path` controls show a **Browse…** button (inside
+  Tauri) that opens the OS file-open dialog via the `pick_file` command
+  (`tauri-plugin-dialog`), scoped by the spec's `pickerExtensions`. In a plain
+  browser the button is hidden and the manual path input remains.
 - **Inline editing**: params marked `inline` in `nodeSpecs` are editable
   directly on the node card (prompt text, paths, number value, generate
   operation/steps, export filename); the rest stay in the Inspector. Card

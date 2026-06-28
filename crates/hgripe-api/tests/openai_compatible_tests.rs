@@ -110,6 +110,54 @@ async fn openai_compatible_image_returns_raw_data() {
 }
 
 #[tokio::test]
+async fn openai_compatible_image_saves_b64_output_file() {
+    let image_b64 = "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+/p9sAAAAASUVORK5CYII=";
+    let body = format!(
+        r#"{{"created":123,"data":[{{"b64_json":"{image_b64}","revised_prompt":"saved cat"}}]}}"#
+    );
+    let (base_url, _request_rx) =
+        spawn_once_json_server("HTTP/1.1 200 OK", Box::leak(body.into_boxed_str()), None).await;
+    let output_dir = temp_output_dir();
+
+    let mut broker = ApiBroker::new();
+    broker.register_provider(OpenAiCompatibleProvider::default());
+
+    let mut task = ApiTask::new("openai_compatible", "image.generate");
+    task.id = "save-image-test".to_string();
+    task.params.insert("base_url".into(), json!(base_url));
+    task.params.insert("no_auth".into(), json!(true));
+    task.params.insert("model".into(), json!("image-model"));
+    task.params.insert("save_outputs".into(), json!(true));
+    task.params.insert(
+        "output_dir".into(),
+        json!(output_dir.to_string_lossy().to_string()),
+    );
+    task.inputs.insert("prompt".into(), json!("save a cat"));
+
+    let result = broker.execute(task).await.expect("image task should run");
+
+    assert_eq!(result.status, ApiStatus::Succeeded);
+    assert_eq!(result.output_files.len(), 1);
+    let output_file = &result.output_files[0];
+    assert!(std::path::Path::new(&output_file.path).exists());
+    assert_eq!(output_file.mime_type.as_deref(), Some("image/png"));
+    assert!(output_file.size_bytes.unwrap_or(0) > 0);
+    assert!(output_file.sha256.is_some());
+
+    let output_json = result.output_json.unwrap();
+    assert_eq!(
+        output_json["images"][0]["local_path"],
+        json!(output_file.path)
+    );
+    assert_eq!(
+        output_json["images"][0]["local_mime_type"],
+        json!("image/png")
+    );
+
+    let _ = fs::remove_dir_all(output_dir);
+}
+
+#[tokio::test]
 async fn openai_compatible_vision_sends_image_message() {
     let (base_url, request_rx) = spawn_once_json_server(
         "HTTP/1.1 200 OK",
@@ -296,4 +344,12 @@ fn write_temp_credentials(base_url: &str) -> std::path::PathBuf {
     fs::write(&path, serde_json::to_string_pretty(&document).unwrap())
         .expect("credentials file should be written");
     path
+}
+
+fn temp_output_dir() -> std::path::PathBuf {
+    let nonce = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .expect("system time should be valid")
+        .as_nanos();
+    std::env::temp_dir().join(format!("hgripe-output-{nonce}"))
 }

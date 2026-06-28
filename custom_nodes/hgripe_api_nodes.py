@@ -68,6 +68,10 @@ def _raise_if_failed(result: dict[str, Any], node_name: str) -> None:
 
 
 def _image_bytes_from_item(item: dict[str, Any], timeout_seconds: float) -> bytes | None:
+    local_path = item.get("local_path")
+    if isinstance(local_path, str) and local_path.strip():
+        return Path(local_path).read_bytes()
+
     b64_json = item.get("b64_json")
     if isinstance(b64_json, str) and b64_json.strip():
         return base64.b64decode(b64_json)
@@ -359,6 +363,8 @@ class HGripeOpenAICompatibleImage:
                     ["provider_default", "png", "jpeg", "webp"],
                     {"default": "provider_default"},
                 ),
+                "save_outputs": (["enable", "disable"], {"default": "enable"}),
+                "download_url_outputs": (["enable", "disable"], {"default": "enable"}),
                 "extra_body_json": ("STRING", {"multiline": True, "default": "{}"}),
                 "max_attempts": ("INT", {"default": 2, "min": 1, "max": 10, "step": 1}),
                 "timeout_ms": (
@@ -392,6 +398,8 @@ class HGripeOpenAICompatibleImage:
         quality: str,
         style: str,
         output_format: str,
+        save_outputs: str,
+        download_url_outputs: str,
         extra_body_json: str,
         max_attempts: int,
         timeout_ms: int,
@@ -403,6 +411,8 @@ class HGripeOpenAICompatibleImage:
             "model": model,
             "n": n,
             "extra_body": extra_body,
+            "save_outputs": save_outputs == "enable",
+            "download_url_outputs": download_url_outputs == "enable",
         }
 
         task_credentials_ref = _apply_openai_auth(

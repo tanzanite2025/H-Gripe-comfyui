@@ -49,6 +49,30 @@ user/hgripe/credentials.json
 
 You can also point to another file with `HGRIPE_CREDENTIALS_FILE`.
 
+Task history is recorded locally as JSONL and indexed into SQLite for UI/query use:
+
+```text
+user/hgripe/history/tasks.jsonl
+user/hgripe/history/tasks.sqlite3
+```
+
+Generated/downloaded API outputs should use the local output root:
+
+```text
+user/hgripe/outputs
+```
+
+`openai_compatible image.generate` can save `b64_json` and downloaded `url` image outputs there and return those paths through `output_files`.
+
+Useful environment overrides:
+
+```powershell
+$env:HGRIPE_HISTORY_FILE="C:\path\to\tasks.jsonl"
+$env:HGRIPE_HISTORY_DB="C:\path\to\tasks.sqlite3"
+$env:HGRIPE_OUTPUT_DIR="C:\path\to\outputs"
+$env:HGRIPE_HISTORY_DISABLED="1"
+```
+
 Local verification:
 
 ```powershell
@@ -60,6 +84,7 @@ cargo build -p hgripe-api --bin hgripe-api-broker
 .\.venv\Scripts\python.exe python\bridge\openai_compatible_image_node_example.py
 .\.venv\Scripts\python.exe python\bridge\openai_compatible_vision_node_example.py
 .\.venv\Scripts\python.exe python\bridge\openai_compatible_credentials_ref_example.py
+.\.venv\Scripts\python.exe python\bridge\history_tail_example.py
 ```
 
 ComfyUI is the AI creation engine for visual professionals who demand control over every model, every parameter, and every output. Its powerful and modular node graph interface empowers creatives to generate images, videos, 3D models, audio, and more...

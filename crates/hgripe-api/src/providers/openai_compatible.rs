@@ -1,7 +1,10 @@
 use crate::credentials::{load_credential_ref, CredentialEntry};
-use crate::model::{ApiErrorInfo, ApiResult, ApiStatus, ApiTask};
+use crate::model::{ApiErrorInfo, ApiResult, ApiStatus, ApiTask, OutputFile};
+use crate::outputs::write_task_output_bytes;
 use crate::provider::{BrokerError, BrokerResult, Provider};
 use async_trait::async_trait;
+use base64::engine::general_purpose::STANDARD as BASE64_STANDARD;
+use base64::Engine;
 use reqwest::header::CONTENT_TYPE;
 use reqwest::{Client, StatusCode};
 use serde_json::{json, Map, Value};
@@ -143,11 +146,16 @@ impl OpenAiCompatibleProvider {
         let response = self.send_json(task, path, Value::Object(body)).await?;
 
         if response.status.is_success() {
-            let images = response
+            let mut images = response
                 .body
                 .get("data")
                 .cloned()
                 .unwrap_or_else(|| Value::Array(Vec::new()));
+            let output_files = if value_bool(task, "save_outputs").unwrap_or(false) {
+                self.save_image_outputs(task, &mut images).await?
+            } else {
+                Vec::new()
+            };
             let mut result = ApiResult::succeeded(
                 task.id.clone(),
                 Some(json!({
@@ -156,10 +164,105 @@ impl OpenAiCompatibleProvider {
                 })),
             );
             result.provider_request_id = response.provider_request_id;
+            result.output_files = output_files;
             Ok(result)
         } else {
             Ok(failed_result(task, response))
         }
+    }
+
+    async fn save_image_outputs(
+        &self,
+        task: &ApiTask,
+        images: &mut Value,
+    ) -> BrokerResult<Vec<OutputFile>> {
+        let Some(items) = images.as_array_mut() else {
+            return Ok(Vec::new());
+        };
+
+        let mut files = Vec::new();
+        for (index, item) in items.iter_mut().enumerate() {
+            let Some(item_object) = item.as_object_mut() else {
+                continue;
+            };
+
+            let Some(image_bytes) = self.image_bytes_from_item(task, item_object).await? else {
+                continue;
+            };
+
+            let (mime_type, extension) =
+                detect_image_type(&image_bytes).unwrap_or_else(|| fallback_image_type(task));
+            let output_file = write_task_output_bytes(
+                value_str(task, "output_dir"),
+                task,
+                index,
+                &image_bytes,
+                Some(mime_type),
+                extension,
+            )?;
+
+            item_object.insert("local_path".to_string(), json!(output_file.path.clone()));
+            if let Some(mime_type) = output_file.mime_type.as_deref() {
+                item_object.insert("local_mime_type".to_string(), json!(mime_type));
+            }
+            if let Some(size_bytes) = output_file.size_bytes {
+                item_object.insert("local_size_bytes".to_string(), json!(size_bytes));
+            }
+            if let Some(sha256) = output_file.sha256.as_deref() {
+                item_object.insert("local_sha256".to_string(), json!(sha256));
+            }
+
+            files.push(output_file);
+        }
+
+        Ok(files)
+    }
+
+    async fn image_bytes_from_item(
+        &self,
+        task: &ApiTask,
+        item: &Map<String, Value>,
+    ) -> BrokerResult<Option<Vec<u8>>> {
+        if let Some(b64_json) = item.get("b64_json").and_then(Value::as_str) {
+            let b64_json = b64_json.trim();
+            if !b64_json.is_empty() {
+                let bytes = BASE64_STANDARD.decode(b64_json).map_err(|err| {
+                    BrokerError::Provider(format!("failed to decode b64_json image: {err}"))
+                })?;
+                return Ok(Some(bytes));
+            }
+        }
+
+        if !value_bool(task, "download_url_outputs").unwrap_or(false) {
+            return Ok(None);
+        }
+
+        let Some(url) = item.get("url").and_then(Value::as_str) else {
+            return Ok(None);
+        };
+        let url = url.trim();
+        if url.is_empty() {
+            return Ok(None);
+        }
+
+        let mut request = self.client.get(url);
+        if let Some(timeout_ms) = task.retry_policy.timeout_ms {
+            request = request.timeout(Duration::from_millis(timeout_ms));
+        }
+        let response = request.send().await.map_err(|err| {
+            BrokerError::Provider(format!("failed to download image output: {err}"))
+        })?;
+        if !response.status().is_success() {
+            return Err(BrokerError::Provider(format!(
+                "failed to download image output: HTTP {}",
+                response.status().as_u16()
+            )));
+        }
+        let bytes = response
+            .bytes()
+            .await
+            .map_err(|err| BrokerError::Provider(format!("failed to read image output: {err}")))?;
+        Ok(Some(bytes.to_vec()))
     }
 
     async fn send_json(
@@ -252,6 +355,37 @@ fn value_bool(task: &ApiTask, key: &str) -> Option<bool> {
 
 fn credentials_file(task: &ApiTask) -> Option<&str> {
     value_str(task, "credentials_file")
+}
+
+fn detect_image_type(bytes: &[u8]) -> Option<(&'static str, &'static str)> {
+    if bytes.starts_with(b"\x89PNG\r\n\x1a\n") {
+        return Some(("image/png", "png"));
+    }
+    if bytes.starts_with(&[0xff, 0xd8, 0xff]) {
+        return Some(("image/jpeg", "jpg"));
+    }
+    if bytes.starts_with(b"RIFF") && bytes.get(8..12) == Some(b"WEBP") {
+        return Some(("image/webp", "webp"));
+    }
+    if bytes.starts_with(b"GIF87a") || bytes.starts_with(b"GIF89a") {
+        return Some(("image/gif", "gif"));
+    }
+    None
+}
+
+fn fallback_image_type(task: &ApiTask) -> (&'static str, &'static str) {
+    match value_str(task, "output_format")
+        .or_else(|| value_str(task, "response_format"))
+        .unwrap_or("")
+        .trim()
+        .to_ascii_lowercase()
+        .as_str()
+    {
+        "jpeg" | "jpg" => ("image/jpeg", "jpg"),
+        "webp" => ("image/webp", "webp"),
+        "gif" => ("image/gif", "gif"),
+        _ => ("image/png", "png"),
+    }
 }
 
 fn required_str<'a>(task: &'a ApiTask, key: &str) -> BrokerResult<&'a str> {

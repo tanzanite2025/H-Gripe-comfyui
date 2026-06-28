@@ -9,6 +9,7 @@ fn cli_executes_mock_task_from_stdin() {
     task.inputs.insert("prompt".into(), json!("from cli"));
 
     let mut child = Command::new(env!("CARGO_BIN_EXE_hgripe-api-broker"))
+        .env("HGRIPE_HISTORY_DISABLED", "1")
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
         .spawn()

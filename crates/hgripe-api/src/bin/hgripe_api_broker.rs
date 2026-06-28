@@ -1,7 +1,7 @@
 use hgripe_api::providers::custom_http::CustomHttpProvider;
 use hgripe_api::providers::mock::MockProvider;
 use hgripe_api::providers::openai_compatible::OpenAiCompatibleProvider;
-use hgripe_api::{ApiBroker, ApiTask};
+use hgripe_api::{record_task_failure, record_task_result, ApiBroker, ApiTask};
 use serde_json::json;
 use std::io::{self, Read};
 use std::process::ExitCode;
@@ -25,6 +25,7 @@ async fn run() -> Result<(), String> {
 
     let task: ApiTask =
         serde_json::from_str(&payload).map_err(|err| format!("invalid ApiTask JSON: {err}"))?;
+    let history_task = task.clone();
 
     let mut broker = ApiBroker::new();
     broker.register_provider(CustomHttpProvider::default());
@@ -33,12 +34,18 @@ async fn run() -> Result<(), String> {
 
     match broker.execute(task).await {
         Ok(result) => {
+            if let Err(err) = record_task_result(&history_task, &result) {
+                eprintln!("warning: failed to record task history: {err}");
+            }
             let encoded = serde_json::to_string_pretty(&result)
                 .map_err(|err| format!("failed to encode ApiResult: {err}"))?;
             println!("{encoded}");
             Ok(())
         }
         Err(err) => {
+            if let Err(history_err) = record_task_failure(&history_task, err.to_string()) {
+                eprintln!("warning: failed to record task history: {history_err}");
+            }
             let encoded = serde_json::to_string_pretty(&json!({
                 "status": "failed",
                 "error": {

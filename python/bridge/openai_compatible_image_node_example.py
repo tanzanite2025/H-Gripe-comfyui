@@ -70,6 +70,8 @@ try:
         quality="provider_default",
         style="provider_default",
         output_format="provider_default",
+        save_outputs="enable",
+        download_url_outputs="enable",
         extra_body_json="{}",
         max_attempts=2,
         timeout_ms=30000,
@@ -82,6 +84,7 @@ try:
             "image_shape": tuple(image.shape),
             "provider_request_id": result.get("provider_request_id"),
             "revised_prompt": result["output_json"]["images"][0].get("revised_prompt"),
+            "output_files": result.get("output_files", []),
         }
     )
 finally:

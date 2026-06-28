@@ -1,5 +1,6 @@
 import type { Node } from "@xyflow/react";
 import { nodeSpec } from "../graph/nodeSpecs";
+import { ParamField } from "./ParamField";
 import type { HgripeNodeData } from "./HgripeNode";
 
 interface InspectorProps {
@@ -32,53 +33,7 @@ export function Inspector({ node, onParamChange }: InspectorProps) {
         return (
           <label key={p.key} className="field">
             <span>{p.label}</span>
-
-            {p.control === "textarea" && (
-              <textarea value={String(raw ?? "")} onChange={(e) => onChange(e.target.value)} />
-            )}
-            {(p.control === "text" || p.control === "path") && (
-              <input value={String(raw ?? "")} onChange={(e) => onChange(e.target.value)} />
-            )}
-            {p.control === "number" && (
-              <input
-                type="number"
-                value={String(raw ?? 0)}
-                min={p.min}
-                max={p.max}
-                step={p.step}
-                onChange={(e) => onChange(Number(e.target.value))}
-              />
-            )}
-            {p.control === "slider" && (
-              <span className="slider-row">
-                <input
-                  type="range"
-                  value={Number(raw ?? p.min ?? 0)}
-                  min={p.min ?? 0}
-                  max={p.max ?? 100}
-                  step={p.step ?? 1}
-                  onChange={(e) => onChange(Number(e.target.value))}
-                />
-                <output>{String(raw ?? p.min ?? 0)}</output>
-              </span>
-            )}
-            {p.control === "checkbox" && (
-              <input
-                type="checkbox"
-                checked={Boolean(raw)}
-                onChange={(e) => onChange(e.target.checked)}
-              />
-            )}
-            {p.control === "select" && (
-              <select value={String(raw ?? "")} onChange={(e) => onChange(e.target.value)}>
-                {(p.options ?? []).map((o) => (
-                  <option key={o} value={o}>
-                    {o}
-                  </option>
-                ))}
-              </select>
-            )}
-
+            <ParamField spec={p} value={raw} onChange={onChange} />
             {p.hint && <small className="hint">{p.hint}</small>}
           </label>
         );

@@ -25,6 +25,8 @@ export interface ParamSpec {
   step?: number;
   /** Optional hint shown under the control in the inspector. */
   hint?: string;
+  /** Render this param directly on the node card (not just the inspector). */
+  inline?: boolean;
 }
 
 export interface NodeSpec {
@@ -57,6 +59,7 @@ export const NODE_SPECS: Record<string, NodeSpec> = {
         label: "Prompt",
         control: "textarea",
         defaultValue: "",
+        inline: true,
       },
     ],
   },
@@ -74,6 +77,7 @@ export const NODE_SPECS: Record<string, NodeSpec> = {
         control: "path",
         defaultValue: "",
         hint: "absolute path to an image file",
+        inline: true,
       },
     ],
   },
@@ -91,6 +95,7 @@ export const NODE_SPECS: Record<string, NodeSpec> = {
         control: "path",
         defaultValue: "",
         hint: "absolute path to a .psd template",
+        inline: true,
       },
     ],
   },
@@ -102,7 +107,7 @@ export const NODE_SPECS: Record<string, NodeSpec> = {
     inputs: [],
     outputs: [port("value", "value", "number")],
     params: [
-      { key: "value", label: "Value", control: "number", defaultValue: 0 },
+      { key: "value", label: "Value", control: "number", defaultValue: 0, inline: true },
     ],
   },
   generate: {
@@ -125,6 +130,7 @@ export const NODE_SPECS: Record<string, NodeSpec> = {
         control: "select",
         options: ["image.generate", "image.edit", "echo"],
         defaultValue: "image.generate",
+        inline: true,
       },
       { key: "model", label: "Model", control: "text", defaultValue: "" },
       { key: "size", label: "Size", control: "text", defaultValue: "1024x1024" },
@@ -136,6 +142,7 @@ export const NODE_SPECS: Record<string, NodeSpec> = {
         min: 1,
         max: 50,
         step: 1,
+        inline: true,
       },
       {
         key: "seed",
@@ -168,7 +175,7 @@ export const NODE_SPECS: Record<string, NodeSpec> = {
     ],
     outputs: [],
     params: [
-      { key: "filename", label: "File name", control: "text", defaultValue: "output.png" },
+      { key: "filename", label: "File name", control: "text", defaultValue: "output.png", inline: true },
     ],
   },
 };

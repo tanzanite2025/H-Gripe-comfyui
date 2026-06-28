@@ -51,7 +51,14 @@ src/
   to the broker task and accepts an optional `seed` input that overrides the
   param.
 - **Param controls**: `text`, `textarea`, `number`, `select`, `slider`,
-  `checkbox`, `path` (rendered by the Inspector).
+  `checkbox`, `path` — rendered by a shared `ParamField` used by both the
+  Inspector and the node card.
+- **Inline editing**: params marked `inline` in `nodeSpecs` are editable
+  directly on the node card (prompt text, paths, number value, generate
+  operation/steps, export filename); the rest stay in the Inspector. Card
+  inputs carry `nodrag`/`nowheel` so editing never drags the node or pans the
+  canvas. Edits flow through `NodeEditingContext` so memoized cards update
+  their own params without putting callbacks in the serializable graph.
 - **Save / Load / Clear**: serialize the graph to `workflow.json` and load it
   back (params are merged over the kind's current defaults). Delete removes the
   selected node/edge.

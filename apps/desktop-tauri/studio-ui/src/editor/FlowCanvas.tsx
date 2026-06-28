@@ -5,6 +5,7 @@ import {
   Controls,
   MiniMap,
   addEdge,
+  useReactFlow,
   type Connection,
   type Edge,
   type Node,
@@ -16,6 +17,7 @@ import {
 import "@xyflow/react/dist/style.css";
 
 import { HgripeNode } from "./HgripeNode";
+import { DND_NODE_KIND } from "./Palette";
 import { nodeSpec } from "../graph/nodeSpecs";
 import { arePortsCompatible } from "../graph/model";
 import { toWorkflowGraph } from "./adapter";
@@ -28,6 +30,8 @@ interface FlowCanvasProps {
   onEdgesChange: OnEdgesChange;
   setEdges: React.Dispatch<React.SetStateAction<Edge[]>>;
   onSelect: (nodeId: string | null) => void;
+  /** Create a node of `kind` at a flow-space position. */
+  onAddNode: (kind: string, position: { x: number; y: number }) => void;
 }
 
 export function FlowCanvas({
@@ -37,9 +41,11 @@ export function FlowCanvas({
   onEdgesChange,
   setEdges,
   onSelect,
+  onAddNode,
 }: FlowCanvasProps) {
   // Declared once so React does not re-create the map each render.
   const nodeTypes = useMemo(() => ({ hgripe: HgripeNode }), []);
+  const { screenToFlowPosition } = useReactFlow();
 
   const portType = useCallback(
     (nodeId: string | null, handleId: string | null | undefined, dir: "in" | "out") => {
@@ -72,6 +78,22 @@ export function FlowCanvas({
     [setEdges],
   );
 
+  const onDragOver = useCallback((e: React.DragEvent) => {
+    e.preventDefault();
+    e.dataTransfer.dropEffect = "move";
+  }, []);
+
+  const onDrop = useCallback(
+    (e: React.DragEvent) => {
+      e.preventDefault();
+      const kind = e.dataTransfer.getData(DND_NODE_KIND);
+      if (!kind) return;
+      const position = screenToFlowPosition({ x: e.clientX, y: e.clientY });
+      onAddNode(kind, position);
+    },
+    [screenToFlowPosition, onAddNode],
+  );
+
   return (
     <ReactFlow
       nodes={nodes}
@@ -82,7 +104,10 @@ export function FlowCanvas({
       onConnect={onConnect}
       isValidConnection={isValidConnection}
       onSelectionChange={({ nodes: sel }) => onSelect(sel[0]?.id ?? null)}
+      onDragOver={onDragOver}
+      onDrop={onDrop}
       onlyRenderVisibleElements
+      deleteKeyCode={["Backspace", "Delete"]}
       fitView
     >
       <Background />

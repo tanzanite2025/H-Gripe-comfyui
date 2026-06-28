@@ -1,14 +1,22 @@
-import { useCallback, useMemo, useState } from "react";
-import { useEdgesState, useNodesState, type Edge, type Node } from "@xyflow/react";
+import { useCallback, useMemo, useRef, useState } from "react";
+import {
+  ReactFlowProvider,
+  useEdgesState,
+  useNodesState,
+  type Edge,
+  type Node,
+} from "@xyflow/react";
 
 import { FlowCanvas } from "./editor/FlowCanvas";
 import { Inspector } from "./editor/Inspector";
+import { Palette } from "./editor/Palette";
 import type { HgripeNodeData } from "./editor/HgripeNode";
-import { toWorkflowGraph } from "./editor/adapter";
+import { fromWorkflowGraph, toWorkflowGraph } from "./editor/adapter";
 import { defaultParams } from "./graph/nodeSpecs";
-import { runGraph, type NodeStatus } from "./runtime/dag";
+import { deserializeGraph, serializeGraph } from "./graph/model";
+import { runGraph, validateGraph, type NodeStatus } from "./runtime/dag";
 import { defaultExecutors } from "./runtime/executors";
-import { generateThumbnail, isTauri } from "./bridge/tauri";
+import { isTauri } from "./bridge/tauri";
 
 function makeNode(id: string, kind: string, x: number, y: number, params?: Record<string, unknown>): Node {
   const data: HgripeNodeData = { kind, params: { ...defaultParams(kind), ...params }, status: "idle" };
@@ -26,16 +34,24 @@ const initialEdges: Edge[] = [
   { id: "e2", source: "generate-1", sourceHandle: "image", target: "preview-1", targetHandle: "image" },
 ];
 
-export default function App() {
+function Studio() {
   const [nodes, setNodes, onNodesChange] = useNodesState(initialNodes);
   const [edges, setEdges, onEdgesChange] = useEdgesState(initialEdges);
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const [running, setRunning] = useState(false);
   const [message, setMessage] = useState<string>(isTauri() ? "" : "browser preview (backend mocked)");
+  const idSeq = useRef(0);
+  const fileInput = useRef<HTMLInputElement | null>(null);
 
   const selectedNode = useMemo(
     () => nodes.find((n) => n.id === selectedId) ?? null,
     [nodes, selectedId],
+  );
+
+  // Static validation surfaced in the toolbar (type mismatches, cycles, …).
+  const issues = useMemo(
+    () => validateGraph(toWorkflowGraph(nodes, edges)),
+    [nodes, edges],
   );
 
   const patchNode = useCallback(
@@ -60,6 +76,16 @@ export default function App() {
     [setNodes],
   );
 
+  const addNode = useCallback(
+    (kind: string, position?: { x: number; y: number }) => {
+      const id = `${kind}-${Date.now()}-${idSeq.current++}`;
+      // Click-to-add cascades nodes so they do not stack exactly.
+      const pos = position ?? { x: 80 + (idSeq.current % 6) * 36, y: 80 + (idSeq.current % 6) * 36 };
+      setNodes((ns) => ns.concat(makeNode(id, kind, pos.x, pos.y)));
+    },
+    [setNodes],
+  );
+
   const setStatus = useCallback(
     (id: string, status: NodeStatus) => patchNode(id, { status }),
     [patchNode],
@@ -72,17 +98,13 @@ export default function App() {
       const graph = toWorkflowGraph(nodes, edges);
       const result = await runGraph(graph, defaultExecutors, { onStatus: setStatus });
 
-      // Surface outputs into preview nodes + generate thumbnails for display.
+      // Surface output paths into preview nodes. The thumbnail itself is fetched
+      // lazily by the node when it scrolls into view (see HgripeNode).
       for (const node of graph.nodes) {
         if (node.kind !== "preview") continue;
         const out = result.outputs.get(node.id);
         const imagePath = (out?.image as string | null) ?? null;
-        if (imagePath) {
-          const thumb = await generateThumbnail({ path: imagePath, size: 256 });
-          patchNode(node.id, { imagePath, thumbnail: thumb.data_url || null });
-        } else {
-          patchNode(node.id, { imagePath: null, thumbnail: null });
-        }
+        patchNode(node.id, { imagePath });
       }
       setMessage("done");
     } catch (err) {
@@ -92,19 +114,72 @@ export default function App() {
     }
   }, [nodes, edges, setStatus, patchNode]);
 
+  const save = useCallback(() => {
+    const json = serializeGraph(toWorkflowGraph(nodes, edges));
+    const blob = new Blob([json], { type: "application/json" });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement("a");
+    a.href = url;
+    a.download = "workflow.json";
+    a.click();
+    URL.revokeObjectURL(url);
+  }, [nodes, edges]);
+
+  const load = useCallback(
+    async (file: File) => {
+      try {
+        const graph = deserializeGraph(await file.text());
+        const next = fromWorkflowGraph(graph);
+        setNodes(next.nodes);
+        setEdges(next.edges);
+        setSelectedId(null);
+        setMessage(`loaded ${file.name}`);
+      } catch (err) {
+        setMessage(`load failed: ${String(err)}`);
+      }
+    },
+    [setNodes, setEdges],
+  );
+
+  const clear = useCallback(() => {
+    setNodes([]);
+    setEdges([]);
+    setSelectedId(null);
+  }, [setNodes, setEdges]);
+
   return (
     <div className="app">
       <header className="toolbar">
         <strong>H-Gripe Studio</strong>
         <span className="muted">node-graph (React Flow)</span>
         <div className="spacer" />
-        <button className="primary" onClick={run} disabled={running}>
+        {issues.length > 0 && (
+          <span className="issues" title={issues.map((i) => i.message).join("\n")}>
+            ⚠ {issues.length} issue{issues.length > 1 ? "s" : ""}
+          </span>
+        )}
+        <button onClick={save}>Save</button>
+        <button onClick={() => fileInput.current?.click()}>Load</button>
+        <button onClick={clear}>Clear</button>
+        <button className="primary" onClick={run} disabled={running || issues.length > 0}>
           {running ? "Running…" : "Run"}
         </button>
         <span className="muted">{message}</span>
+        <input
+          ref={fileInput}
+          type="file"
+          accept="application/json,.json"
+          style={{ display: "none" }}
+          onChange={(e) => {
+            const f = e.target.files?.[0];
+            if (f) void load(f);
+            e.target.value = "";
+          }}
+        />
       </header>
 
       <div className="workspace">
+        <Palette onAdd={addNode} />
         <div className="canvas">
           <FlowCanvas
             nodes={nodes}
@@ -113,10 +188,20 @@ export default function App() {
             onEdgesChange={onEdgesChange}
             setEdges={setEdges}
             onSelect={setSelectedId}
+            onAddNode={addNode}
           />
         </div>
         <Inspector node={selectedNode} onParamChange={onParamChange} />
       </div>
     </div>
+  );
+}
+
+export default function App() {
+  // Provider gives FlowCanvas access to screenToFlowPosition for drag-and-drop.
+  return (
+    <ReactFlowProvider>
+      <Studio />
+    </ReactFlowProvider>
   );
 }

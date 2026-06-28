@@ -5,6 +5,7 @@
 import type { Edge, Node } from "@xyflow/react";
 import type { GraphEdge, GraphNode, WorkflowGraph } from "../graph/model";
 import { GRAPH_VERSION } from "../graph/model";
+import { defaultParams } from "../graph/nodeSpecs";
 import type { HgripeNodeData } from "./HgripeNode";
 
 export function toWorkflowGraph(nodes: Node[], edges: Edge[]): WorkflowGraph {
@@ -27,4 +28,30 @@ export function toWorkflowGraph(nodes: Node[], edges: Edge[]): WorkflowGraph {
   }));
 
   return { version: GRAPH_VERSION, nodes: graphNodes, edges: graphEdges };
+}
+
+/**
+ * Rebuild React Flow render state from a WorkflowGraph (load / round-trip).
+ * Params are merged over the node kind's defaults so graphs saved before a new
+ * param was introduced still get sensible values.
+ */
+export function fromWorkflowGraph(graph: WorkflowGraph): { nodes: Node[]; edges: Edge[] } {
+  const nodes: Node[] = graph.nodes.map((n) => {
+    const data: HgripeNodeData = {
+      kind: n.kind,
+      params: { ...defaultParams(n.kind), ...(n.params ?? {}) },
+      status: "idle",
+    };
+    return { id: n.id, type: "hgripe", position: { ...n.position }, data };
+  });
+
+  const edges: Edge[] = graph.edges.map((e) => ({
+    id: e.id,
+    source: e.source,
+    sourceHandle: e.sourcePort || null,
+    target: e.target,
+    targetHandle: e.targetPort || null,
+  }));
+
+  return { nodes, edges };
 }

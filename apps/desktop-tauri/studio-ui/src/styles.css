@@ -251,6 +251,13 @@ button:disabled { opacity: 0.6; cursor: default; }
   cursor: grab;
 }
 .palette-hint { font-size: 11px; margin-top: 8px; }
+.palette-search {
+  width: 100%;
+  margin-bottom: 8px;
+  padding: 4px 6px;
+  font-size: 12px;
+  box-sizing: border-box;
+}
 
 /* inspector control extras */
 .path-row { display: flex; align-items: center; gap: 6px; }

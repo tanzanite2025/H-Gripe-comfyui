@@ -358,6 +358,11 @@ function Studio() {
           e.preventDefault();
           redo();
           break;
+        case "a":
+          e.preventDefault();
+          setNodes((ns) => ns.map((n) => ({ ...n, selected: true })));
+          setEdges((es) => es.map((ed) => ({ ...ed, selected: true })));
+          break;
         case "c":
           copySelection();
           break;
@@ -369,7 +374,7 @@ function Studio() {
     };
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
-  }, [undo, redo, copySelection, pasteClipboard]);
+  }, [undo, redo, copySelection, pasteClipboard, setNodes, setEdges]);
 
   // Stable context value so memoized node cards can edit their own params.
   const editing = useMemo(() => ({ onParamChange }), [onParamChange]);

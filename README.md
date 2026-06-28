@@ -1,19 +1,19 @@
 <div align="center">
 
 # H-Gripe ComfyUI
-**A ComfyUI-based source branch focused on Rust-backed execution flow.**
+**A ComfyUI-based source branch moving toward an API-first Rust-backed desktop workflow.**
 
 <img width="1590" height="795" alt="ComfyUI Screenshot" src="https://github.com/user-attachments/assets/36e065e0-bfae-4456-8c7f-8369d5ea48a2" />
 <br>
 </div>
 
-H-Gripe ComfyUI is an independent source branch based on ComfyUI. The project keeps the existing ComfyUI user experience and node workflow behavior, while the long-term direction is to gradually rewrite the lower-level execution flow channel in Rust. This repository is maintained independently and is not configured to automatically follow upstream update history.
+H-Gripe ComfyUI is an independent source branch based on ComfyUI. The project keeps the existing ComfyUI user experience and node workflow behavior, while the long-term direction is to move API task execution, provider calls, caching, queueing, file handling, and desktop orchestration into Rust/Tauri. This repository is maintained independently and is not configured to automatically follow upstream update history.
 
 ## Project Direction
 
 - Keep Python as the compatibility layer for ComfyUI nodes, UI/API integration, custom node loading, and PyTorch model execution.
-- Introduce Rust for performance-sensitive CPU-side infrastructure around graph execution and data-flow orchestration.
-- Start with small, reversible Rust modules through PyO3/maturin, keeping Python fallbacks while the migration is in progress.
+- Introduce Rust for API broker infrastructure, provider adapters, retry/caching, task state, and later Tauri desktop integration.
+- Start with small, reversible Rust broker modules called from Python, keeping the existing ComfyUI path available while the migration is in progress.
 - Avoid changing user-facing workflow behavior while replacing internal execution pieces step by step.
 
 ## Rust Migration Targets
@@ -30,6 +30,37 @@ Not planned for the first stage:
 - Rewriting PyTorch tensor/model inference.
 - Replacing the ComfyUI frontend.
 - Breaking existing custom node compatibility.
+
+## API-First Broker Prototype
+
+The current prototype adds a Rust API broker plus thin Python/ComfyUI bridge nodes:
+
+- Rust workspace: `Cargo.toml`
+- API broker crate: `crates/hgripe-api`
+- Python bridge examples: `python/bridge`
+- ComfyUI nodes: `custom_nodes/hgripe_api_nodes.py`
+- Credential ref example: `docs/credentials.example.json`
+
+Credential refs keep API keys out of workflow files. The default local credential file is ignored by git:
+
+```text
+user/hgripe/credentials.json
+```
+
+You can also point to another file with `HGRIPE_CREDENTIALS_FILE`.
+
+Local verification:
+
+```powershell
+cargo test -p hgripe-api
+cargo build -p hgripe-api --bin hgripe-api-broker
+.\.venv\Scripts\python.exe python\bridge\mock_task_example.py
+.\.venv\Scripts\python.exe python\bridge\custom_http_example.py
+.\.venv\Scripts\python.exe python\bridge\openai_compatible_text_example.py
+.\.venv\Scripts\python.exe python\bridge\openai_compatible_image_node_example.py
+.\.venv\Scripts\python.exe python\bridge\openai_compatible_vision_node_example.py
+.\.venv\Scripts\python.exe python\bridge\openai_compatible_credentials_ref_example.py
+```
 
 ComfyUI is the AI creation engine for visual professionals who demand control over every model, every parameter, and every output. Its powerful and modular node graph interface empowers creatives to generate images, videos, 3D models, audio, and more...
 - ComfyUI natively supports the latest open-source state of the art models.

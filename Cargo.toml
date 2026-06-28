@@ -1,0 +1,6 @@
+[workspace]
+members = [
+    "crates/hgripe-api",
+]
+resolver = "2"
+

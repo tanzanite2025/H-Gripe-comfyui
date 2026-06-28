@@ -201,6 +201,43 @@ Tauri 不只是一个壳，应该承担桌面体验：
 - 支持任务队列、重试、缓存、文件下载。
 - ComfyUI 节点通过 Python 调用 Rust broker。
 
+当前已开始实现：
+
+- 已新增 Rust workspace：`Cargo.toml`。
+- 已新增 API broker crate：`crates/hgripe-api`。
+- 已定义统一任务/结果契约：`ApiTask`、`ApiResult`、`CachePolicy`、`RetryPolicy`。
+- 已定义 Provider 注册层和 `Provider` trait。
+- 已实现内存缓存、基础重试框架和 `mock` provider。
+- 已实现 `custom_http` provider，支持通用 HTTP GET/POST、headers、query、JSON body、timeout、重试和 2xx/4xx/5xx 状态分流。
+- 已实现 `openai_compatible` provider，支持 `chat.completions`、`text.generate`、`vision.analyze`、`image.generate`，可配置 `base_url`、API key/env、额外请求体和本地/代理 OpenAI-compatible 服务。
+- 已新增 CLI 桥：`hgripe-api-broker`，支持 stdin 输入 `ApiTask` JSON，stdout 输出 `ApiResult` JSON。
+- 已新增 Python 桥接示例：`python/bridge/hgripe_api_bridge.py`。
+- 已新增本地 HTTP 验证示例：`python/bridge/custom_http_example.py`，不依赖外部网络服务。
+- 已新增 OpenAI-compatible 本地验证示例：`python/bridge/openai_compatible_text_example.py`，用本地临时服务模拟 chat completions。
+- 已新增 ComfyUI 薄节点：`custom_nodes/hgripe_api_nodes.py`，当前提供 `H-Gripe Custom HTTP API`、`H-Gripe OpenAI Compatible Text`、`H-Gripe OpenAI Compatible Image` 和 `H-Gripe OpenAI Compatible Vision`，把参数组装成 `ApiTask` 后交给 Rust broker。
+- `H-Gripe OpenAI Compatible Image` 支持 `b64_json` 和 `url` 返回，并转换为 ComfyUI `IMAGE` tensor，同时保留完整 `result_json` 和 `status` 输出。
+- `H-Gripe OpenAI Compatible Vision` 支持把 ComfyUI `IMAGE` tensor 编码为 data URL，通过 OpenAI-compatible chat/vision 接口返回文本分析。
+- 已新增 credential ref 第一版：OpenAI-compatible 节点可用 `credentials_ref` 引用本地凭据，默认读取被 git 忽略的 `user/hgripe/credentials.json`，也支持 `HGRIPE_CREDENTIALS_FILE` 指向其他文件。
+
+当前验证命令：
+
+```powershell
+cargo test -p hgripe-api
+cargo build -p hgripe-api --bin hgripe-api-broker
+.\.venv\Scripts\python.exe python\bridge\mock_task_example.py
+.\.venv\Scripts\python.exe python\bridge\custom_http_example.py
+.\.venv\Scripts\python.exe python\bridge\openai_compatible_text_example.py
+.\.venv\Scripts\python.exe python\bridge\openai_compatible_image_node_example.py
+.\.venv\Scripts\python.exe python\bridge\openai_compatible_vision_node_example.py
+.\.venv\Scripts\python.exe python\bridge\openai_compatible_credentials_ref_example.py
+```
+
+下一步：
+
+- 增加本地任务历史和文件输出目录。
+- 后续把 credential ref 从本地 JSON 文件升级到 Tauri/系统 keychain。
+- 把 ComfyUI 节点继续扩展为更多常用 API 专用节点，例如 OpenAI-compatible Image Edit、Video、Audio。
+
 ### Phase 2: Tauri Shell
 
 - 新建 Tauri 桌面端。

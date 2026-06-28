@@ -4,3 +4,6 @@ src-tauri/target/
 
 # Node (frontend tooling, if added later)
 node_modules/
+
+# Generated node-editor build (studio-ui -> served at dist/studio)
+dist/studio/

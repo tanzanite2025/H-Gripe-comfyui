@@ -179,6 +179,19 @@ tr:hover td { background: var(--panel); }
   color: var(--muted);
 }
 
+/* Node Editor (studio-ui React Flow sub-app, embedded) */
+.node-editor-panel.active { display: flex; flex-direction: column; }
+.node-editor-stage {
+  position: relative;
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  overflow: hidden;
+  background: #0b0d12;
+  height: calc(100vh - 150px);
+  min-height: 440px;
+}
+.studio-frame { width: 100%; height: 100%; border: 0; background: #0b0d12; }
+
 /* PSD Studio */
 .studio-grid {
   display: grid;

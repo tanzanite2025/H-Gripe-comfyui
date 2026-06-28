@@ -5,10 +5,13 @@ node-graph editor on top of [React Flow](https://reactflow.dev) (`@xyflow/react`
 This is the in-house alternative to the embedded ComfyUI — ComfyUI stays as the
 **Advanced Canvas** and is **not touched** by this work.
 
-> Status: **foundation scaffold.** Not yet wired into the Tauri window
-> (`tauri.conf.json` still serves `../dist`), so the existing static shell and
-> the embedded ComfyUI canvas are unaffected. A later PR mounts this build
-> inside the desktop app.
+> Status: **embedded in the desktop shell** as the **Node Editor** tab. The
+> build output is written to `../dist/studio` (gitignored) and loaded as an
+> iframe by the static shell. The shell and the embedded ComfyUI **Advanced
+> Canvas** are otherwise unaffected. When embedded, the Tauri bridge reaches
+> IPC via the parent window (see `bridge/tauri.ts`). A plain `cargo run` does
+> not build this; run `npm run build` first (the Tauri CLI does it via the
+> `before*` hooks in `tauri.conf.json`).
 
 ## Architecture (renderer-agnostic by design)
 
@@ -44,15 +47,18 @@ Nodes display a **backend-generated thumbnail**; the original file path is the
 source of truth for execution/export. The webview never downscales originals —
 that is the real memory/quality killer.
 
-Backend contract (consumed by `bridge/tauri.ts`, Rust impl lands with Tauri
-integration):
+Backend contract (consumed by `bridge/tauri.ts`, implemented by the Rust
+`generate_thumbnail` command):
 
 ```
-generate_thumbnail({ path, size, dpr }) -> { thumbnailPath, width, height, hash, mime }
+generate_thumbnail({ path, size, dpr })
+  -> { data_url, cache_path, width, height, source_hash, mime }
 ```
 
-The backend should generate at `size * dpr`, cache on disk keyed by
-`hash + size`, and return a path/URL the webview can load cheaply.
+The backend generates at `size * dpr` with Lanczos3 resampling, caches the
+thumbnail on disk keyed by `source_hash + target_size`, and returns a `data:`
+URL the webview can display cheaply. Fields are snake_case to match the Rust
+serialization.
 
 ## Develop
 

@@ -360,6 +360,99 @@ fn read_image_data_url(path: String) -> Result<String, String> {
     Ok(format!("data:{mime};base64,{}", base64_encode(&bytes)))
 }
 
+/// FNV-1a 64-bit hash, used to key the thumbnail cache by source content.
+fn fnv1a_hex(bytes: &[u8]) -> String {
+    let mut hash: u64 = 0xcbf2_9ce4_8422_2325;
+    for &b in bytes {
+        hash ^= b as u64;
+        hash = hash.wrapping_mul(0x0000_0100_0000_01b3);
+    }
+    format!("{hash:016x}")
+}
+
+#[derive(Serialize)]
+struct ThumbnailResult {
+    /// `data:` URL of the generated thumbnail, ready for an `<img src>`.
+    data_url: String,
+    /// On-disk cached thumbnail path (PNG), reused on subsequent calls.
+    cache_path: String,
+    /// Thumbnail pixel dimensions (already scaled by dpr).
+    width: u32,
+    height: u32,
+    /// Content hash of the source file (the thumbnail cache key).
+    source_hash: String,
+    mime: String,
+}
+
+/// Generate (or fetch from cache) a crisp thumbnail for an image file.
+///
+/// The thumbnail is produced at `size * dpr` pixels with Lanczos3 resampling so
+/// it stays sharp on high-DPI displays, cached on disk keyed by
+/// `source_hash + target_size`, and returned as a `data:` URL for display. The
+/// original `path` is never downscaled in the webview and remains the source of
+/// truth for execution/export.
+#[tauri::command]
+fn generate_thumbnail(path: String, size: u32, dpr: Option<f64>) -> Result<ThumbnailResult, String> {
+    let trimmed = path.trim();
+    if trimmed.is_empty() {
+        return Err("path is empty".to_string());
+    }
+    let src = Path::new(trimmed);
+    if !src.is_file() {
+        return Err(format!("file does not exist: {trimmed}"));
+    }
+
+    // Target edge in physical pixels, clamped to a sane range.
+    let dpr = dpr.unwrap_or(1.0);
+    let dpr = if dpr.is_finite() && dpr > 0.0 { dpr } else { 1.0 };
+    let target = ((size as f64) * dpr).round() as u32;
+    let target = target.clamp(16, 4096);
+
+    let bytes =
+        fs::read(src).map_err(|err| format!("failed to read {}: {err}", src.display()))?;
+    let source_hash = fnv1a_hex(&bytes);
+
+    let cache_dir = runtime_paths()?.output_dir.join(".thumbnails");
+    fs::create_dir_all(&cache_dir)
+        .map_err(|err| format!("failed to create {}: {err}", cache_dir.display()))?;
+    let cache_path = cache_dir.join(format!("{source_hash}_{target}.png"));
+
+    // Cache hit: reuse the previously generated thumbnail.
+    if let Ok(cached) = fs::read(&cache_path) {
+        if let Ok(decoded) = image::load_from_memory(&cached) {
+            return Ok(ThumbnailResult {
+                data_url: format!("data:image/png;base64,{}", base64_encode(&cached)),
+                cache_path: cache_path.to_string_lossy().to_string(),
+                width: decoded.width(),
+                height: decoded.height(),
+                source_hash,
+                mime: "image/png".to_string(),
+            });
+        }
+    }
+
+    let source = image::load_from_memory(&bytes)
+        .map_err(|err| format!("failed to decode image: {err}"))?;
+    // `resize` preserves aspect ratio, fitting within target x target.
+    let thumb = source.resize(target, target, image::imageops::FilterType::Lanczos3);
+
+    let mut png: Vec<u8> = Vec::new();
+    thumb
+        .write_to(&mut std::io::Cursor::new(&mut png), image::ImageFormat::Png)
+        .map_err(|err| format!("failed to encode thumbnail: {err}"))?;
+    // Best-effort cache write; a failure here should not fail the request.
+    let _ = fs::write(&cache_path, &png);
+
+    Ok(ThumbnailResult {
+        data_url: format!("data:image/png;base64,{}", base64_encode(&png)),
+        cache_path: cache_path.to_string_lossy().to_string(),
+        width: thumb.width(),
+        height: thumb.height(),
+        source_hash,
+        mime: "image/png".to_string(),
+    })
+}
+
 /// Read a text file, truncating to `max_bytes` so large files cannot freeze
 /// the UI. A truncation marker is appended when the file is clipped.
 #[tauri::command]
@@ -575,6 +668,7 @@ fn main() {
             open_url,
             list_psd_outputs,
             read_image_data_url,
+            generate_thumbnail,
             read_text_file,
             open_path,
             comfyui_reachable,

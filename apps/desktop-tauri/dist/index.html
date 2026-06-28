@@ -20,6 +20,9 @@
       <button data-tab="run">Run Task</button>
       <button data-tab="history">History</button>
       <button data-tab="psd">PSD</button>
+      <!-- Node Editor: H-Gripe's own visual workflow canvas (React Flow). The
+           in-house production counterpart to the embedded ComfyUI canvas. -->
+      <button data-tab="node-editor">Node Editor</button>
       <!-- Advanced Canvas (embedded ComfyUI) is an advanced/escape-hatch tab,
            not the product's main surface; keep it last in the nav. -->
       <button data-tab="comfyui">Advanced Canvas</button>
@@ -218,6 +221,21 @@
           <img id="psd-detail-preview" class="psd-preview" alt="preview" />
           <h4>metadata.json</h4>
           <pre id="psd-detail-metadata" class="json"></pre>
+        </div>
+      </section>
+
+      <!-- Node Editor: H-Gripe's own node-graph editor (the studio-ui React
+           Flow sub-app), embedded as an iframe from the build at studio/.
+           This is the in-house production canvas; the embedded ComfyUI below
+           stays as the advanced/escape-hatch surface. The iframe is loaded
+           lazily on first open (studio/index.html) so the shell starts fast. -->
+      <section id="node-editor" class="panel node-editor-panel">
+        <div class="node-editor-stage">
+          <iframe id="studio-frame" class="studio-frame hidden" title="H-Gripe Node Editor"></iframe>
+          <div id="studio-placeholder" class="comfy-placeholder">
+            <p>H-Gripe Node Editor</p>
+            <p class="hint">Loading the visual workflow canvas…</p>
+          </div>
         </div>
       </section>
 

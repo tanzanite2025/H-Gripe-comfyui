@@ -4,7 +4,9 @@
   "version": "0.1.0",
   "identifier": "com.hgripe.desktop",
   "build": {
-    "frontendDist": "../dist"
+    "frontendDist": "../dist",
+    "beforeDevCommand": "npm --prefix studio-ui ci && npm --prefix studio-ui run build",
+    "beforeBuildCommand": "npm --prefix studio-ui ci && npm --prefix studio-ui run build"
   },
   "app": {
     "withGlobalTauri": true,

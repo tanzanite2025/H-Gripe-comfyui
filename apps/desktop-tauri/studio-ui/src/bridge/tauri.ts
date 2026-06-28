@@ -2,13 +2,29 @@
 // in a plain browser) it falls back to mocks so the editor stays usable for UI
 // development without the desktop backend.
 
+type Invoke = (cmd: string, args?: Record<string, unknown>) => Promise<unknown>;
+
 interface TauriWindow {
-  __TAURI__?: { core: { invoke: (cmd: string, args?: Record<string, unknown>) => Promise<unknown> } };
+  __TAURI__?: { core?: { invoke?: Invoke } };
 }
 
-function tauriInvoke(): ((cmd: string, args?: Record<string, unknown>) => Promise<unknown>) | null {
-  const w = window as unknown as TauriWindow;
-  return w.__TAURI__?.core?.invoke ?? null;
+// When this app runs embedded as an iframe inside the desktop shell, the Tauri
+// IPC may live on the parent/top window rather than this frame. Both are
+// same-origin (tauri://localhost), so reaching across is allowed. We try this
+// frame first, then parent, then top.
+function tauriInvoke(): Invoke | null {
+  const candidates: (Window | null)[] = [window];
+  try {
+    if (window.parent && window.parent !== window) candidates.push(window.parent);
+    if (window.top && window.top !== window) candidates.push(window.top);
+  } catch {
+    // Cross-origin access can throw; ignore and use what we have.
+  }
+  for (const frame of candidates) {
+    const invoke = (frame as unknown as TauriWindow | null)?.__TAURI__?.core?.invoke;
+    if (invoke) return invoke;
+  }
+  return null;
 }
 
 export const isTauri = (): boolean => tauriInvoke() !== null;
@@ -43,11 +59,15 @@ export interface ThumbnailRequest {
   dpr?: number;
 }
 
+// Fields are snake_case to match the Rust `ThumbnailResult` serialization.
 export interface ThumbnailResult {
-  thumbnailPath: string;
+  /** `data:` URL ready for an `<img src>`. */
+  data_url: string;
+  /** On-disk cached thumbnail path. */
+  cache_path: string;
   width: number;
   height: number;
-  hash: string;
+  source_hash: string;
   mime: string;
 }
 
@@ -59,7 +79,7 @@ export interface ThumbnailResult {
 export async function generateThumbnail(req: ThumbnailRequest): Promise<ThumbnailResult> {
   const invoke = tauriInvoke();
   if (!invoke) {
-    return { thumbnailPath: req.path, width: req.size, height: req.size, hash: "mock", mime: "image/*" };
+    return { data_url: "", cache_path: req.path, width: req.size, height: req.size, source_hash: "mock", mime: "image/*" };
   }
   return (await invoke("generate_thumbnail", {
     path: req.path,

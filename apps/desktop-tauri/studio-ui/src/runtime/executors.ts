@@ -6,7 +6,7 @@
 // sinks. This wires the renderer-agnostic DAG runtime to real backend
 // capability.
 
-import { runTaskJson } from "../bridge/tauri";
+import { composePsd, getOutputDir, runTaskJson } from "../bridge/tauri";
 import type { ExecutorRegistry } from "./dag";
 
 // Params that are not forwarded into the broker task's `params` map; they are
@@ -85,4 +85,39 @@ export const defaultExecutors: ExecutorRegistry = {
     template: ctx.inputs.template ?? null,
     filename: String(ctx.params.filename ?? "output.png"),
   }),
+
+  // Writes the upstream image into the PSD template's placeholder (true
+  // smart-object replacement when possible) and exports the .psd triplet via
+  // the backend `compose_psd` command.
+  psdExport: async (ctx) => {
+    const image = (ctx.inputs.image as string | undefined) ?? null;
+    const template = (ctx.inputs.template as string | undefined) ?? null;
+    if (!image) throw new Error("PSD Export needs a connected image input");
+    if (!template) throw new Error("PSD Export needs a connected PSD template input");
+
+    // Fall back to the configured output directory when none is set on the node.
+    const outputDir = String(ctx.params.output_dir ?? "").trim() || (await getOutputDir());
+    if (!outputDir) throw new Error("PSD Export needs an output directory");
+
+    const placeholderName = String(ctx.params.placeholder ?? "").trim();
+    const result = await composePsd({
+      template,
+      image,
+      outputDir,
+      filename: String(ctx.params.filename ?? "final") || "final",
+      placeholder: placeholderName ? JSON.stringify({ name: placeholderName }) : undefined,
+      fitMode: (String(ctx.params.fit_mode ?? "contain") as "contain" | "cover" | "stretch"),
+      smartObjectMode: (String(ctx.params.smart_object_mode ?? "disable") as "disable" | "replace_content"),
+    });
+    if (result.status !== "succeeded") {
+      throw new Error(`PSD export failed: ${result.status}`);
+    }
+    return {
+      psdPath: result.psd_path,
+      previewPath: result.preview_path || null,
+      metadataPath: result.metadata_path,
+      placeholderKind: result.placeholder_kind,
+      smartObjectMode: result.smart_object_mode,
+    };
+  },
 };

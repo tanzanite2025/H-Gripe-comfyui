@@ -211,6 +211,53 @@ export const NODE_SPECS: Record<string, NodeSpec> = {
       { key: "filename", label: "File name", control: "text", defaultValue: "output.png", inline: true },
     ],
   },
+  psdExport: {
+    kind: "psdExport",
+    title: "PSD Export",
+    description:
+      "Write the generated image into a PSD template's placeholder (true smart-object replacement when possible) and export final.psd + preview.png + metadata.json.",
+    category: "output",
+    inputs: [
+      port("image", "image", "image"),
+      port("template", "template", "any"),
+    ],
+    outputs: [],
+    params: [
+      { key: "filename", label: "File name", control: "text", defaultValue: "final", inline: true },
+      {
+        key: "output_dir",
+        label: "Output dir",
+        control: "path",
+        defaultValue: "",
+        hint: "leave empty to use the configured output directory",
+      },
+      {
+        key: "placeholder",
+        label: "Placeholder layer",
+        control: "text",
+        defaultValue: "",
+        hint: "template layer name to replace (empty = whole canvas)",
+        inline: true,
+      },
+      {
+        key: "fit_mode",
+        label: "Fit",
+        control: "select",
+        options: ["contain", "cover", "stretch"],
+        defaultValue: "contain",
+        inline: true,
+      },
+      {
+        key: "smart_object_mode",
+        label: "Smart object",
+        control: "select",
+        options: ["disable", "replace_content"],
+        defaultValue: "replace_content",
+        hint: "replace_content rewrites the smart object (stays editable in Photoshop)",
+        inline: true,
+      },
+    ],
+  },
 };
 
 export function nodeSpec(kind: string): NodeSpec {

@@ -22,7 +22,7 @@ use hgripe_api::{
     HistoryCleanupResult, HistoryDetail, HistoryQuery, HistoryRecord, HistoryRerunOptions,
     ProviderProfileSummary, ProviderProfilesValidation, RuntimePaths,
 };
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 
 fn broker() -> ApiBroker {
     let mut broker = ApiBroker::new();
@@ -668,6 +668,95 @@ fn stop_comfyui(state: tauri::State<'_, ComfyServer>) -> Result<(), String> {
     Ok(())
 }
 
+/// Result of a `compose_psd` run, mirroring the JSON printed by the
+/// `compose_psd_cli.py` helper.
+#[derive(Serialize, Deserialize)]
+struct ComposePsdResult {
+    status: String,
+    psd_path: String,
+    /// Empty string when preview generation was disabled.
+    preview_path: String,
+    metadata_path: String,
+    placeholder_kind: Option<String>,
+    smart_object_mode: String,
+}
+
+/// Compose a generated image into a PSD template's placeholder (true
+/// smart-object content replacement when applicable) and export
+/// `<filename>.psd` + `<filename>_preview.png` + `<filename>_metadata.json`.
+///
+/// This shells out to `python/bridge/compose_psd_cli.py` using the same Python
+/// interpreter resolution as ComfyUI (`python_embeded` when present), so it
+/// reuses the proven, vendored psd-tools pipeline without requiring a running
+/// ComfyUI server. `dir` is the ComfyUI/project root (defaults to the process
+/// working dir); the rest map 1:1 onto the CLI flags.
+#[tauri::command]
+#[allow(clippy::too_many_arguments)]
+fn compose_psd(
+    dir: Option<String>,
+    template: String,
+    image: String,
+    output_dir: String,
+    filename: Option<String>,
+    placeholder: Option<String>,
+    fit_mode: Option<String>,
+    z_order: Option<String>,
+    smart_object_mode: Option<String>,
+    hide_placeholder: Option<String>,
+    metadata: Option<String>,
+    save_preview: Option<bool>,
+) -> Result<ComposePsdResult, String> {
+    let dir = resolve_comfy_dir(&dir)?;
+    let python = comfy_python(&dir);
+    let script = dir.join("python").join("bridge").join("compose_psd_cli.py");
+    if !script.is_file() {
+        return Err(format!("compose_psd_cli.py not found at {}", script.display()));
+    }
+
+    let mut cmd = std::process::Command::new(&python);
+    cmd.arg(&script)
+        .arg("--template")
+        .arg(&template)
+        .arg("--image")
+        .arg(&image)
+        .arg("--output-dir")
+        .arg(&output_dir)
+        .arg("--filename")
+        .arg(filename.as_deref().unwrap_or("final"))
+        .arg("--placeholder")
+        .arg(placeholder.as_deref().unwrap_or("{}"))
+        .arg("--fit-mode")
+        .arg(fit_mode.as_deref().unwrap_or("contain"))
+        .arg("--z-order")
+        .arg(z_order.as_deref().unwrap_or("above_background"))
+        .arg("--smart-object-mode")
+        .arg(smart_object_mode.as_deref().unwrap_or("disable"))
+        .arg("--hide-placeholder")
+        .arg(hide_placeholder.as_deref().unwrap_or("enable"))
+        .arg("--metadata")
+        .arg(metadata.as_deref().unwrap_or("{}"))
+        .arg("--save-preview")
+        .arg(if save_preview.unwrap_or(true) { "enable" } else { "disable" })
+        .current_dir(&dir);
+    #[cfg(windows)]
+    {
+        use std::os::windows::process::CommandExt;
+        // CREATE_NO_WINDOW: don't pop a console window for the child.
+        cmd.creation_flags(0x0800_0000);
+    }
+
+    let output = cmd
+        .output()
+        .map_err(|err| format!("failed to launch {}: {err}", python.display()))?;
+    if !output.status.success() {
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        return Err(format!("compose_psd failed: {}", stderr.trim()));
+    }
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    serde_json::from_str::<ComposePsdResult>(stdout.trim())
+        .map_err(|err| format!("could not parse compose_psd output: {err} (raw: {})", stdout.trim()))
+}
+
 fn main() {
     tauri::Builder::default()
         .plugin(tauri_plugin_dialog::init())
@@ -698,7 +787,8 @@ fn main() {
             comfyui_reachable,
             comfyui_status,
             start_comfyui,
-            stop_comfyui
+            stop_comfyui,
+            compose_psd
         ])
         .run(tauri::generate_context!())
         .expect("error while running H-Gripe Desktop");

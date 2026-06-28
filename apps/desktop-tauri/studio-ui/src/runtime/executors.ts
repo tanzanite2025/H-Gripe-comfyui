@@ -9,8 +9,9 @@
 import { runTaskJson } from "../bridge/tauri";
 import type { ExecutorRegistry } from "./dag";
 
-// Params that are not forwarded into the broker task's `params` map.
-const GENERATE_RESERVED = new Set(["provider", "operation"]);
+// Params that are not forwarded into the broker task's `params` map; they are
+// top-level task fields instead.
+const GENERATE_RESERVED = new Set(["provider", "operation", "credentials_ref"]);
 
 export const defaultExecutors: ExecutorRegistry = {
   prompt: async (ctx) => ({ text: String(ctx.params.text ?? "") }),
@@ -40,13 +41,14 @@ export const defaultExecutors: ExecutorRegistry = {
     }
     if (seedInput !== undefined) params.seed = seedInput;
 
+    const credentialsRef = String(ctx.params.credentials_ref ?? "") || null;
     const task = {
       id: `studio-${ctx.nodeId}-${Date.now()}`,
       provider: String(ctx.params.provider ?? "mock"),
       operation: String(ctx.params.operation ?? "image.generate"),
       inputs,
       params,
-      credentials_ref: null,
+      credentials_ref: credentialsRef,
       output_type: "image",
       cache_policy: { enabled: false, ttl_seconds: null, key: null },
       retry_policy: { max_attempts: 1, backoff_ms: 200, timeout_ms: 60000 },

@@ -69,6 +69,13 @@ src/
 - **Lazy thumbnails**: preview nodes request `generate_thumbnail` only when they
   scroll into view (IntersectionObserver), so the graph data stays light (only
   the original path) and off-screen media is never decoded.
+- **PSD Studio integration**: the Inspector reuses the same backend the static
+  PSD Studio tab uses — a generate node can adopt a provider **profile**
+  (`get_profiles`) to fill provider / model / `credentials_ref` in one step, and
+  any `path` param can be filled from the configured **output directory**'s
+  `.psd` outputs (`get_runtime_info` + `list_psd_outputs`). `credentials_ref`
+  flows to the broker task as a top-level field. See `editor/ProfilePicker.tsx`
+  and `editor/OutputPicker.tsx`.
 - **Validation**: `validateGraph` issues (type mismatch, cycle, dangling edge)
   are surfaced in the toolbar and block Run.
 

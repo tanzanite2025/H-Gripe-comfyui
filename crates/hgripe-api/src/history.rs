@@ -1,16 +1,18 @@
 use crate::model::{ApiErrorInfo, ApiResult, ApiStatus, ApiTask, OutputFile, OutputType};
 use crate::outputs::output_dir_from_env;
 use crate::provider::{BrokerError, BrokerResult};
-use rusqlite::{params, Connection};
+use rusqlite::{params, Connection, ToSql};
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
+use std::collections::BTreeMap;
 use std::env;
 use std::fs::{self, OpenOptions};
 use std::io::Write;
 use std::path::{Path, PathBuf};
 use std::time::{SystemTime, UNIX_EPOCH};
+use uuid::Uuid;
 
-const HISTORY_SCHEMA_VERSION: u32 = 1;
+const HISTORY_SCHEMA_VERSION: u32 = 2;
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct HistoryRecord {
@@ -21,6 +23,8 @@ pub struct HistoryRecord {
     pub operation: String,
     pub output_type: OutputType,
     pub credentials_ref: Option<String>,
+    #[serde(default)]
+    pub task_snapshot: Option<ApiTask>,
     pub status: ApiStatus,
     pub duration_ms: u128,
     pub cache_hit: bool,
@@ -30,6 +34,46 @@ pub struct HistoryRecord {
     pub output_files: Vec<OutputFile>,
     pub output_json_summary: Option<Value>,
     pub error: Option<ApiErrorInfo>,
+}
+
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct HistoryQuery {
+    pub limit: usize,
+    pub provider: Option<String>,
+    pub operation: Option<String>,
+    pub status: Option<ApiStatus>,
+    pub has_output_files: Option<bool>,
+}
+
+impl HistoryQuery {
+    pub fn recent(limit: usize) -> Self {
+        Self {
+            limit,
+            ..Self::default()
+        }
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct HistoryDetail {
+    pub record: HistoryRecord,
+    pub rerunnable: bool,
+    pub output_paths: Vec<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct HistoryRerunOptions {
+    pub new_task_id: Option<String>,
+    pub disable_cache: bool,
+}
+
+impl Default for HistoryRerunOptions {
+    fn default() -> Self {
+        Self {
+            new_task_id: None,
+            disable_cache: true,
+        }
+    }
 }
 
 pub fn record_task_result(task: &ApiTask, result: &ApiResult) -> BrokerResult<Option<PathBuf>> {
@@ -58,6 +102,7 @@ pub fn build_history_record(
         operation: task.operation.clone(),
         output_type: task.output_type.clone(),
         credentials_ref: task.credentials_ref.clone(),
+        task_snapshot: Some(sanitized_task_snapshot(task)),
         status: result.status.clone(),
         duration_ms: result.duration_ms,
         cache_hit: result.cache_hit,
@@ -87,6 +132,7 @@ pub fn record_task_failure(
         operation: task.operation.clone(),
         output_type: task.output_type.clone(),
         credentials_ref: task.credentials_ref.clone(),
+        task_snapshot: Some(sanitized_task_snapshot(task)),
         status: ApiStatus::Failed,
         duration_ms: 0,
         cache_hit: false,
@@ -172,6 +218,14 @@ pub fn upsert_sqlite_history_record(path: &Path, record: &HistoryRecord) -> Brok
         .map(serde_json::to_string)
         .transpose()
         .map_err(|err| BrokerError::Provider(format!("failed to encode history error: {err}")))?;
+    let task_snapshot_json = record
+        .task_snapshot
+        .as_ref()
+        .map(serde_json::to_string)
+        .transpose()
+        .map_err(|err| {
+            BrokerError::Provider(format!("failed to encode history task snapshot: {err}"))
+        })?;
     let record_json = serde_json::to_string(record)
         .map_err(|err| BrokerError::Provider(format!("failed to encode history record: {err}")))?;
 
@@ -195,8 +249,9 @@ pub fn upsert_sqlite_history_record(path: &Path, record: &HistoryRecord) -> Brok
                 output_files_json,
                 output_json_summary_json,
                 error_json,
+                task_snapshot_json,
                 record_json
-            ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17)
+            ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17, ?18)
             "#,
             params![
                 record.task_id.as_str(),
@@ -215,6 +270,7 @@ pub fn upsert_sqlite_history_record(path: &Path, record: &HistoryRecord) -> Brok
                 output_files_json,
                 output_json_summary_json,
                 error_json,
+                task_snapshot_json,
                 record_json,
             ],
         )
@@ -229,6 +285,100 @@ pub fn upsert_sqlite_history_record(path: &Path, record: &HistoryRecord) -> Brok
 }
 
 pub fn list_recent_history_records(path: &Path, limit: usize) -> BrokerResult<Vec<HistoryRecord>> {
+    query_history_records(path, HistoryQuery::recent(limit))
+}
+
+pub fn get_history_record(path: &Path, task_id: &str) -> BrokerResult<Option<HistoryRecord>> {
+    let task_id = task_id.trim();
+    if task_id.is_empty() || !path.exists() {
+        return Ok(None);
+    }
+
+    let connection = Connection::open(path).map_err(|err| {
+        BrokerError::Provider(format!(
+            "failed to open history database {}: {err}",
+            path.display()
+        ))
+    })?;
+    init_sqlite_history(&connection)?;
+
+    let mut statement = connection
+        .prepare("SELECT record_json FROM task_history WHERE task_id = ?1")
+        .map_err(|err| {
+            BrokerError::Provider(format!(
+                "failed to query history database {}: {err}",
+                path.display()
+            ))
+        })?;
+    let mut rows = statement.query(params![task_id]).map_err(|err| {
+        BrokerError::Provider(format!(
+            "failed to read history database {}: {err}",
+            path.display()
+        ))
+    })?;
+
+    let Some(row) = rows.next().map_err(|err| {
+        BrokerError::Provider(format!(
+            "failed to read history row from {}: {err}",
+            path.display()
+        ))
+    })?
+    else {
+        return Ok(None);
+    };
+
+    let record_json = row.get::<_, String>(0).map_err(|err| {
+        BrokerError::Provider(format!(
+            "failed to read history row from {}: {err}",
+            path.display()
+        ))
+    })?;
+    Ok(Some(decode_history_record_json(path, &record_json)?))
+}
+
+pub fn get_history_detail(path: &Path, task_id: &str) -> BrokerResult<Option<HistoryDetail>> {
+    get_history_record(path, task_id).map(|record| record.map(history_detail_from_record))
+}
+
+pub fn history_detail_from_record(record: HistoryRecord) -> HistoryDetail {
+    let output_paths = record
+        .output_files
+        .iter()
+        .map(|file| file.path.clone())
+        .collect();
+    let rerunnable = record.task_snapshot.is_some();
+
+    HistoryDetail {
+        record,
+        rerunnable,
+        output_paths,
+    }
+}
+
+pub fn build_rerun_task_from_record(
+    record: &HistoryRecord,
+    options: HistoryRerunOptions,
+) -> BrokerResult<ApiTask> {
+    let mut task = record.task_snapshot.clone().ok_or_else(|| {
+        BrokerError::Provider(format!(
+            "history record '{}' has no task_snapshot; run the task again with the current broker before rerunning it from history",
+            record.task_id
+        ))
+    })?;
+
+    task.id = options
+        .new_task_id
+        .filter(|id| !id.trim().is_empty())
+        .unwrap_or_else(|| generated_rerun_task_id(&task.id));
+
+    if options.disable_cache {
+        task.cache_policy.enabled = false;
+    }
+
+    Ok(task)
+}
+
+pub fn query_history_records(path: &Path, query: HistoryQuery) -> BrokerResult<Vec<HistoryRecord>> {
     if !path.exists() {
         return Ok(Vec::new());
     }
@@ -241,23 +391,19 @@ pub fn list_recent_history_records(path: &Path, limit: usize) -> BrokerResult<Ve
     })?;
     init_sqlite_history(&connection)?;
 
-    let mut statement = connection
-        .prepare(
-            r#"
-            SELECT record_json
-            FROM task_history
-            ORDER BY timestamp_ms DESC, rowid DESC
-            LIMIT ?1
-            "#,
-        )
-        .map_err(|err| {
-            BrokerError::Provider(format!(
-                "failed to query history database {}: {err}",
-                path.display()
-            ))
-        })?;
+    let (sql, sql_params) = build_history_query_sql(&query)?;
+    let sql_param_refs: Vec<&dyn ToSql> = sql_params
+        .iter()
+        .map(|param| param.as_ref() as &dyn ToSql)
+        .collect();
+    let mut statement = connection.prepare(&sql).map_err(|err| {
+        BrokerError::Provider(format!(
+            "failed to query history database {}: {err}",
+            path.display()
+        ))
+    })?;
     let rows = statement
-        .query_map(params![usize_to_i64(limit)], |row| row.get::<_, String>(0))
+        .query_map(sql_param_refs.as_slice(), |row| row.get::<_, String>(0))
         .map_err(|err| {
             BrokerError::Provider(format!(
                 "failed to read history database {}: {err}",
@@ -273,16 +419,60 @@ pub fn list_recent_history_records(path: &Path, limit: usize) -> BrokerResult<Ve
                 path.display()
             ))
         })?;
-        let record = serde_json::from_str::<HistoryRecord>(&record_json).map_err(|err| {
-            BrokerError::Provider(format!(
-                "failed to decode history row from {}: {err}",
-                path.display()
-            ))
-        })?;
+        let record = decode_history_record_json(path, &record_json)?;
         records.push(record);
     }
 
     Ok(records)
+}
+
+fn build_history_query_sql(query: &HistoryQuery) -> BrokerResult<(String, Vec<Box<dyn ToSql>>)> {
+    let mut sql = String::from("SELECT record_json FROM task_history");
+    let mut clauses: Vec<&'static str> = Vec::new();
+    let mut params: Vec<Box<dyn ToSql>> = Vec::new();
+
+    if let Some(provider) = query
+        .provider
+        .as_deref()
+        .map(str::trim)
+        .filter(|v| !v.is_empty())
+    {
+        clauses.push("provider = ?");
+        params.push(Box::new(provider.to_string()));
+    }
+
+    if let Some(operation) = query
+        .operation
+        .as_deref()
+        .map(str::trim)
+        .filter(|v| !v.is_empty())
+    {
+        clauses.push("operation = ?");
+        params.push(Box::new(operation.to_string()));
+    }
+
+    if let Some(status) = &query.status {
+        clauses.push("status = ?");
+        params.push(Box::new(json_scalar_string(status)?));
+    }
+
+    if let Some(has_output_files) = query.has_output_files {
+        if has_output_files {
+            clauses.push("output_file_count > 0");
+        } else {
+            clauses.push("output_file_count = 0");
+        }
+    }
+
+    if !clauses.is_empty() {
+        sql.push_str(" WHERE ");
+        sql.push_str(&clauses.join(" AND "));
+    }
+
+    sql.push_str(" ORDER BY timestamp_ms DESC, rowid DESC LIMIT ?");
+    params.push(Box::new(usize_to_i64(normalized_limit(query.limit))));
+
+    Ok((sql, params))
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -340,6 +530,7 @@ fn init_sqlite_history(connection: &Connection) -> BrokerResult<()> {
                 output_files_json TEXT NOT NULL,
                 output_json_summary_json TEXT,
                 error_json TEXT,
+                task_snapshot_json TEXT,
                 record_json TEXT NOT NULL
             );
 
@@ -353,7 +544,58 @@ fn init_sqlite_history(connection: &Connection) -> BrokerResult<()> {
         )
         .map_err(|err| {
             BrokerError::Provider(format!("failed to initialize history database: {err}"))
-        })
+        })?;
+
+    ensure_sqlite_history_column(connection, "task_snapshot_json", "TEXT")?;
+    Ok(())
+}
+
+fn ensure_sqlite_history_column(
+    connection: &Connection,
+    column_name: &str,
+    column_type: &str,
+) -> BrokerResult<()> {
+    let mut statement = connection
+        .prepare("PRAGMA table_info(task_history)")
+        .map_err(|err| {
+            BrokerError::Provider(format!("failed to inspect history database schema: {err}"))
+        })?;
+    let rows = statement
+        .query_map([], |row| row.get::<_, String>(1))
+        .map_err(|err| {
+            BrokerError::Provider(format!("failed to read history database schema: {err}"))
+        })?;
+
+    for row in rows {
+        let existing_column = row.map_err(|err| {
+            BrokerError::Provider(format!("failed to read history database schema row: {err}"))
+        })?;
+        if existing_column == column_name {
+            return Ok(());
+        }
+    }
+
+    connection
+        .execute(
+            &format!("ALTER TABLE task_history ADD COLUMN {column_name} {column_type}"),
+            [],
+        )
+        .map_err(|err| {
+            BrokerError::Provider(format!(
+                "failed to migrate history database column {column_name}: {err}"
+            ))
+        })?;
+
+    Ok(())
+}
+
+fn decode_history_record_json(path: &Path, record_json: &str) -> BrokerResult<HistoryRecord> {
+    serde_json::from_str::<HistoryRecord>(record_json).map_err(|err| {
+        BrokerError::Provider(format!(
+            "failed to decode history row from {}: {err}",
+            path.display()
+        ))
+    })
 }
 
 fn json_scalar_string<T>(value: &T) -> BrokerResult<String>
@@ -373,6 +615,14 @@ fn u128_to_i64(value: u128) -> i64 {
 
 fn usize_to_i64(value: usize) -> i64 {
     value.min(i64::MAX as usize) as i64
+}
+
+fn normalized_limit(limit: usize) -> usize {
+    if limit == 0 {
+        20
+    } else {
+        limit.min(500)
+    }
 }
 
 fn history_disabled() -> bool {
@@ -402,6 +652,78 @@ fn now_ms() -> u128 {
         .duration_since(UNIX_EPOCH)
         .map(|duration| duration.as_millis())
         .unwrap_or(0)
+}
+
+fn generated_rerun_task_id(source_task_id: &str) -> String {
+    let nonce = Uuid::new_v4().simple().to_string();
+    format!("{source_task_id}-rerun-{}", &nonce[..8])
+}
+
+fn sanitized_task_snapshot(task: &ApiTask) -> ApiTask {
+    let mut snapshot = task.clone();
+    snapshot.inputs = sanitize_value_map(&snapshot.inputs);
+    snapshot.params = sanitize_value_map(&snapshot.params);
+    snapshot
+}
+
+fn sanitize_value_map(map: &BTreeMap<String, Value>) -> BTreeMap<String, Value> {
+    map.iter()
+        .filter_map(|(key, value)| {
+            if is_sensitive_key(key) {
+                None
+            } else {
+                Some((key.clone(), sanitize_value(value)))
+            }
+        })
+        .collect()
+}
+
+fn sanitize_json_object(map: &serde_json::Map<String, Value>) -> serde_json::Map<String, Value> {
+    map.iter()
+        .filter_map(|(key, value)| {
+            if is_sensitive_key(key) {
+                None
+            } else {
+                Some((key.clone(), sanitize_value(value)))
+            }
+        })
+        .collect()
+}
+
+fn sanitize_value(value: &Value) -> Value {
+    match value {
+        Value::Array(items) => Value::Array(items.iter().map(sanitize_value).collect()),
+        Value::Object(map) => Value::Object(sanitize_json_object(map)),
+        _ => value.clone(),
+    }
+}
+
+fn is_sensitive_key(key: &str) -> bool {
+    let normalized: String = key
+        .chars()
+        .filter(|ch| ch.is_ascii_alphanumeric())
+        .map(|ch| ch.to_ascii_lowercase())
+        .collect();
+
+    matches!(
+        normalized.as_str(),
+        "authorization"
+            | "proxyauthorization"
+            | "apikey"
+            | "xapikey"
+            | "key"
+            | "token"
+            | "accesstoken"
+            | "refreshtoken"
+            | "idtoken"
+            | "cookie"
+            | "setcookie"
+            | "session"
+            | "sessionid"
+    ) || normalized.ends_with("apikey")
+        || normalized.ends_with("token")
+        || normalized.contains("password")
+        || normalized.contains("secret")
 }
 
 fn summarize_json(value: &Value) -> Value {

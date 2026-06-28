@@ -219,7 +219,9 @@ Tauri 不只是一个壳，应该承担桌面体验：
 - `H-Gripe OpenAI Compatible Vision` 支持把 ComfyUI `IMAGE` tensor 编码为 data URL，通过 OpenAI-compatible chat/vision 接口返回文本分析。
 - 已新增 credential ref 第一版：OpenAI-compatible 节点可用 `credentials_ref` 引用本地凭据，默认读取被 git 忽略的 `user/hgripe/credentials.json`，也支持 `HGRIPE_CREDENTIALS_FILE` 指向其他文件。
 - 已新增本地任务历史第一版：CLI broker 每次执行后追加 JSONL 记录到 `user/hgripe/history/tasks.jsonl`，记录 provider、operation、status、duration、request id、输出文件列表和输出摘要。
-- 已新增 SQLite 历史索引：CLI broker 同步写入 `user/hgripe/history/tasks.sqlite3`，支持按时间读取最近任务，供 Tauri 历史列表和筛选 UI 使用。
+- 已新增 SQLite 历史索引：CLI broker 同步写入 `user/hgripe/history/tasks.sqlite3`，支持按时间读取最近任务，并支持按 provider、operation、status、是否有输出文件筛选。
+- 已新增历史重跑基础：新历史记录会保存脱敏后的 `task_snapshot`，去掉 inline API key、token、password、Authorization 等敏感字段，并可通过 `history_rerun_example.py` 按 `task_id` 重跑。
+- 已新增 Rust 历史动作入口：`hgripe-api-history` 支持 `list`、`show`、`rerun-task` 和 `rerun`，用于模拟后续 Tauri 历史面板需要的查询详情、重跑任务构造和一键重跑。
 - 已新增本地输出根目录约定：默认 `user/hgripe/outputs`，也支持 `HGRIPE_OUTPUT_DIR` 指定其他目录。
 - `openai_compatible image.generate` 已支持输出落盘：`b64_json` 图片可直接保存，`url` 图片可通过 `download_url_outputs` 下载保存，并写入 `output_files` 和 `images[*].local_path`。
 
@@ -227,7 +229,7 @@ Tauri 不只是一个壳，应该承担桌面体验：
 
 ```powershell
 cargo test -p hgripe-api
-cargo build -p hgripe-api --bin hgripe-api-broker
+cargo build -p hgripe-api --bins
 .\.venv\Scripts\python.exe python\bridge\mock_task_example.py
 .\.venv\Scripts\python.exe python\bridge\custom_http_example.py
 .\.venv\Scripts\python.exe python\bridge\openai_compatible_text_example.py
@@ -235,12 +237,19 @@ cargo build -p hgripe-api --bin hgripe-api-broker
 .\.venv\Scripts\python.exe python\bridge\openai_compatible_vision_node_example.py
 .\.venv\Scripts\python.exe python\bridge\openai_compatible_credentials_ref_example.py
 .\.venv\Scripts\python.exe python\bridge\history_tail_example.py
+.\.venv\Scripts\python.exe python\bridge\history_tail_example.py --provider openai_compatible --limit 10
+.\.venv\Scripts\python.exe python\bridge\history_tail_example.py --operation image.generate --has-output-files yes
+.\.venv\Scripts\python.exe python\bridge\history_rerun_example.py <task_id>
+.\target\debug\hgripe-api-history.exe list --limit 10
+.\target\debug\hgripe-api-history.exe show <task_id>
+.\target\debug\hgripe-api-history.exe rerun-task <task_id>
+.\target\debug\hgripe-api-history.exe rerun <task_id>
 ```
 
 下一步：
 
 - 后续把 credential ref 从本地 JSON 文件升级到 Tauri/系统 keychain。
-- 在 SQLite 历史上增加筛选、重跑和清理策略。
+- 把历史重跑接入 Tauri 桌面 UI，并继续增加历史清理策略。
 - 把输出落盘能力扩展到通用下载、视频、音频和 Image Edit 节点。
 - 把 ComfyUI 节点继续扩展为更多常用 API 专用节点，例如 OpenAI-compatible Image Edit、Video、Audio。
 

@@ -7,6 +7,10 @@ edition = "2021"
 name = "hgripe-api-broker"
 path = "src/bin/hgripe_api_broker.rs"
 
+[[bin]]
+name = "hgripe-api-history"
+path = "src/bin/hgripe_api_history.rs"
+
 [dependencies]
 async-trait = "0.1"
 base64 = "0.22"

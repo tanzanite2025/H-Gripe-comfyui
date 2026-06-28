@@ -70,6 +70,35 @@ describe("reroute", () => {
   });
 });
 
+describe("compare source", () => {
+  it("compares numerically when both sides are numbers", async () => {
+    expect(await defaultExecutors.compare(ctx("compare", { op: ">" }, { a: 5, b: 3 }))).toEqual({ result: 1 });
+    expect(await defaultExecutors.compare(ctx("compare", { op: "<=" }, { a: 5, b: 3 }))).toEqual({ result: 0 });
+    expect(await defaultExecutors.compare(ctx("compare", { op: "==" }, { a: "2", b: 2 }))).toEqual({ result: 1 });
+  });
+
+  it("falls back to string comparison for non-numeric values", async () => {
+    expect(await defaultExecutors.compare(ctx("compare", { op: "==" }, { a: "fox", b: "fox" }))).toEqual({
+      result: 1,
+    });
+    expect(await defaultExecutors.compare(ctx("compare", { op: "!=" }, { a: "fox", b: "jay" }))).toEqual({
+      result: 1,
+    });
+  });
+});
+
+describe("logic source", () => {
+  it("evaluates and/or/xor on truthiness", async () => {
+    expect(await defaultExecutors.logic(ctx("logic", { op: "and" }, { a: 1, b: 0 }))).toEqual({ result: 0 });
+    expect(await defaultExecutors.logic(ctx("logic", { op: "or" }, { a: 0, b: "x" }))).toEqual({ result: 1 });
+    expect(await defaultExecutors.logic(ctx("logic", { op: "xor" }, { a: 1, b: 1 }))).toEqual({ result: 0 });
+  });
+
+  it("not uses only a", async () => {
+    expect(await defaultExecutors.logic(ctx("logic", { op: "not" }, { a: 0, b: 1 }))).toEqual({ result: 1 });
+  });
+});
+
 describe("if gate", () => {
   it("emits value only on the selected branch (param fallback)", async () => {
     expect(await defaultExecutors.if(ctx("if", { cond: "true" }, { value: "x" }))).toEqual({ true: "x" });

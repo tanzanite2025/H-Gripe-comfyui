@@ -186,6 +186,44 @@ export const NODE_SPECS: Record<string, NodeSpec> = {
       },
     ],
   },
+  compare: {
+    kind: "compare",
+    title: "Compare",
+    description:
+      "Compares two values and emits 1 (true) or 0 (false). Numeric when both sides parse as numbers, else string comparison. Wire `result` into an If's `cond`.",
+    category: "control",
+    inputs: [port("a", "a", "any"), port("b", "b", "any")],
+    outputs: [port("result", "result", "number")],
+    params: [
+      {
+        key: "op",
+        label: "Operator",
+        control: "select",
+        options: ["==", "!=", ">", ">=", "<", "<="],
+        defaultValue: "==",
+        inline: true,
+      },
+    ],
+  },
+  logic: {
+    kind: "logic",
+    title: "Logic",
+    description:
+      "Boolean logic on the truthiness of its inputs, emitting 1 (true) or 0 (false). `not` uses only `a`. Wire `result` into an If's `cond`.",
+    category: "control",
+    inputs: [port("a", "a", "any"), port("b", "b", "any")],
+    outputs: [port("result", "result", "number")],
+    params: [
+      {
+        key: "op",
+        label: "Operator",
+        control: "select",
+        options: ["and", "or", "xor", "not"],
+        defaultValue: "and",
+        inline: true,
+      },
+    ],
+  },
   if: {
     kind: "if",
     title: "If",

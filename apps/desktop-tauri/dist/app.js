@@ -24,6 +24,7 @@ $$("#tabs button").forEach((btn) => {
     btn.classList.add("active");
     $(`#${btn.dataset.tab}`).classList.add("active");
     if (btn.dataset.tab === "comfyui") ensureComfyEmbedded();
+    if (btn.dataset.tab === "studio") ensureStudioProfiles();
   });
 });
 
@@ -461,7 +462,204 @@ $("#comfy-open").addEventListener("click", async () => {
   }
 });
 
+// ---- psd studio ----
+// First production-flow entry point. Composes an ApiTask from a provider
+// profile + prompt + reference image + PSD template and runs it through the
+// existing broker (`run_task_json`). The PSD template path is carried on the
+// task so a future export step can write the result back into the template.
+let studioProfiles = {};
+let studioProfilesLoaded = false;
+
+async function loadStudioProfiles() {
+  const select = $("#studio-profile");
+  const current = select.value;
+  try {
+    const items = await invoke("get_profiles");
+    studioProfiles = {};
+    const options = ['<option value="">— none (use provider below) —</option>'];
+    items.forEach((p) => {
+      studioProfiles[p.profile_ref] = p;
+      options.push(`<option value="${p.profile_ref}">${p.profile_ref}</option>`);
+    });
+    select.innerHTML = options.join("");
+    if (current && studioProfiles[current]) select.value = current;
+    studioProfilesLoaded = true;
+  } catch (err) {
+    toast(String(err), "err");
+  }
+}
+
+function ensureStudioProfiles() {
+  if (!studioProfilesLoaded) loadStudioProfiles();
+}
+
+function applyStudioProfile() {
+  const ref = $("#studio-profile").value;
+  const summary = $("#studio-profile-summary");
+  const profile = studioProfiles[ref];
+  if (!profile) {
+    summary.textContent = "";
+    return;
+  }
+  if (profile.provider) $("#studio-provider").value = profile.provider;
+  // Seed the model into params without clobbering anything the user typed.
+  if (profile.model) {
+    let params = {};
+    const raw = $("#studio-params").value.trim();
+    if (raw) {
+      try {
+        params = JSON.parse(raw);
+      } catch {
+        params = {};
+      }
+    }
+    if (params.model === undefined) {
+      params.model = profile.model;
+      $("#studio-params").value = pretty(params);
+    }
+  }
+  summary.textContent =
+    `provider: ${profile.provider ?? "-"} · model: ${profile.model ?? "-"} · ` +
+    `creds: ${profile.credentials_ref ?? "-"}`;
+}
+
+function studioBuildTask() {
+  const profileRef = $("#studio-profile").value;
+  const provider = $("#studio-provider").value.trim() || "mock";
+  const operation = $("#studio-operation").value;
+  const outputType = $("#studio-output").value;
+  const prompt = $("#studio-prompt").value;
+  const template = $("#studio-template").value.trim();
+  const reference = $("#studio-reference").value.trim();
+
+  let params = {};
+  const rawParams = $("#studio-params").value.trim();
+  if (rawParams) params = JSON.parse(rawParams); // surfaced as a JSON error
+
+  const inputs = {};
+  if (prompt.trim()) inputs.prompt = prompt;
+  if (reference) inputs.image_path = reference;
+  if (template) inputs.template_path = template;
+
+  return {
+    id: "studio-" + Date.now(),
+    provider,
+    operation,
+    inputs,
+    params,
+    credentials_ref: studioProfiles[profileRef]?.credentials_ref ?? null,
+    output_type: outputType,
+    cache_policy: { enabled: false, ttl_seconds: null, key: null },
+    retry_policy: { max_attempts: 1, backoff_ms: 200, timeout_ms: 60000 },
+  };
+}
+
+function studioPreview() {
+  const status = $("#studio-status");
+  try {
+    $("#studio-task").textContent = pretty(studioBuildTask());
+    status.textContent = "task ready";
+    status.className = "status ok";
+  } catch (err) {
+    status.textContent = "params: " + err;
+    status.className = "status err";
+  }
+}
+
+function renderStudioOutputs(result) {
+  const target = $("#studio-outputs");
+  const files = result.output_files ?? [];
+  if (!files.length) {
+    target.innerHTML = "";
+    return;
+  }
+  target.innerHTML = files
+    .map(
+      (f, i) =>
+        `<div class="card"><div class="label">output ${i + 1}</div><div class="value">${f.path}</div><div class="row"><button data-studio-open="${i}">Open</button></div></div>`
+    )
+    .join("");
+  target.dataset.files = JSON.stringify(files.map((f) => f.path));
+}
+
+$("#studio-profile").addEventListener("change", applyStudioProfile);
+$("#studio-preview").addEventListener("click", studioPreview);
+
+$("#studio-run").addEventListener("click", async () => {
+  const status = $("#studio-status");
+  let task;
+  try {
+    task = studioBuildTask();
+  } catch (err) {
+    status.textContent = "params: " + err;
+    status.className = "status err";
+    return;
+  }
+  $("#studio-task").textContent = pretty(task);
+  status.textContent = "generating…";
+  status.className = "status";
+  try {
+    const result = await invoke("run_task_json", { taskJson: JSON.stringify(task) });
+    $("#studio-result").textContent = pretty(result);
+    renderStudioOutputs(result);
+    status.textContent = result.status;
+    status.className = "status " + (result.status === "failed" ? "err" : "ok");
+  } catch (err) {
+    $("#studio-result").textContent = String(err);
+    status.textContent = "error";
+    status.className = "status err";
+  }
+});
+
+$("#studio-outputs").addEventListener("click", async (e) => {
+  const idx = e.target.dataset.studioOpen;
+  if (idx === undefined) return;
+  const files = JSON.parse($("#studio-outputs").dataset.files || "[]");
+  const path = files[parseInt(idx, 10)];
+  if (!path) return;
+  try {
+    await invoke("open_path", { path });
+    toast("opened output", "ok");
+  } catch (err) {
+    toast(String(err), "err");
+  }
+});
+
+$("#studio-reference-preview").addEventListener("click", async () => {
+  const path = $("#studio-reference").value.trim();
+  const img = $("#studio-reference-img");
+  if (!path) {
+    img.classList.add("hidden");
+    img.removeAttribute("src");
+    return;
+  }
+  try {
+    img.src = await invoke("read_image_data_url", { path });
+    img.classList.remove("hidden");
+  } catch (err) {
+    img.classList.add("hidden");
+    img.removeAttribute("src");
+    toast(String(err), "err");
+  }
+});
+
+$("#studio-template-from-psd").addEventListener("click", async () => {
+  try {
+    const info = await invoke("get_runtime_info");
+    const outputs = await invoke("list_psd_outputs", { dir: info.output_dir.path });
+    if (!outputs.length) {
+      toast("no PSD files in output dir", "err");
+      return;
+    }
+    $("#studio-template").value = outputs[0].psd_path;
+    toast(`picked ${outputs[0].name}.psd (${outputs.length} found)`, "ok");
+  } catch (err) {
+    toast(String(err), "err");
+  }
+});
+
 // ---- init ----
 loadDashboard();
 loadConfig("credentials");
 loadConfig("profiles");
+loadStudioProfiles();

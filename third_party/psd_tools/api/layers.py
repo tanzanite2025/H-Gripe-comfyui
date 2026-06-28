@@ -1971,6 +1971,59 @@ class SmartObjectLayer(Layer):
             self._smart_object = SmartObject(self)
         return self._smart_object
 
+    def replace_with_image(
+        self,
+        image: Image.Image,
+        compression: Compression = Compression.RLE,
+    ) -> "SmartObjectLayer":
+        """Replace the smart object's content with a PIL image, in place.
+
+        H-Gripe local extension (not part of upstream psd-tools). Does two
+        things so the result is consistent both in Photoshop and in a
+        :py:meth:`PSDImage.composite` preview:
+
+        1. Replaces the embedded source bytes (PNG-encoded ``image``) via
+           :py:meth:`SmartObject.replace_contents`, keeping the layer a smart
+           object (UUID/transform/warp preserved).
+        2. Refreshes the layer's cached raster channels from ``image`` while
+           preserving the smart-object tagged blocks, then rebuilds the
+           document record so the new pixels are serialized on ``save``.
+
+        ``image`` is drawn at the layer's current ``top``/``left``; size the
+        image to the layer's box beforehand for a 1:1 replacement.
+
+        :param image: New content as a :py:class:`PIL.Image.Image`.
+        :param compression: Channel compression for the refreshed raster.
+        :return: ``self``.
+        :raises NotImplementedError: If the smart object is not embedded.
+        """
+        import io
+
+        so = self.smart_object
+        rgba = image.convert("RGBA")
+        buffer = io.BytesIO()
+        rgba.save(buffer, format="PNG")
+        so.replace_contents(buffer.getvalue(), filetype="png")
+
+        converted = image.convert(self._psd.pil_mode)
+        record, channels = PixelLayer._build_layer_record_and_channels(
+            converted,
+            self.name,
+            self.left,
+            self.top,
+            compression,
+            version=self._psd._record.header.version,
+        )
+        # Mutate the existing record in place so smart-object tagged blocks
+        # (PlacedLayer / SoLd) survive; only swap raster channels and bounds.
+        self._record.channel_info = record.channel_info
+        self._channels = channels
+        self._record.bottom = self.top + converted.height
+        self._record.right = self.left + converted.width
+        if self._psd is not None:
+            self._psd._update_record()
+        return self
+
 
 class TypeLayer(Layer):
     """

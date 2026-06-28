@@ -249,6 +249,44 @@ class SmartObject:
         with open(filename, "wb") as f:
             f.write(content)
 
+    def replace_contents(
+        self, data: bytes, filetype: str | None = None
+    ) -> None:
+        """Replace the embedded file content of this smart object in place.
+
+        H-Gripe local extension (not part of upstream psd-tools): swaps the
+        bytes stored in the document-level linked-layer block for this object,
+        keeping the layer a smart object (its UUID, transform and warp are
+        preserved). Only ``kind == 'data'`` (embedded) smart objects are
+        supported; external/aliased links are not modified.
+
+        Note this only updates the *embedded source*. The layer's cached
+        raster (used by :py:meth:`PSDImage.composite`) is unchanged, so a
+        non-Photoshop preview will still show the old pixels until the raster
+        is refreshed. :py:meth:`SmartObjectLayer.replace_with_image` does both.
+
+        :param data: New embedded file bytes (e.g. PNG/JPEG/PSD content).
+        :param filetype: Optional 4-char type code hint (e.g. ``'png'``).
+        :raises ValueError: If the smart object has no linked data.
+        :raises NotImplementedError: If the smart object is not embedded.
+        """
+        if self._data is None:
+            raise ValueError("Smart object data not found")
+        if self.kind != "data":
+            raise NotImplementedError(
+                "replace_contents only supports embedded (kind='data') smart objects"
+            )
+        self._data.data = bytes(data)
+        self._data.filesize = len(data)
+        if filetype is not None:
+            code = (filetype.strip() + "    ")[:4]
+            current = self._data.filetype
+            self._data.filetype = (
+                code.encode("ascii")
+                if isinstance(current, (bytes, bytearray))
+                else code
+            )
+
     def __repr__(self) -> str:
         return "SmartObject(%r kind=%r type=%r size=%s)" % (
             self.filename,

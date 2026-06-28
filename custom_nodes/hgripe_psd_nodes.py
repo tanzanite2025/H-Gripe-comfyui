@@ -249,6 +249,7 @@ class HGripePsdCompose:
                 "inherit_placeholder_mask": (["enable", "disable"], {"default": "disable"}),
                 "hide_placeholder": (["enable", "disable"], {"default": "enable"}),
                 "visible_candidate": ("INT", {"default": 1, "min": 1, "max": 4096, "step": 1}),
+                "smart_object_mode": (["disable", "replace_content"], {"default": "disable"}),
                 "write_metadata_layer": (["enable", "disable"], {"default": "disable"}),
                 "metadata_json": ("STRING", {"multiline": True, "default": "{}"}),
             },
@@ -296,9 +297,12 @@ class HGripePsdCompose:
         inherit_placeholder_mask: str = "disable",
         hide_placeholder: str = "enable",
         visible_candidate: int = 1,
+        smart_object_mode: str = "disable",
         write_metadata_layer: str = "disable",
         metadata_json: str = "{}",
     ):
+        from PIL import Image
+
         from psd_tools import PSDImage
         from psd_tools.api.layers import Group, PixelLayer
 
@@ -317,55 +321,78 @@ class HGripePsdCompose:
         if ph_layer is not None:
             placeholder_kind = "smartobject" if _is_smart_object(ph_layer) else "pixel"
 
-        generated_group = Group.new(psd, "03_GENERATED")
         gen_pil = _tensor_to_pil(image, image_index)
         fitted, off_x, off_y = _fit_into_box(gen_pil, box_w, box_h, fit_mode)
         main_name = generated_layer_name.strip() or "generated"
-        main_layer = PixelLayer.frompil(fitted, psd, main_name, top + off_y, left + off_x)
-        generated_group.append(main_layer)
 
+        # True smart-object replacement: write the generated image *inside* the
+        # template's smart object (kept editable in Photoshop) instead of laying
+        # a flat pixel copy on top. Falls back to the pixel path otherwise.
+        so_replace = (
+            smart_object_mode == "replace_content"
+            and placeholder_kind == "smartobject"
+            and ph_layer is not None
+        )
         candidate_layers = []
-        if candidates is not None:
-            batch = int(candidates.shape[0]) if len(candidates.shape) == 4 else 1
-            for index in range(batch):
-                candidate_pil = _tensor_to_pil(candidates, index)
-                cand_fitted, cand_x, cand_y = _fit_into_box(candidate_pil, box_w, box_h, fit_mode)
-                candidate_layer = PixelLayer.frompil(
-                    cand_fitted, psd, f"candidate_{index + 2:02d}", top + cand_y, left + cand_x
-                )
-                generated_group.append(candidate_layer)
-                candidate_layers.append(candidate_layer)
-
-        # Placeholder-aware z-ordering: drop the generated group into the placeholder's slot.
-        if z_order == "placeholder" and ph_parent is not None:
-            ph_parent.insert(ph_index, generated_group)
-        elif z_order == "above_background":
-            psd.insert(min(1, len(psd)), generated_group)
-        else:
-            psd.append(generated_group)
-
-        if ph_layer is not None and hide_placeholder == "enable":
-            ph_layer.visible = False
-
-        # Multi-candidate visibility: exactly one of [main, candidate_02, ...] is shown.
-        gallery = [main_layer, *candidate_layers]
-        choice = visible_candidate if 1 <= visible_candidate <= len(gallery) else 1
-        for position, layer in enumerate(gallery, start=1):
-            layer.visible = position == choice
-
-        # Mask: explicit MASK input wins; otherwise optionally inherit the placeholder mask.
         applied_mask = "none"
-        if mask is not None:
-            mask_pil = _mask_tensor_to_pil(mask, mask_index).resize(fitted.size)
-            main_layer.create_mask(mask_pil, top + off_y, left + off_x)
-            applied_mask = "input"
-        elif inherit_placeholder_mask == "enable" and ph_layer is not None and ph_layer.has_mask():
-            placeholder_mask = ph_layer.mask
-            mask_image = placeholder_mask.topil()
-            if mask_image is not None:
-                mleft, mtop = int(placeholder_mask.bbox[0]), int(placeholder_mask.bbox[1])
-                main_layer.create_mask(mask_image.convert("L"), mtop, mleft)
-                applied_mask = "inherited"
+        choice = 1
+
+        if so_replace:
+            box_img = Image.new("RGBA", (box_w, box_h), (0, 0, 0, 0))
+            box_img.paste(fitted, (off_x, off_y))
+            ph_layer.replace_with_image(box_img)
+            main_name = ph_layer.name
+        else:
+            generated_group = Group.new(psd, "03_GENERATED")
+            main_layer = PixelLayer.frompil(fitted, psd, main_name, top + off_y, left + off_x)
+            generated_group.append(main_layer)
+
+            if candidates is not None:
+                batch = int(candidates.shape[0]) if len(candidates.shape) == 4 else 1
+                for index in range(batch):
+                    candidate_pil = _tensor_to_pil(candidates, index)
+                    cand_fitted, cand_x, cand_y = _fit_into_box(
+                        candidate_pil, box_w, box_h, fit_mode
+                    )
+                    candidate_layer = PixelLayer.frompil(
+                        cand_fitted, psd, f"candidate_{index + 2:02d}", top + cand_y, left + cand_x
+                    )
+                    generated_group.append(candidate_layer)
+                    candidate_layers.append(candidate_layer)
+
+            # Placeholder-aware z-ordering: drop the group into the placeholder's slot.
+            if z_order == "placeholder" and ph_parent is not None:
+                ph_parent.insert(ph_index, generated_group)
+            elif z_order == "above_background":
+                psd.insert(min(1, len(psd)), generated_group)
+            else:
+                psd.append(generated_group)
+
+            if ph_layer is not None and hide_placeholder == "enable":
+                ph_layer.visible = False
+
+            # Multi-candidate visibility: exactly one of [main, candidate_02, ...] is shown.
+            gallery = [main_layer, *candidate_layers]
+            choice = visible_candidate if 1 <= visible_candidate <= len(gallery) else 1
+            for position, layer in enumerate(gallery, start=1):
+                layer.visible = position == choice
+
+            # Mask: explicit MASK input wins; otherwise optionally inherit placeholder mask.
+            if mask is not None:
+                mask_pil = _mask_tensor_to_pil(mask, mask_index).resize(fitted.size)
+                main_layer.create_mask(mask_pil, top + off_y, left + off_x)
+                applied_mask = "input"
+            elif (
+                inherit_placeholder_mask == "enable"
+                and ph_layer is not None
+                and ph_layer.has_mask()
+            ):
+                placeholder_mask = ph_layer.mask
+                mask_image = placeholder_mask.topil()
+                if mask_image is not None:
+                    mleft, mtop = int(placeholder_mask.bbox[0]), int(placeholder_mask.bbox[1])
+                    main_layer.create_mask(mask_image.convert("L"), mtop, mleft)
+                    applied_mask = "inherited"
 
         has_reference = False
         if reference_image is not None:
@@ -394,6 +421,7 @@ class HGripePsdCompose:
                 "visible_candidate": choice,
                 "applied_mask": applied_mask,
                 "has_reference": has_reference,
+                "smart_object_mode": "replace_content" if so_replace else "disable",
             }
         )
 

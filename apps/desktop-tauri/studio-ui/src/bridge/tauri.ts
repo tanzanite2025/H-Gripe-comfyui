@@ -13,6 +13,8 @@ interface TauriWindow {
 // same-origin (tauri://localhost), so reaching across is allowed. We try this
 // frame first, then parent, then top.
 function tauriInvoke(): Invoke | null {
+  // No DOM (e.g. unit tests run in a node environment) → always use mocks.
+  if (typeof window === "undefined") return null;
   const candidates: (Window | null)[] = [window];
   try {
     if (window.parent && window.parent !== window) candidates.push(window.parent);
@@ -86,4 +88,59 @@ export async function generateThumbnail(req: ThumbnailRequest): Promise<Thumbnai
     size: req.size,
     dpr: req.dpr ?? window.devicePixelRatio ?? 1,
   })) as ThumbnailResult;
+}
+
+// --- PSD Studio integration -------------------------------------------------
+// Reuses the same backend commands the static PSD Studio tab uses, so the node
+// editor shares provider profiles and the output directory rather than
+// re-implementing them.
+
+// Fields are snake_case to match the Rust `ProviderProfileSummary`.
+export interface ProviderProfile {
+  profile_ref: string;
+  provider?: string | null;
+  model?: string | null;
+  credentials_ref?: string | null;
+  params_count?: number;
+}
+
+/** List H-Gripe provider profiles (`get_profiles`). */
+export async function listProfiles(): Promise<ProviderProfile[]> {
+  const invoke = tauriInvoke();
+  if (!invoke) {
+    return [
+      { profile_ref: "mock-openai", provider: "openai", model: "gpt-image-1", credentials_ref: "openai-key" },
+      { profile_ref: "mock-local", provider: "comfyui", model: "sdxl", credentials_ref: null },
+    ];
+  }
+  return (await invoke("get_profiles")) as ProviderProfile[];
+}
+
+/** Resolve the configured output directory (`get_runtime_info().output_dir`). */
+export async function getOutputDir(): Promise<string> {
+  const invoke = tauriInvoke();
+  if (!invoke) return "/mock/outputs";
+  const info = (await invoke("get_runtime_info")) as { output_dir?: { path?: string } };
+  return info.output_dir?.path ?? "";
+}
+
+// Fields are snake_case to match the Rust `PsdOutputFile`.
+export interface PsdOutput {
+  name: string;
+  psd_path: string;
+  preview_path?: string | null;
+  metadata_path?: string | null;
+  smart_object?: boolean;
+}
+
+/** List `.psd` outputs in a directory (`list_psd_outputs`). */
+export async function listPsdOutputs(dir: string): Promise<PsdOutput[]> {
+  const invoke = tauriInvoke();
+  if (!invoke) {
+    return [
+      { name: "fox-poster", psd_path: "/mock/outputs/fox-poster.psd", preview_path: "/mock/outputs/fox-poster_preview.png", smart_object: true },
+      { name: "banner", psd_path: "/mock/outputs/banner.psd", preview_path: null, smart_object: false },
+    ];
+  }
+  return (await invoke("list_psd_outputs", { dir })) as PsdOutput[];
 }

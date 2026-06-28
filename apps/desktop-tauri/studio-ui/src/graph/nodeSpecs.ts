@@ -151,6 +151,13 @@ export const NODE_SPECS: Record<string, NodeSpec> = {
         defaultValue: 0,
         hint: "overridden by a connected seed input",
       },
+      {
+        key: "credentials_ref",
+        label: "Credentials",
+        control: "text",
+        defaultValue: "",
+        hint: "set automatically when you pick a profile",
+      },
     ],
   },
   preview: {

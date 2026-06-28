@@ -170,6 +170,22 @@ button:disabled { opacity: 0.6; cursor: default; }
 /* node thumbnail wrapper (lazy) */
 .node-thumb-wrap { width: 100%; }
 
+/* PSD outputs picker in the inspector */
+.output-picker { margin-top: 4px; }
+.output-picker > button { font-size: 11px; padding: 3px 8px; }
+.output-list {
+  margin-top: 4px;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  max-height: 160px;
+  overflow: auto;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  padding: 4px;
+}
+.output-item { text-align: left; font-size: 11px; }
+
 /* inline param editing on the node card */
 .inline-field { display: flex; flex-direction: column; gap: 3px; margin-bottom: 8px; }
 .inline-field > span { color: var(--muted); font-size: 11px; }

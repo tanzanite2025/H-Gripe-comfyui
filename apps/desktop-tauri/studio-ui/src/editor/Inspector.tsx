@@ -1,6 +1,8 @@
 import type { Node } from "@xyflow/react";
 import { nodeSpec } from "../graph/nodeSpecs";
 import { ParamField } from "./ParamField";
+import { ProfilePicker } from "./ProfilePicker";
+import { OutputPicker } from "./OutputPicker";
 import type { HgripeNodeData } from "./HgripeNode";
 
 interface InspectorProps {
@@ -27,6 +29,16 @@ export function Inspector({ node, onParamChange }: InspectorProps) {
       <h2>{spec.title}</h2>
       <p className="muted">{spec.description}</p>
 
+      {spec.kind === "generate" && (
+        <ProfilePicker
+          onApply={(profile) => {
+            if (profile.provider) onParamChange(node.id, "provider", profile.provider);
+            if (profile.model) onParamChange(node.id, "model", profile.model);
+            onParamChange(node.id, "credentials_ref", profile.credentials_ref ?? "");
+          }}
+        />
+      )}
+
       {spec.params.map((p) => {
         const raw = data.params[p.key];
         const onChange = (v: unknown) => onParamChange(node.id, p.key, v);
@@ -34,6 +46,12 @@ export function Inspector({ node, onParamChange }: InspectorProps) {
           <label key={p.key} className="field">
             <span>{p.label}</span>
             <ParamField spec={p} value={raw} onChange={onChange} />
+            {p.control === "path" && (
+              <OutputPicker
+                kind={spec.kind === "psdTemplate" ? "template" : "image"}
+                onPick={(path) => onChange(path)}
+              />
+            )}
             {p.hint && <small className="hint">{p.hint}</small>}
           </label>
         );

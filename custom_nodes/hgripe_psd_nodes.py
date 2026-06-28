@@ -5,16 +5,24 @@ These nodes implement the MVP of the PSD production workflow described in
 generated image into a placeholder while preserving template/reference/candidate
 layers, and export ``final.psd`` + ``preview.png`` + ``metadata.json``.
 
-PSD reading and writing use ``psd-tools``. Heavy imports are deferred to call
-time so the module can be loaded even when ``psd-tools`` is not installed.
+PSD reading and writing use ``psd-tools``, vendored under ``third_party/`` so the
+nodes depend on a copy we control. Heavy imports are deferred to call time so the
+module can be loaded even when the vendored copy's dependencies are missing.
 """
 
 from __future__ import annotations
 
 import json
+import sys
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
+
+# Prefer the vendored ``psd_tools`` (third_party/) over any pip-installed copy so
+# our local modifications (e.g. smart-object content replacement) are used.
+_VENDOR_DIR = Path(__file__).resolve().parent.parent / "third_party"
+if _VENDOR_DIR.is_dir() and str(_VENDOR_DIR) not in sys.path:
+    sys.path.insert(0, str(_VENDOR_DIR))
 
 PSD_TEMPLATE_TYPE = "HGRIPE_PSD_TEMPLATE"
 PSD_DOC_TYPE = "HGRIPE_PSD"

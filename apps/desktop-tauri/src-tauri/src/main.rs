@@ -4,7 +4,7 @@
 )]
 
 use std::fs;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 use hgripe_api::providers::custom_http::CustomHttpProvider;
 use hgripe_api::providers::mock::MockProvider;
@@ -204,6 +204,182 @@ fn open_url(url: String) -> Result<(), String> {
     open_external(&url)
 }
 
+#[derive(Serialize)]
+struct PsdOutputFile {
+    /// Base name shared by the triplet (e.g. `final` for `final.psd`).
+    name: String,
+    psd_path: String,
+    preview_path: Option<String>,
+    metadata_path: Option<String>,
+    /// PSD file modification time in milliseconds since the Unix epoch.
+    modified_ms: Option<u64>,
+    size_bytes: u64,
+}
+
+fn modified_ms(metadata: &fs::Metadata) -> Option<u64> {
+    metadata
+        .modified()
+        .ok()?
+        .duration_since(std::time::UNIX_EPOCH)
+        .ok()
+        .map(|d| d.as_millis() as u64)
+}
+
+/// Scan a directory (non-recursively) for PSD exports produced by the PSD
+/// nodes and group each `<base>.psd` with its `<base>_preview.png` and
+/// `<base>_metadata.json` siblings when present.
+#[tauri::command]
+fn list_psd_outputs(dir: String) -> Result<Vec<PsdOutputFile>, String> {
+    let dir = dir.trim();
+    if dir.is_empty() {
+        return Err("output directory is empty".to_string());
+    }
+    let path = Path::new(dir);
+    if !path.is_dir() {
+        return Err(format!("not a directory: {dir}"));
+    }
+
+    let mut outputs = Vec::new();
+    for entry in
+        fs::read_dir(path).map_err(|err| format!("failed to read {}: {err}", path.display()))?
+    {
+        let entry = match entry {
+            Ok(entry) => entry,
+            Err(_) => continue,
+        };
+        let psd_path = entry.path();
+        let is_psd = psd_path
+            .extension()
+            .and_then(|ext| ext.to_str())
+            .map(|ext| ext.eq_ignore_ascii_case("psd"))
+            .unwrap_or(false);
+        if !is_psd {
+            continue;
+        }
+        let base = match psd_path.file_stem().and_then(|s| s.to_str()) {
+            Some(stem) => stem.to_string(),
+            None => continue,
+        };
+
+        let sibling = |suffix: &str| {
+            let candidate = path.join(format!("{base}{suffix}"));
+            candidate
+                .is_file()
+                .then(|| candidate.to_string_lossy().to_string())
+        };
+        let preview_path = sibling("_preview.png");
+        let metadata_path = sibling("_metadata.json");
+
+        let metadata = entry.metadata().ok();
+        outputs.push(PsdOutputFile {
+            name: base,
+            psd_path: psd_path.to_string_lossy().to_string(),
+            preview_path,
+            metadata_path,
+            modified_ms: metadata.as_ref().and_then(modified_ms),
+            size_bytes: metadata.as_ref().map(|m| m.len()).unwrap_or(0),
+        });
+    }
+
+    // Newest first, falling back to name for stable ordering.
+    outputs.sort_by(|a, b| {
+        b.modified_ms
+            .cmp(&a.modified_ms)
+            .then_with(|| a.name.cmp(&b.name))
+    });
+    Ok(outputs)
+}
+
+fn base64_encode(bytes: &[u8]) -> String {
+    const TABLE: &[u8; 64] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
+    let mut out = String::with_capacity(bytes.len().div_ceil(3) * 4);
+    for chunk in bytes.chunks(3) {
+        let b0 = chunk[0] as usize;
+        let b1 = chunk.get(1).copied().unwrap_or(0) as usize;
+        let b2 = chunk.get(2).copied().unwrap_or(0) as usize;
+        out.push(TABLE[b0 >> 2] as char);
+        out.push(TABLE[((b0 & 0x03) << 4) | (b1 >> 4)] as char);
+        if chunk.len() > 1 {
+            out.push(TABLE[((b1 & 0x0f) << 2) | (b2 >> 6)] as char);
+        } else {
+            out.push('=');
+        }
+        if chunk.len() > 2 {
+            out.push(TABLE[b2 & 0x3f] as char);
+        } else {
+            out.push('=');
+        }
+    }
+    out
+}
+
+/// Read an image file and return it as a `data:` URL for inline display.
+#[tauri::command]
+fn read_image_data_url(path: String) -> Result<String, String> {
+    let path = Path::new(path.trim());
+    let mime = match path
+        .extension()
+        .and_then(|ext| ext.to_str())
+        .map(|ext| ext.to_ascii_lowercase())
+        .as_deref()
+    {
+        Some("png") => "image/png",
+        Some("jpg") | Some("jpeg") => "image/jpeg",
+        Some("webp") => "image/webp",
+        Some("gif") => "image/gif",
+        Some("bmp") => "image/bmp",
+        other => return Err(format!("unsupported image type: {}", other.unwrap_or(""))),
+    };
+    // Guard against accidentally inlining huge files into the webview.
+    let metadata =
+        fs::metadata(path).map_err(|err| format!("failed to stat {}: {err}", path.display()))?;
+    if metadata.len() > 25 * 1024 * 1024 {
+        return Err("image is larger than 25 MB".to_string());
+    }
+    let bytes =
+        fs::read(path).map_err(|err| format!("failed to read {}: {err}", path.display()))?;
+    Ok(format!("data:{mime};base64,{}", base64_encode(&bytes)))
+}
+
+/// Read a text file, truncating to `max_bytes` so large files cannot freeze
+/// the UI. A truncation marker is appended when the file is clipped.
+#[tauri::command]
+fn read_text_file(path: String, max_bytes: usize) -> Result<String, String> {
+    let path = Path::new(path.trim());
+    let bytes =
+        fs::read(path).map_err(|err| format!("failed to read {}: {err}", path.display()))?;
+    let limit = if max_bytes == 0 {
+        bytes.len()
+    } else {
+        max_bytes
+    };
+    if bytes.len() > limit {
+        let mut end = limit;
+        // Avoid slicing in the middle of a UTF-8 sequence.
+        while end > 0 && (bytes[end] & 0xC0) == 0x80 {
+            end -= 1;
+        }
+        let mut text = String::from_utf8_lossy(&bytes[..end]).to_string();
+        text.push_str("\n… (truncated)");
+        Ok(text)
+    } else {
+        Ok(String::from_utf8_lossy(&bytes).to_string())
+    }
+}
+
+/// Open a local file or folder with the OS default handler.
+#[tauri::command]
+fn open_path(path: String) -> Result<(), String> {
+    let trimmed = path.trim();
+    if trimmed.is_empty() {
+        return Err("path is empty".to_string());
+    }
+    if !Path::new(trimmed).exists() {
+        return Err(format!("path does not exist: {trimmed}"));
+    }
+    open_external(trimmed)
+}
+
 #[cfg(target_os = "windows")]
 fn open_external(url: &str) -> Result<(), String> {
     std::process::Command::new("cmd")
@@ -249,7 +425,11 @@ fn main() {
             run_task,
             run_task_json,
             rerun_task,
-            open_url
+            open_url,
+            list_psd_outputs,
+            read_image_data_url,
+            read_text_file,
+            open_path
         ])
         .run(tauri::generate_context!())
         .expect("error while running H-Gripe Desktop");

@@ -18,6 +18,7 @@
       <button data-tab="profiles">Profiles</button>
       <button data-tab="run">Run Task</button>
       <button data-tab="history">History</button>
+      <button data-tab="psd">PSD</button>
       <button data-tab="comfyui">ComfyUI</button>
     </nav>
 
@@ -107,6 +108,31 @@
           <button id="cleanup-apply" class="danger">Apply</button>
         </div>
         <pre id="cleanup-output" class="json"></pre>
+      </section>
+
+      <section id="psd" class="panel">
+        <div class="row wrap">
+          <h2>PSD Outputs</h2>
+          <input id="psd-dir" placeholder="output directory" style="flex:1" />
+          <button id="psd-use-output">Use output dir</button>
+          <button id="psd-refresh" class="primary">Load</button>
+        </div>
+        <p class="hint">
+          Scans a folder for PSD exports (<code>&lt;name&gt;.psd</code> with matching
+          <code>_preview.png</code> / <code>_metadata.json</code>) produced by the
+          <code>H-Gripe PSD Export</code> node.
+        </p>
+        <div id="psd-list" class="psd-grid"></div>
+        <div id="psd-detail" class="psd-detail hidden">
+          <div class="row wrap">
+            <h3 id="psd-detail-name"></h3>
+            <button data-psd-open="psd">Open PSD</button>
+            <button data-psd-open="folder">Open folder</button>
+          </div>
+          <img id="psd-detail-preview" class="psd-preview" alt="preview" />
+          <h4>metadata.json</h4>
+          <pre id="psd-detail-metadata" class="json"></pre>
+        </div>
       </section>
 
       <section id="comfyui" class="panel">

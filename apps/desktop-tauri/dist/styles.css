@@ -146,6 +146,27 @@ tr:hover td { background: var(--panel); }
 .badge.ok { background: rgba(67,197,158,0.15); color: var(--ok); }
 .badge.err { background: rgba(224,85,107,0.15); color: var(--danger); }
 
+.hidden { display: none !important; }
+
+.psd-grid { display: flex; flex-wrap: wrap; gap: 10px; margin-top: 8px; }
+.psd-card { cursor: pointer; min-width: 200px; }
+.psd-card:hover { border-color: var(--accent); }
+
+.psd-detail {
+  margin-top: 18px;
+  border-top: 1px solid var(--border);
+  padding-top: 12px;
+}
+.psd-detail h3 { color: var(--text); margin: 0; }
+.psd-preview {
+  max-width: 100%;
+  max-height: 420px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: var(--panel);
+  display: block;
+}
+
 .hint { color: var(--muted); margin: 4px 0 10px; }
 code { background: var(--panel-2); padding: 1px 5px; border-radius: 4px; }
 

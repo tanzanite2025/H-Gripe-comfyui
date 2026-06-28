@@ -1,8 +1,8 @@
 use hgripe_api::{
     build_doctor_report, credentials_file_path, get_provider_profile, get_redacted_credential_ref,
     initialize_local_config, list_credential_summaries, list_provider_profile_summaries,
-    provider_profiles_path, validate_credentials, validate_provider_profiles, DoctorOptions,
-    InitOptions,
+    provider_profiles_path, resolve_provider_profile, validate_credentials,
+    validate_provider_profiles, DoctorOptions, InitOptions,
 };
 use serde::Serialize;
 use serde_json::json;
@@ -62,6 +62,7 @@ fn run_profiles(mut args: Vec<String>) -> Result<(), String> {
     match command.as_str() {
         "list" => run_profiles_list(args),
         "show" => run_profiles_show(args),
+        "resolve" => run_profiles_resolve(args),
         "validate" => run_profiles_validate(args),
         _ => Err(format!(
             "unknown profiles command '{command}'. Run `hgripe-api-config --help`."
@@ -95,6 +96,29 @@ fn run_profiles_show(args: Vec<String>) -> Result<(), String> {
         "profiles_file": path,
         "profile_ref": profile_ref,
         "profile": profile,
+    }))
+}
+
+fn run_profiles_resolve(args: Vec<String>) -> Result<(), String> {
+    let ParsedProfileResolveCommand {
+        profiles_file,
+        credentials_file,
+        profile_ref,
+    } = parse_profile_resolve_command(args)?;
+    let profiles_path = provider_profiles_path(profiles_file.as_deref());
+    let credentials_path = credentials_file_path(credentials_file.as_deref());
+    let resolved = resolve_provider_profile(
+        &profile_ref,
+        profiles_file.as_deref(),
+        credentials_file.as_deref(),
+    )
+    .map_err(|err| err.to_string())?;
+
+    print_json(&json!({
+        "profiles_file": profiles_path,
+        "credentials_file": credentials_path,
+        "profile_ref": profile_ref,
+        "resolved": resolved,
     }))
 }
 
@@ -174,6 +198,13 @@ struct ParsedProfileCommand {
     profile_ref: String,
 }
 
+#[derive(Debug, Clone)]
+struct ParsedProfileResolveCommand {
+    profiles_file: Option<String>,
+    credentials_file: Option<String>,
+    profile_ref: String,
+}
+
 fn parse_profile_command(args: Vec<String>) -> Result<ParsedProfileCommand, String> {
     let mut profiles_file = None;
     let mut profile_ref = None;
@@ -198,6 +229,40 @@ fn parse_profile_command(args: Vec<String>) -> Result<ParsedProfileCommand, Stri
 
     Ok(ParsedProfileCommand {
         profiles_file,
+        profile_ref: profile_ref.ok_or_else(|| "missing profile_ref".to_string())?,
+    })
+}
+
+fn parse_profile_resolve_command(args: Vec<String>) -> Result<ParsedProfileResolveCommand, String> {
+    let mut profiles_file = None;
+    let mut credentials_file = None;
+    let mut profile_ref = None;
+    let mut index = 0;
+
+    while index < args.len() {
+        match args[index].as_str() {
+            "--profiles-file" => {
+                profiles_file = Some(option_value(&args, index)?);
+                index += 2;
+            }
+            "--credentials-file" => {
+                credentials_file = Some(option_value(&args, index)?);
+                index += 2;
+            }
+            value if value.starts_with('-') => return Err(format!("unknown option '{value}'")),
+            value => {
+                if profile_ref.is_some() {
+                    return Err(format!("unexpected extra argument '{value}'"));
+                }
+                profile_ref = Some(value.to_string());
+                index += 1;
+            }
+        }
+    }
+
+    Ok(ParsedProfileResolveCommand {
+        profiles_file,
+        credentials_file,
         profile_ref: profile_ref.ok_or_else(|| "missing profile_ref".to_string())?,
     })
 }
@@ -373,6 +438,7 @@ fn print_help() {
   hgripe-api-config doctor [--credentials-file PATH] [--profiles-file PATH] [--history-file PATH] [--history-db PATH] [--output-dir PATH] [--broker PATH]
   hgripe-api-config profiles list [--profiles-file PATH]
   hgripe-api-config profiles show <profile_ref> [--profiles-file PATH]
+  hgripe-api-config profiles resolve <profile_ref> [--profiles-file PATH] [--credentials-file PATH]
   hgripe-api-config profiles validate [--profiles-file PATH]
   hgripe-api-config credentials list [--credentials-file PATH]
   hgripe-api-config credentials show <credential_ref> [--credentials-file PATH]

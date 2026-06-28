@@ -1,7 +1,8 @@
+use crate::credentials::load_credential_ref;
 use crate::provider::{BrokerError, BrokerResult};
 use serde::{Deserialize, Serialize};
-use serde_json::Value;
-use std::collections::BTreeMap;
+use serde_json::{Map, Value};
+use std::collections::{BTreeMap, BTreeSet};
 use std::env;
 use std::fs;
 use std::path::{Path, PathBuf};
@@ -31,6 +32,35 @@ pub struct ProviderProfileSummary {
     pub has_headers: bool,
     pub params_count: usize,
     pub extra_body_count: usize,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct ResolvedProviderProfile {
+    pub profile_ref: String,
+    pub ok: bool,
+    pub provider: String,
+    pub credentials_ref: Option<String>,
+    pub credentials_ref_status: String,
+    pub base_url: Option<String>,
+    pub base_url_source: Option<String>,
+    pub model: Option<String>,
+    pub path: Option<String>,
+    pub no_auth: bool,
+    pub auth_source: String,
+    pub api_key_env: Option<String>,
+    pub api_key_env_is_set: Option<bool>,
+    pub header_names: Vec<String>,
+    pub sensitive_header_names: Vec<String>,
+    pub params: BTreeMap<String, Value>,
+    pub extra_body: BTreeMap<String, Value>,
+    pub issues: Vec<ResolvedProviderProfileIssue>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct ResolvedProviderProfileIssue {
+    pub severity: String,
+    pub code: String,
+    pub message: String,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
@@ -96,6 +126,18 @@ pub fn get_provider_profile(
     load_provider_profile(profile_ref, profiles_file)
 }
 
+pub fn resolve_provider_profile(
+    profile_ref: &str,
+    profiles_file: Option<&str>,
+    credentials_file: Option<&str>,
+) -> BrokerResult<ResolvedProviderProfile> {
+    let profile = load_provider_profile(profile_ref, profiles_file)?.ok_or_else(|| {
+        BrokerError::Provider(format!("provider profile '{profile_ref}' was not found"))
+    })?;
+
+    resolve_provider_profile_entry(profile_ref, &profile, credentials_file)
+}
+
 pub fn validate_provider_profiles(
     profiles_file: Option<&str>,
 ) -> BrokerResult<ProviderProfilesValidation> {
@@ -151,6 +193,216 @@ fn provider_profile_summaries(
             extra_body_count: profile.extra_body.as_ref().map(BTreeMap::len).unwrap_or(0),
         })
         .collect()
+}
+
+fn resolve_provider_profile_entry(
+    profile_ref: &str,
+    profile: &ProviderProfile,
+    credentials_file: Option<&str>,
+) -> BrokerResult<ResolvedProviderProfile> {
+    let mut issues = Vec::new();
+    let provider = trimmed_string(profile.provider.as_deref())
+        .unwrap_or_else(|| "openai_compatible".to_string());
+    let no_auth = profile.no_auth.unwrap_or(false);
+    let credentials_ref = trimmed_string(profile.credentials_ref.as_deref());
+    let mut credentials_ref_status = if credentials_ref.is_some() {
+        "not_checked".to_string()
+    } else {
+        "not_configured".to_string()
+    };
+    let mut credential = None;
+
+    if provider != "openai_compatible" {
+        push_resolved_issue(
+            &mut issues,
+            "error",
+            "unsupported_provider",
+            "only provider 'openai_compatible' is supported by provider profiles right now",
+        );
+    }
+
+    if no_auth {
+        if credentials_ref.is_some() {
+            credentials_ref_status = "ignored_by_no_auth".to_string();
+            push_resolved_issue(
+                &mut issues,
+                "warning",
+                "auth_ignored_by_no_auth",
+                "no_auth=true means credentials_ref and api_key_env will be ignored",
+            );
+        }
+    } else if let Some(credentials_ref) = credentials_ref.as_deref() {
+        match load_credential_ref(credentials_ref, credentials_file) {
+            Ok(Some(entry)) => {
+                credentials_ref_status = "found".to_string();
+                credential = Some(entry);
+            }
+            Ok(None) => {
+                credentials_ref_status = "missing".to_string();
+                push_resolved_issue(
+                    &mut issues,
+                    "error",
+                    "missing_credentials_ref",
+                    &format!(
+                        "provider profile references credentials_ref '{credentials_ref}' but it was not found"
+                    ),
+                );
+            }
+            Err(err) => {
+                credentials_ref_status = "unreadable".to_string();
+                push_resolved_issue(
+                    &mut issues,
+                    "error",
+                    "credentials_unreadable",
+                    &err.to_string(),
+                );
+            }
+        }
+    }
+
+    let (base_url, base_url_source) = resolved_base_url(profile, credential.as_ref());
+    let (auth_source, api_key_env, api_key_env_is_set) = resolved_auth_source(
+        profile,
+        credential.as_ref(),
+        no_auth,
+        credentials_ref.as_deref(),
+        &credentials_ref_status,
+    );
+    let (header_names, sensitive_header_names) =
+        resolved_header_names(profile, credential.as_ref());
+    let params = redacted_value_map(profile.params.as_ref());
+    let extra_body = redacted_value_map(profile.extra_body.as_ref());
+    let ok = !issues.iter().any(|issue| issue.severity == "error");
+
+    Ok(ResolvedProviderProfile {
+        profile_ref: profile_ref.to_string(),
+        ok,
+        provider,
+        credentials_ref,
+        credentials_ref_status,
+        base_url,
+        base_url_source,
+        model: trimmed_string(profile.model.as_deref()),
+        path: trimmed_string(profile.path.as_deref()),
+        no_auth,
+        auth_source,
+        api_key_env,
+        api_key_env_is_set,
+        header_names,
+        sensitive_header_names,
+        params,
+        extra_body,
+        issues,
+    })
+}
+
+fn resolved_base_url(
+    profile: &ProviderProfile,
+    credential: Option<&crate::credentials::CredentialEntry>,
+) -> (Option<String>, Option<String>) {
+    if let Some(base_url) = trimmed_string(profile.base_url.as_deref()) {
+        return (Some(base_url), Some("profile.base_url".to_string()));
+    }
+
+    if let Some(base_url) = credential.and_then(|entry| trimmed_string(entry.base_url.as_deref())) {
+        return (Some(base_url), Some("credentials.base_url".to_string()));
+    }
+
+    if let Some(base_url) = env_string("HGRIPE_OPENAI_COMPATIBLE_BASE_URL") {
+        return (
+            Some(base_url),
+            Some("env.HGRIPE_OPENAI_COMPATIBLE_BASE_URL".to_string()),
+        );
+    }
+
+    (
+        Some("https://api.openai.com/v1".to_string()),
+        Some("runtime_default".to_string()),
+    )
+}
+
+fn resolved_auth_source(
+    profile: &ProviderProfile,
+    credential: Option<&crate::credentials::CredentialEntry>,
+    no_auth: bool,
+    credentials_ref: Option<&str>,
+    credentials_ref_status: &str,
+) -> (String, Option<String>, Option<bool>) {
+    if no_auth {
+        return ("profile.no_auth".to_string(), None, None);
+    }
+
+    if credentials_ref.is_some() && credentials_ref_status != "found" {
+        return ("unresolved_credentials_ref".to_string(), None, None);
+    }
+
+    if let Some(api_key_env) = trimmed_string(profile.api_key_env.as_deref()) {
+        let is_set = env_var_is_set(&api_key_env);
+        return (
+            "profile.api_key_env".to_string(),
+            Some(api_key_env),
+            Some(is_set),
+        );
+    }
+
+    if let Some(entry) = credential {
+        if entry
+            .api_key
+            .as_deref()
+            .map(str::trim)
+            .filter(|value| !value.is_empty())
+            .is_some()
+        {
+            return ("credentials.api_key".to_string(), None, None);
+        }
+
+        if let Some(api_key_env) = trimmed_string(entry.api_key_env.as_deref()) {
+            let is_set = env_var_is_set(&api_key_env);
+            return (
+                "credentials.api_key_env".to_string(),
+                Some(api_key_env),
+                Some(is_set),
+            );
+        }
+
+        if entry
+            .headers
+            .as_ref()
+            .map(|headers| headers.keys().any(|name| is_sensitive_key(name)))
+            .unwrap_or(false)
+        {
+            return ("credentials.headers".to_string(), None, None);
+        }
+    }
+
+    (
+        "environment_fallback".to_string(),
+        Some("HGRIPE_OPENAI_COMPATIBLE_API_KEY|OPENAI_API_KEY".to_string()),
+        Some(
+            env_var_is_set("HGRIPE_OPENAI_COMPATIBLE_API_KEY") || env_var_is_set("OPENAI_API_KEY"),
+        ),
+    )
+}
+
+fn resolved_header_names(
+    profile: &ProviderProfile,
+    credential: Option<&crate::credentials::CredentialEntry>,
+) -> (Vec<String>, Vec<String>) {
+    let mut header_names = BTreeSet::new();
+    if let Some(headers) = credential.and_then(|entry| entry.headers.as_ref()) {
+        header_names.extend(headers.keys().cloned());
+    }
+    if let Some(headers) = &profile.headers {
+        header_names.extend(headers.keys().cloned());
+    }
+
+    let sensitive_header_names = header_names
+        .iter()
+        .filter(|name| is_sensitive_key(name))
+        .cloned()
+        .collect();
+
+    (header_names.into_iter().collect(), sensitive_header_names)
 }
 
 fn validate_provider_profiles_map(
@@ -406,11 +658,72 @@ fn push_issue(
     });
 }
 
+fn push_resolved_issue(
+    issues: &mut Vec<ResolvedProviderProfileIssue>,
+    severity: &str,
+    code: &str,
+    message: &str,
+) {
+    issues.push(ResolvedProviderProfileIssue {
+        severity: severity.to_string(),
+        code: code.to_string(),
+        message: message.to_string(),
+    });
+}
+
 fn trimmed_string(value: Option<&str>) -> Option<String> {
     value
         .map(str::trim)
         .filter(|value| !value.is_empty())
         .map(str::to_string)
+}
+
+fn env_string(name: &str) -> Option<String> {
+    env::var(name)
+        .ok()
+        .map(|value| value.trim().to_string())
+        .filter(|value| !value.is_empty())
+}
+
+fn env_var_is_set(name: &str) -> bool {
+    env_string(name).is_some()
+}
+
+fn redacted_value_map(values: Option<&BTreeMap<String, Value>>) -> BTreeMap<String, Value> {
+    values
+        .map(|values| {
+            values
+                .iter()
+                .map(|(key, value)| (key.clone(), redact_secret_like_value(key, value)))
+                .collect()
+        })
+        .unwrap_or_default()
+}
+
+fn redact_secret_like_value(key: &str, value: &Value) -> Value {
+    if is_sensitive_key(key) {
+        return Value::String("<redacted>".to_string());
+    }
+
+    match value {
+        Value::Object(map) => {
+            let mut redacted = Map::new();
+            for (child_key, child_value) in map {
+                redacted.insert(
+                    child_key.clone(),
+                    redact_secret_like_value(child_key, child_value),
+                );
+            }
+            Value::Object(redacted)
+        }
+        Value::Array(items) => Value::Array(
+            items
+                .iter()
+                .map(|item| redact_secret_like_value(key, item))
+                .collect(),
+        ),
+        _ => value.clone(),
+    }
 }
 
 fn is_sensitive_key(key: &str) -> bool {

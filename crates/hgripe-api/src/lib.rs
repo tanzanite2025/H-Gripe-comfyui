@@ -34,8 +34,10 @@ pub use model::{
 pub use outputs::{output_dir_from_env, write_task_output_bytes};
 pub use profiles::{
     get_provider_profile, list_provider_profile_summaries, load_provider_profile,
-    load_provider_profiles, provider_profiles_path, validate_provider_profiles, ProviderProfile,
-    ProviderProfileSummary, ProviderProfileValidationIssue, ProviderProfilesValidation,
+    load_provider_profiles, provider_profiles_path, resolve_provider_profile,
+    validate_provider_profiles, ProviderProfile, ProviderProfileSummary,
+    ProviderProfileValidationIssue, ProviderProfilesValidation, ResolvedProviderProfile,
+    ResolvedProviderProfileIssue,
 };
 pub use provider::{Provider, ProviderRegistry};
 pub use setup::{initialize_local_config, InitAction, InitOptions, InitReport};

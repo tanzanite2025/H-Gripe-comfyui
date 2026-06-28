@@ -1,5 +1,5 @@
-use crate::credentials::{credentials_file_path, validate_credentials};
-use crate::profiles::{provider_profiles_path, validate_provider_profiles};
+use crate::credentials::{credentials_file_path, load_credentials, validate_credentials};
+use crate::profiles::{load_provider_profiles, provider_profiles_path, validate_provider_profiles};
 use crate::provider::BrokerResult;
 use serde::{Deserialize, Serialize};
 use std::env;
@@ -80,8 +80,16 @@ pub fn build_doctor_report(options: DoctorOptions) -> BrokerResult<DoctorReport>
         .map(|path| path.to_string_lossy().to_string());
 
     let mut issues = Vec::new();
-    let credentials = credentials_diagnostic(&options, &mut issues);
-    let provider_profiles = profiles_diagnostic(&options, &mut issues);
+    let mut credentials = credentials_diagnostic(&options, &mut issues);
+    let mut provider_profiles = profiles_diagnostic(&options, &mut issues);
+    cross_validate_profiles_credentials(&options, &mut issues);
+    refresh_config_issue_counts(&mut credentials, &issues, "credentials:", "credentials");
+    refresh_config_issue_counts(
+        &mut provider_profiles,
+        &issues,
+        "provider_profile:",
+        "provider_profiles",
+    );
     let runtime = runtime_diagnostics(&options, &mut issues)?;
     let environment = environment_diagnostics();
     let ok = !issues.iter().any(|issue| issue.severity == "error");
@@ -241,6 +249,64 @@ fn runtime_diagnostics(
     })
 }
 
+fn cross_validate_profiles_credentials(options: &DoctorOptions, issues: &mut Vec<DiagnosticIssue>) {
+    let credentials = match load_credentials(options.credentials_file.as_deref()) {
+        Ok(credentials) => credentials,
+        Err(_) => return,
+    };
+    let profiles = match load_provider_profiles(options.profiles_file.as_deref()) {
+        Ok(profiles) => profiles,
+        Err(_) => return,
+    };
+
+    for (profile_ref, profile) in profiles {
+        if profile.no_auth == Some(true) {
+            continue;
+        }
+
+        let Some(credentials_ref) = trimmed_string(profile.credentials_ref.as_deref()) else {
+            continue;
+        };
+
+        if !credentials.contains_key(&credentials_ref) {
+            issues.push(DiagnosticIssue {
+                scope: format!("provider_profile:{profile_ref}"),
+                severity: "error".to_string(),
+                code: "missing_credentials_ref".to_string(),
+                message: format!(
+                    "provider profile references credentials_ref '{credentials_ref}' but it was not found"
+                ),
+            });
+        }
+    }
+}
+
+fn refresh_config_issue_counts(
+    diagnostic: &mut ConfigFileDiagnostic,
+    issues: &[DiagnosticIssue],
+    item_scope_prefix: &str,
+    file_scope: &str,
+) {
+    diagnostic.error_count = count_issues(issues, item_scope_prefix, file_scope, "error");
+    diagnostic.warning_count = count_issues(issues, item_scope_prefix, file_scope, "warning");
+    diagnostic.ok = diagnostic.error_count == 0;
+}
+
+fn count_issues(
+    issues: &[DiagnosticIssue],
+    item_scope_prefix: &str,
+    file_scope: &str,
+    severity: &str,
+) -> usize {
+    issues
+        .iter()
+        .filter(|issue| {
+            issue.severity == severity
+                && (issue.scope.starts_with(item_scope_prefix) || issue.scope == file_scope)
+        })
+        .count()
+}
+
 fn environment_diagnostics() -> EnvironmentDiagnostics {
     EnvironmentDiagnostics {
         hgripe_credentials_file: env_var_is_set("HGRIPE_CREDENTIALS_FILE"),
@@ -337,6 +403,13 @@ fn env_path(name: &str) -> Option<PathBuf> {
         .map(|value| value.trim().to_string())
         .filter(|value| !value.is_empty())
         .map(PathBuf::from)
+}
+
+fn trimmed_string(value: Option<&str>) -> Option<String> {
+    value
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .map(str::to_string)
 }
 
 fn env_var_is_set(name: &str) -> bool {

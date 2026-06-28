@@ -211,9 +211,9 @@ Tauri 不只是一个壳，应该承担桌面体验：
 - 已实现 `custom_http` provider，支持通用 HTTP GET/POST、headers、query、JSON body、timeout、重试和 2xx/4xx/5xx 状态分流。
 - 已实现 `openai_compatible` provider，支持 `chat.completions`、`text.generate`、`vision.analyze`、`image.generate`，可配置 `base_url`、API key/env、额外请求体和本地/代理 OpenAI-compatible 服务。
 - 已新增 provider profile 第一版：OpenAI-compatible 任务可用 `profile_ref` 引用本地 `user/hgripe/provider_profiles.json`，把 `base_url`、`model`、默认参数、headers、`extra_body`、`credentials_ref` 或 `no_auth` 从 workflow/node 参数里抽出来。
-- 已新增 provider profile 管理入口：`hgripe-api-config profiles list/show/validate` 可列出、查看、校验本地 profile，后续可直接接入 Tauri 设置页。
+- 已新增 provider profile 管理入口：`hgripe-api-config profiles list/show/resolve/validate` 可列出、查看、解析预览、校验本地 profile；`resolve` 不输出 API key 或 header 值，后续可直接接入 Tauri 设置页。
 - 已新增 credentials 管理入口：`hgripe-api-config credentials list/show/validate` 可列出、脱敏查看、校验本地 credentials，`show` 不输出明文 API key 或 secret-like header。
-- 已新增桌面预检入口：`hgripe-api-config doctor` 汇总 credentials/profile 校验、broker 路径、history/output 路径和 H-Gripe 环境变量覆盖情况，后续可作为 Tauri 启动/设置页诊断数据源。
+- 已新增桌面预检入口：`hgripe-api-config doctor` 汇总 credentials/profile 校验、profile 到 credentials 的引用检查、broker 路径、history/output 路径和 H-Gripe 环境变量覆盖情况，后续可作为 Tauri 启动/设置页诊断数据源。
 - 已新增首次启动初始化入口：`hgripe-api-config init` 可创建本地 config/history/output 目录和 starter credentials/profile 模板；默认不覆盖已有文件，`--dry-run` 可预览，`--force` 才覆盖。
 - 已新增 CLI 桥：`hgripe-api-broker`，支持 stdin 输入 `ApiTask` JSON，stdout 输出 `ApiResult` JSON。
 - 已新增 Python 桥接示例：`python/bridge/hgripe_api_bridge.py`。

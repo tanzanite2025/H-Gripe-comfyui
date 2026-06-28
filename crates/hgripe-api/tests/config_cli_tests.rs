@@ -69,6 +69,85 @@ fn config_cli_lists_shows_and_validates_provider_profiles() {
 }
 
 #[test]
+fn config_cli_resolves_provider_profile_without_secret_values() {
+    let profiles_file = temp_profiles_path();
+    let credentials_file = temp_credentials_path();
+    fs::write(
+        &profiles_file,
+        serde_json::to_string_pretty(&json!({
+            "profiles": {
+                "openai-main": {
+                    "provider": "openai_compatible",
+                    "credentials_ref": "openai-main",
+                    "base_url": "https://profile.example/v1",
+                    "model": "gpt-4.1-mini",
+                    "headers": {
+                        "X-Profile": "visible"
+                    },
+                    "params": {
+                        "api_key": "do-not-leak"
+                    }
+                }
+            }
+        }))
+        .unwrap(),
+    )
+    .expect("profiles file should write");
+    fs::write(
+        &credentials_file,
+        serde_json::to_string_pretty(&json!({
+            "openai-main": {
+                "provider": "openai_compatible",
+                "base_url": "https://credentials.example/v1",
+                "api_key": "sk-do-not-leak",
+                "headers": {
+                    "Authorization": "Bearer do-not-leak",
+                    "X-Team": "visible"
+                }
+            }
+        }))
+        .unwrap(),
+    )
+    .expect("credentials file should write");
+
+    let resolve_output = Command::new(env!("CARGO_BIN_EXE_hgripe-api-config"))
+        .arg("profiles")
+        .arg("resolve")
+        .arg("openai-main")
+        .arg("--profiles-file")
+        .arg(&profiles_file)
+        .arg("--credentials-file")
+        .arg(&credentials_file)
+        .output()
+        .expect("config CLI profiles resolve should run");
+    assert!(resolve_output.status.success());
+    let resolve_text = String::from_utf8_lossy(&resolve_output.stdout);
+    let resolve_json: serde_json::Value =
+        serde_json::from_slice(&resolve_output.stdout).expect("resolve output should be JSON");
+
+    assert_eq!(resolve_json["resolved"]["ok"], true);
+    assert_eq!(resolve_json["resolved"]["credentials_ref_status"], "found");
+    assert_eq!(
+        resolve_json["resolved"]["auth_source"],
+        "credentials.api_key"
+    );
+    assert_eq!(
+        resolve_json["resolved"]["params"]["api_key"],
+        json!("<redacted>")
+    );
+    assert!(resolve_json["resolved"]["header_names"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .any(|name| name.as_str() == Some("Authorization")));
+    assert!(!resolve_text.contains("sk-do-not-leak"));
+    assert!(!resolve_text.contains("Bearer do-not-leak"));
+
+    let _ = fs::remove_file(profiles_file);
+    let _ = fs::remove_file(credentials_file);
+}
+
+#[test]
 fn config_cli_lists_shows_and_validates_credentials_redacted() {
     let credentials_file = temp_credentials_path();
     fs::write(
@@ -212,6 +291,79 @@ fn config_cli_doctor_reports_paths_and_validation() {
     assert_eq!(doctor_json["credentials"]["configured_count"], 1);
     assert_eq!(doctor_json["provider_profiles"]["configured_count"], 1);
     assert_eq!(doctor_json["runtime"]["broker"]["exists"], true);
+    assert!(!doctor_text.contains("sk-do-not-leak"));
+
+    let _ = fs::remove_dir_all(root);
+}
+
+#[test]
+fn config_cli_doctor_reports_missing_profile_credentials_ref() {
+    let root = temp_doctor_dir();
+    let credentials_file = root.join("credentials.json");
+    let profiles_file = root.join("provider_profiles.json");
+    let output_dir = root.join("outputs");
+    let broker = root.join(if cfg!(windows) {
+        "hgripe-api-broker.exe"
+    } else {
+        "hgripe-api-broker"
+    });
+
+    fs::create_dir_all(&output_dir).expect("output dir should be created");
+    fs::write(&broker, "fake broker").expect("broker file should write");
+    fs::write(
+        &credentials_file,
+        serde_json::to_string_pretty(&json!({
+            "openai-main": {
+                "provider": "openai_compatible",
+                "base_url": "https://api.openai.com/v1",
+                "api_key": "sk-do-not-leak"
+            }
+        }))
+        .unwrap(),
+    )
+    .expect("credentials file should write");
+    fs::write(
+        &profiles_file,
+        serde_json::to_string_pretty(&json!({
+            "broken-profile": {
+                "provider": "openai_compatible",
+                "credentials_ref": "missing-ref",
+                "base_url": "https://api.openai.com/v1",
+                "model": "gpt-4.1-mini"
+            }
+        }))
+        .unwrap(),
+    )
+    .expect("profiles file should write");
+
+    let doctor_output = Command::new(env!("CARGO_BIN_EXE_hgripe-api-config"))
+        .arg("doctor")
+        .arg("--credentials-file")
+        .arg(&credentials_file)
+        .arg("--profiles-file")
+        .arg(&profiles_file)
+        .arg("--output-dir")
+        .arg(&output_dir)
+        .arg("--broker")
+        .arg(&broker)
+        .output()
+        .expect("config CLI doctor should run");
+    assert!(doctor_output.status.success());
+    let doctor_text = String::from_utf8_lossy(&doctor_output.stdout);
+    let doctor_json: serde_json::Value =
+        serde_json::from_slice(&doctor_output.stdout).expect("doctor output should be JSON");
+
+    assert_eq!(doctor_json["ok"], false);
+    assert_eq!(doctor_json["provider_profiles"]["ok"], false);
+    assert_eq!(doctor_json["provider_profiles"]["error_count"], 1);
+    assert!(doctor_json["issues"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .any(|issue| {
+            issue["scope"] == "provider_profile:broken-profile"
+                && issue["code"] == "missing_credentials_ref"
+        }));
     assert!(!doctor_text.contains("sk-do-not-leak"));
 
     let _ = fs::remove_dir_all(root);

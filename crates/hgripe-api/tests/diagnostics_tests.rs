@@ -70,6 +70,70 @@ fn doctor_report_summarizes_runtime_without_secret_values() {
     let _ = fs::remove_dir_all(root);
 }
 
+#[test]
+fn doctor_report_flags_missing_credentials_ref_in_provider_profile() {
+    let root = temp_diag_dir();
+    let credentials_file = root.join("credentials.json");
+    let profiles_file = root.join("provider_profiles.json");
+    let output_dir = root.join("outputs");
+    let broker = root.join(if cfg!(windows) {
+        "hgripe-api-broker.exe"
+    } else {
+        "hgripe-api-broker"
+    });
+
+    fs::create_dir_all(&output_dir).expect("output dir should be created");
+    fs::write(&broker, "fake broker").expect("broker file should write");
+    fs::write(
+        &credentials_file,
+        serde_json::to_string_pretty(&json!({
+            "openai-main": {
+                "provider": "openai_compatible",
+                "base_url": "https://api.openai.com/v1",
+                "api_key": "sk-do-not-leak"
+            }
+        }))
+        .unwrap(),
+    )
+    .expect("credentials file should write");
+    fs::write(
+        &profiles_file,
+        serde_json::to_string_pretty(&json!({
+            "profiles": {
+                "broken-profile": {
+                    "provider": "openai_compatible",
+                    "credentials_ref": "missing-ref",
+                    "base_url": "https://api.openai.com/v1",
+                    "model": "gpt-4.1-mini"
+                }
+            }
+        }))
+        .unwrap(),
+    )
+    .expect("profiles file should write");
+
+    let report = build_doctor_report(DoctorOptions {
+        credentials_file: Some(credentials_file.to_string_lossy().to_string()),
+        profiles_file: Some(profiles_file.to_string_lossy().to_string()),
+        output_dir: Some(output_dir.to_string_lossy().to_string()),
+        broker_path: Some(broker.to_string_lossy().to_string()),
+        ..DoctorOptions::default()
+    })
+    .expect("doctor report should build");
+
+    assert!(!report.ok);
+    assert!(!report.provider_profiles.ok);
+    assert_eq!(report.provider_profiles.error_count, 1);
+    assert!(report.issues.iter().any(|issue| {
+        issue.scope == "provider_profile:broken-profile"
+            && issue.severity == "error"
+            && issue.code == "missing_credentials_ref"
+            && issue.message.contains("missing-ref")
+    }));
+
+    let _ = fs::remove_dir_all(root);
+}
+
 fn temp_diag_dir() -> std::path::PathBuf {
     let nonce = SystemTime::now()
         .duration_since(UNIX_EPOCH)

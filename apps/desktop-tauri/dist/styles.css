@@ -1,0 +1,168 @@
+:root {
+  --bg: #0f1117;
+  --panel: #181b24;
+  --panel-2: #1f232e;
+  --border: #2a2f3a;
+  --text: #e6e8ee;
+  --muted: #9aa3b2;
+  --accent: #4f8cff;
+  --danger: #e0556b;
+  --ok: #43c59e;
+}
+
+* { box-sizing: border-box; }
+
+body {
+  margin: 0;
+  font-family: "Segoe UI", system-ui, -apple-system, sans-serif;
+  background: var(--bg);
+  color: var(--text);
+  font-size: 14px;
+}
+
+.topbar {
+  display: flex;
+  align-items: baseline;
+  gap: 12px;
+  padding: 14px 20px;
+  border-bottom: 1px solid var(--border);
+}
+.topbar h1 { font-size: 18px; margin: 0; }
+.subtitle { color: var(--muted); font-size: 13px; }
+
+.tabs {
+  display: flex;
+  gap: 4px;
+  padding: 8px 16px 0;
+  border-bottom: 1px solid var(--border);
+}
+.tabs button {
+  background: transparent;
+  border: none;
+  color: var(--muted);
+  padding: 9px 14px;
+  cursor: pointer;
+  border-radius: 6px 6px 0 0;
+  font-size: 14px;
+}
+.tabs button:hover { color: var(--text); }
+.tabs button.active {
+  color: var(--text);
+  background: var(--panel);
+  border: 1px solid var(--border);
+  border-bottom: 1px solid var(--panel);
+  margin-bottom: -1px;
+}
+
+main { padding: 18px 20px 60px; }
+.panel { display: none; }
+.panel.active { display: block; }
+
+h2 { font-size: 16px; margin: 6px 0 12px; }
+h3 { font-size: 14px; color: var(--muted); margin: 18px 0 8px; }
+
+.row { display: flex; align-items: center; gap: 10px; margin: 10px 0; }
+.row.wrap { flex-wrap: wrap; }
+
+button {
+  background: var(--panel-2);
+  color: var(--text);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  padding: 7px 13px;
+  cursor: pointer;
+}
+button:hover { border-color: var(--accent); }
+button.primary { background: var(--accent); border-color: var(--accent); color: #fff; }
+button.danger { background: var(--danger); border-color: var(--danger); color: #fff; }
+
+input, select, textarea {
+  background: var(--panel-2);
+  color: var(--text);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  padding: 7px 9px;
+  font-family: inherit;
+}
+textarea {
+  width: 100%;
+  min-height: 200px;
+  font-family: "Cascadia Code", "Consolas", monospace;
+  font-size: 13px;
+  resize: vertical;
+}
+
+.cards { display: flex; flex-wrap: wrap; gap: 10px; }
+.card {
+  background: var(--panel);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  padding: 10px 12px;
+  min-width: 180px;
+}
+.card .label { color: var(--muted); font-size: 12px; }
+.card .value { font-size: 13px; word-break: break-all; margin-top: 3px; }
+.card .value.ok { color: var(--ok); }
+.card .value.missing { color: var(--danger); }
+
+pre.json {
+  background: var(--panel);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  padding: 12px;
+  overflow: auto;
+  max-height: 360px;
+  white-space: pre-wrap;
+  word-break: break-word;
+  font-family: "Cascadia Code", "Consolas", monospace;
+  font-size: 12.5px;
+}
+
+table {
+  width: 100%;
+  border-collapse: collapse;
+  margin-top: 8px;
+}
+th, td {
+  text-align: left;
+  padding: 7px 9px;
+  border-bottom: 1px solid var(--border);
+  font-size: 13px;
+}
+th { color: var(--muted); font-weight: 600; }
+tr:hover td { background: var(--panel); }
+
+.status { color: var(--muted); font-size: 13px; }
+.status.ok { color: var(--ok); }
+.status.err { color: var(--danger); }
+
+.validation { margin: 8px 0; }
+.badge {
+  display: inline-block;
+  padding: 2px 8px;
+  border-radius: 999px;
+  font-size: 12px;
+}
+.badge.ok { background: rgba(67,197,158,0.15); color: var(--ok); }
+.badge.err { background: rgba(224,85,107,0.15); color: var(--danger); }
+
+.hint { color: var(--muted); margin: 4px 0 10px; }
+code { background: var(--panel-2); padding: 1px 5px; border-radius: 4px; }
+
+.toast {
+  position: fixed;
+  bottom: 18px;
+  left: 50%;
+  transform: translateX(-50%);
+  background: var(--panel-2);
+  border: 1px solid var(--border);
+  padding: 10px 16px;
+  border-radius: 8px;
+  opacity: 0;
+  transition: opacity 0.2s;
+  pointer-events: none;
+  max-width: 80%;
+}
+.toast.show { opacity: 1; }
+.toast.err { border-color: var(--danger); }
+.toast.ok { border-color: var(--ok); }

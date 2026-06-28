@@ -1,6 +1,7 @@
 [workspace]
 members = [
     "crates/hgripe-api",
+    "apps/desktop-tauri/src-tauri",
 ]
 resolver = "2"
 

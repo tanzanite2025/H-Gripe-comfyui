@@ -36,7 +36,7 @@ pub struct HistoryRecord {
     pub error: Option<ApiErrorInfo>,
 }
 
-#[derive(Debug, Clone, Default, PartialEq, Eq)]
+#[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq, Eq)]
 pub struct HistoryQuery {
     pub limit: usize,
     pub provider: Option<String>,

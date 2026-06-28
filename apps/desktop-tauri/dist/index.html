@@ -1,0 +1,126 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>H-Gripe Desktop</title>
+    <link rel="stylesheet" href="styles.css" />
+  </head>
+  <body>
+    <header class="topbar">
+      <h1>H-Gripe Desktop</h1>
+      <span class="subtitle">API-first control shell</span>
+    </header>
+
+    <nav class="tabs" id="tabs">
+      <button data-tab="dashboard" class="active">Dashboard</button>
+      <button data-tab="credentials">Credentials</button>
+      <button data-tab="profiles">Profiles</button>
+      <button data-tab="run">Run Task</button>
+      <button data-tab="history">History</button>
+      <button data-tab="comfyui">ComfyUI</button>
+    </nav>
+
+    <main>
+      <section id="dashboard" class="panel active">
+        <div class="row">
+          <h2>Runtime</h2>
+          <button id="refresh-dashboard">Refresh</button>
+        </div>
+        <div id="runtime-info" class="cards"></div>
+        <h2>Doctor</h2>
+        <pre id="doctor-output" class="json">Loading…</pre>
+      </section>
+
+      <section id="credentials" class="panel">
+        <div class="row">
+          <h2>Credentials</h2>
+          <button data-validate="credentials">Validate</button>
+        </div>
+        <div id="credentials-summary" class="cards"></div>
+        <div id="credentials-validation" class="validation"></div>
+        <h3>credentials.json</h3>
+        <textarea id="credentials-editor" spellcheck="false"></textarea>
+        <div class="row">
+          <button data-load="credentials">Reload</button>
+          <button data-save="credentials" class="primary">Save</button>
+          <span data-status="credentials" class="status"></span>
+        </div>
+      </section>
+
+      <section id="profiles" class="panel">
+        <div class="row">
+          <h2>Provider Profiles</h2>
+          <button data-validate="profiles">Validate</button>
+        </div>
+        <div id="profiles-summary" class="cards"></div>
+        <div id="profiles-validation" class="validation"></div>
+        <h3>provider_profiles.json</h3>
+        <textarea id="profiles-editor" spellcheck="false"></textarea>
+        <div class="row">
+          <button data-load="profiles">Reload</button>
+          <button data-save="profiles" class="primary">Save</button>
+          <span data-status="profiles" class="status"></span>
+        </div>
+      </section>
+
+      <section id="run" class="panel">
+        <h2>Run API Task</h2>
+        <p class="hint">Paste an <code>ApiTask</code> JSON payload and submit it to the broker.</p>
+        <textarea id="task-editor" spellcheck="false"></textarea>
+        <div class="row">
+          <button id="task-template">Insert mock template</button>
+          <button id="task-run" class="primary">Run task</button>
+          <span id="task-status" class="status"></span>
+        </div>
+        <h3>Result</h3>
+        <pre id="task-result" class="json"></pre>
+      </section>
+
+      <section id="history" class="panel">
+        <div class="row wrap">
+          <h2>Task History</h2>
+          <input id="history-provider" placeholder="provider filter" />
+          <select id="history-status">
+            <option value="">any status</option>
+            <option value="succeeded">succeeded</option>
+            <option value="failed">failed</option>
+            <option value="cached">cached</option>
+            <option value="cancelled">cancelled</option>
+          </select>
+          <input id="history-limit" type="number" value="50" min="1" style="width:80px" />
+          <button id="history-refresh" class="primary">Load</button>
+        </div>
+        <table id="history-table">
+          <thead>
+            <tr><th>Time</th><th>Provider</th><th>Operation</th><th>Status</th><th>Files</th><th></th></tr>
+          </thead>
+          <tbody></tbody>
+        </table>
+        <h3>Detail</h3>
+        <pre id="history-detail" class="json"></pre>
+        <h3>Cleanup</h3>
+        <div class="row wrap">
+          <label>keep latest <input id="cleanup-keep" type="number" min="0" style="width:80px" /></label>
+          <label><input id="cleanup-delete-files" type="checkbox" /> delete output files</label>
+          <button id="cleanup-preview">Preview</button>
+          <button id="cleanup-apply" class="danger">Apply</button>
+        </div>
+        <pre id="cleanup-output" class="json"></pre>
+      </section>
+
+      <section id="comfyui" class="panel">
+        <h2>ComfyUI</h2>
+        <p class="hint">Open the running ComfyUI web UI in your browser.</p>
+        <div class="row">
+          <input id="comfy-url" value="http://127.0.0.1:8188" style="flex:1" />
+          <button id="comfy-open" class="primary">Open</button>
+        </div>
+        <span id="comfy-status" class="status"></span>
+      </section>
+    </main>
+
+    <div id="toast" class="toast"></div>
+    <script src="app.js"></script>
+  </body>
+</html>

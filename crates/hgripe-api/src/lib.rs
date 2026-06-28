@@ -3,6 +3,7 @@ pub mod credentials;
 pub mod history;
 pub mod model;
 pub mod outputs;
+pub mod profiles;
 pub mod provider;
 pub mod providers;
 
@@ -21,4 +22,5 @@ pub use model::{
     RetryPolicy,
 };
 pub use outputs::{output_dir_from_env, write_task_output_bytes};
+pub use profiles::{load_provider_profile, ProviderProfile};
 pub use provider::{Provider, ProviderRegistry};

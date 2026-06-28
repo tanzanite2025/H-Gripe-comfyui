@@ -248,6 +248,85 @@ async fn openai_compatible_uses_credentials_ref_file() {
     assert!(request.contains("POST /chat/completions HTTP/1.1"));
 }
 
+#[tokio::test]
+async fn openai_compatible_uses_provider_profile_defaults() {
+    let (base_url, request_rx) = spawn_once_json_server(
+        "HTTP/1.1 200 OK",
+        r#"{"id":"profile_test","choices":[{"message":{"role":"assistant","content":"profile ok"},"finish_reason":"stop"}]}"#,
+        Some("openai-profile-test"),
+    )
+    .await;
+    let profiles_file = write_temp_profiles(&base_url);
+
+    let mut broker = ApiBroker::new();
+    broker.register_provider(OpenAiCompatibleProvider::default());
+
+    let mut task = ApiTask::new("openai_compatible", "chat.completions");
+    task.params
+        .insert("profile_ref".into(), json!("local-profile"));
+    task.params.insert(
+        "profiles_file".into(),
+        json!(profiles_file.to_string_lossy().to_string()),
+    );
+    task.inputs.insert("prompt".into(), json!("hello profile"));
+
+    let result = broker.execute(task).await.expect("profile task should run");
+    let request = request_rx.await.expect("server should capture request");
+    let _ = fs::remove_file(profiles_file);
+
+    assert_eq!(result.status, ApiStatus::Succeeded);
+    assert_eq!(result.output_json.unwrap()["text"], json!("profile ok"));
+    assert!(request.contains("POST /chat/completions HTTP/1.1"));
+    assert!(request.contains("x-profile-test: yes"));
+    assert!(request.contains(r#""model":"profile-model""#));
+    assert!(request.contains(r#""temperature":0.4"#));
+    assert!(request.contains(r#""metadata":{"source":"profile"}"#));
+}
+
+#[tokio::test]
+async fn openai_compatible_task_params_override_provider_profile() {
+    let (base_url, request_rx) = spawn_once_json_server(
+        "HTTP/1.1 200 OK",
+        r#"{"id":"profile_override_test","choices":[{"message":{"role":"assistant","content":"override ok"},"finish_reason":"stop"}]}"#,
+        None,
+    )
+    .await;
+    let profiles_file = write_temp_profiles(&base_url);
+
+    let mut broker = ApiBroker::new();
+    broker.register_provider(OpenAiCompatibleProvider::default());
+
+    let mut task = ApiTask::new("openai_compatible", "chat.completions");
+    task.params
+        .insert("profile_ref".into(), json!("local-profile"));
+    task.params.insert(
+        "profiles_file".into(),
+        json!(profiles_file.to_string_lossy().to_string()),
+    );
+    task.params.insert("model".into(), json!("task-model"));
+    task.params.insert("temperature".into(), json!(0.1));
+    task.params.insert(
+        "headers".into(),
+        json!({
+            "X-Task-Test": "yes"
+        }),
+    );
+    task.inputs.insert("prompt".into(), json!("hello override"));
+
+    let result = broker
+        .execute(task)
+        .await
+        .expect("profile override task should run");
+    let request = request_rx.await.expect("server should capture request");
+    let _ = fs::remove_file(profiles_file);
+
+    assert_eq!(result.status, ApiStatus::Succeeded);
+    assert!(request.contains(r#""model":"task-model""#));
+    assert!(request.contains(r#""temperature":0.1"#));
+    assert!(request.contains("x-profile-test: yes"));
+    assert!(request.contains("x-task-test: yes"));
+}
+
 async fn spawn_once_json_server(
     status_line: &'static str,
     body: &'static str,
@@ -343,6 +422,36 @@ fn write_temp_credentials(base_url: &str) -> std::path::PathBuf {
     });
     fs::write(&path, serde_json::to_string_pretty(&document).unwrap())
         .expect("credentials file should be written");
+    path
+}
+
+fn write_temp_profiles(base_url: &str) -> std::path::PathBuf {
+    let nonce = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .expect("system time should be valid")
+        .as_nanos();
+    let path = std::env::temp_dir().join(format!("hgripe-provider-profiles-{nonce}.json"));
+    let document = json!({
+        "local-profile": {
+            "provider": "openai_compatible",
+            "base_url": base_url,
+            "model": "profile-model",
+            "no_auth": true,
+            "headers": {
+                "X-Profile-Test": "yes"
+            },
+            "params": {
+                "temperature": 0.4
+            },
+            "extra_body": {
+                "metadata": {
+                    "source": "profile"
+                }
+            }
+        }
+    });
+    fs::write(&path, serde_json::to_string_pretty(&document).unwrap())
+        .expect("provider profiles file should be written");
     path
 }
 

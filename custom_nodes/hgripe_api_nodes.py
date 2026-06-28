@@ -232,6 +232,7 @@ class HGripeOpenAICompatibleText:
                     "STRING",
                     {"default": ""},
                 ),
+                "profile_ref": ("STRING", {"default": ""}),
                 "model": ("STRING", {"default": "gpt-4.1-mini"}),
                 "credentials_ref": ("STRING", {"default": "openai-main"}),
                 "auth_mode": (
@@ -271,6 +272,7 @@ class HGripeOpenAICompatibleText:
     def run(
         self,
         base_url: str,
+        profile_ref: str,
         model: str,
         credentials_ref: str,
         auth_mode: str,
@@ -293,6 +295,8 @@ class HGripeOpenAICompatibleText:
             "max_tokens": max_tokens,
             "extra_body": extra_body,
         }
+        if profile_ref.strip():
+            params["profile_ref"] = profile_ref.strip()
 
         task_credentials_ref = _apply_openai_auth(
             params, auth_mode, credentials_ref, api_key_env, api_key
@@ -336,6 +340,7 @@ class HGripeOpenAICompatibleImage:
                     "STRING",
                     {"default": ""},
                 ),
+                "profile_ref": ("STRING", {"default": ""}),
                 "model": ("STRING", {"default": "gpt-image-1"}),
                 "credentials_ref": ("STRING", {"default": "openai-main"}),
                 "auth_mode": (
@@ -386,6 +391,7 @@ class HGripeOpenAICompatibleImage:
     def run(
         self,
         base_url: str,
+        profile_ref: str,
         model: str,
         credentials_ref: str,
         auth_mode: str,
@@ -414,6 +420,8 @@ class HGripeOpenAICompatibleImage:
             "save_outputs": save_outputs == "enable",
             "download_url_outputs": download_url_outputs == "enable",
         }
+        if profile_ref.strip():
+            params["profile_ref"] = profile_ref.strip()
 
         task_credentials_ref = _apply_openai_auth(
             params, auth_mode, credentials_ref, api_key_env, api_key
@@ -466,6 +474,7 @@ class HGripeOpenAICompatibleVision:
                     "STRING",
                     {"default": ""},
                 ),
+                "profile_ref": ("STRING", {"default": ""}),
                 "model": ("STRING", {"default": "gpt-4.1-mini"}),
                 "credentials_ref": ("STRING", {"default": "openai-main"}),
                 "auth_mode": (
@@ -509,6 +518,7 @@ class HGripeOpenAICompatibleVision:
         self,
         image,
         base_url: str,
+        profile_ref: str,
         model: str,
         credentials_ref: str,
         auth_mode: str,
@@ -557,6 +567,8 @@ class HGripeOpenAICompatibleVision:
             "max_tokens": max_tokens,
             "extra_body": extra_body,
         }
+        if profile_ref.strip():
+            params["profile_ref"] = profile_ref.strip()
 
         task_credentials_ref = _apply_openai_auth(
             params, auth_mode, credentials_ref, api_key_env, api_key

@@ -40,6 +40,7 @@ The current prototype adds a Rust API broker plus thin Python/ComfyUI bridge nod
 - Python bridge examples: `python/bridge`
 - ComfyUI nodes: `custom_nodes/hgripe_api_nodes.py`
 - Credential ref example: `docs/credentials.example.json`
+- Provider profile example: `docs/provider_profiles.example.json`
 
 Credential refs keep API keys out of workflow files. The default local credential file is ignored by git:
 
@@ -48,6 +49,14 @@ user/hgripe/credentials.json
 ```
 
 You can also point to another file with `HGRIPE_CREDENTIALS_FILE`.
+
+Provider profiles keep non-secret provider defaults out of workflow files. The default local profile file is ignored by git:
+
+```text
+user/hgripe/provider_profiles.json
+```
+
+Profiles can define defaults such as `base_url`, `model`, `credentials_ref`, `no_auth`, headers, `params`, and `extra_body`. Use `profile_ref` on OpenAI-compatible tasks/nodes to load one. You can also point to another file with `HGRIPE_PROVIDER_PROFILES_FILE` or task param `profiles_file`.
 
 Task history is recorded locally as JSONL and indexed into SQLite for UI/query use:
 
@@ -73,6 +82,7 @@ $env:HGRIPE_HISTORY_FILE="C:\path\to\tasks.jsonl"
 $env:HGRIPE_HISTORY_DB="C:\path\to\tasks.sqlite3"
 $env:HGRIPE_OUTPUT_DIR="C:\path\to\outputs"
 $env:HGRIPE_HISTORY_DISABLED="1"
+$env:HGRIPE_PROVIDER_PROFILES_FILE="C:\path\to\provider_profiles.json"
 ```
 
 Local verification:
@@ -86,6 +96,7 @@ cargo build -p hgripe-api --bins
 .\.venv\Scripts\python.exe python\bridge\openai_compatible_image_node_example.py
 .\.venv\Scripts\python.exe python\bridge\openai_compatible_vision_node_example.py
 .\.venv\Scripts\python.exe python\bridge\openai_compatible_credentials_ref_example.py
+.\.venv\Scripts\python.exe python\bridge\openai_compatible_profile_example.py
 .\.venv\Scripts\python.exe python\bridge\history_tail_example.py
 .\.venv\Scripts\python.exe python\bridge\history_tail_example.py --provider openai_compatible --limit 10
 .\.venv\Scripts\python.exe python\bridge\history_tail_example.py --operation image.generate --has-output-files yes

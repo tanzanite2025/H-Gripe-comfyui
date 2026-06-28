@@ -17,7 +17,7 @@ import { clearPersistedGraph, loadPersistedGraph, persistGraph } from "./editor/
 import { defaultParams } from "./graph/nodeSpecs";
 import { deserializeGraph, serializeGraph } from "./graph/model";
 import { runGraph, validateGraph, type NodeStatus } from "./runtime/dag";
-import { defaultExecutors } from "./runtime/executors";
+import { batchItems, defaultExecutors } from "./runtime/executors";
 import { isTauri } from "./bridge/tauri";
 
 function makeNode(id: string, kind: string, x: number, y: number, params?: Record<string, unknown>): Node {
@@ -109,28 +109,72 @@ function Studio() {
     [patchNode],
   );
 
+  // Surface output paths into preview nodes. The thumbnail itself is fetched
+  // lazily by the node when it scrolls into view (see HgripeNode).
+  const applyPreviews = useCallback(
+    (graph: ReturnType<typeof toWorkflowGraph>, result: { outputs: Map<string, Record<string, unknown>> }) => {
+      const paths: string[] = [];
+      for (const node of graph.nodes) {
+        if (node.kind !== "preview") continue;
+        const out = result.outputs.get(node.id);
+        const imagePath = (out?.image as string | null) ?? null;
+        patchNode(node.id, { imagePath });
+        if (imagePath) paths.push(imagePath);
+      }
+      return paths;
+    },
+    [patchNode],
+  );
+
   const run = useCallback(async () => {
     setRunning(true);
     setMessage("running…");
     try {
       const graph = toWorkflowGraph(nodes, edges);
       const result = await runGraph(graph, defaultExecutors, { onStatus: setStatus });
-
-      // Surface output paths into preview nodes. The thumbnail itself is fetched
-      // lazily by the node when it scrolls into view (see HgripeNode).
-      for (const node of graph.nodes) {
-        if (node.kind !== "preview") continue;
-        const out = result.outputs.get(node.id);
-        const imagePath = (out?.image as string | null) ?? null;
-        patchNode(node.id, { imagePath });
-      }
+      applyPreviews(graph, result);
       setMessage("done");
     } catch (err) {
       setMessage(`error: ${String(err)}`);
     } finally {
       setRunning(false);
     }
-  }, [nodes, edges, setStatus, patchNode]);
+  }, [nodes, edges, setStatus, applyPreviews]);
+
+  // Batch fan-out: run the graph once per item of the (first) batch node,
+  // sweeping its `index` via runGraph's paramOverrides. Sequential so node
+  // statuses and previews update visibly per item.
+  const batchNode = useMemo(
+    () => nodes.find((n) => (n.data as HgripeNodeData).kind === "batch") ?? null,
+    [nodes],
+  );
+  const batchCount = useMemo(
+    () => (batchNode ? batchItems((batchNode.data as HgripeNodeData).params.items).length : 0),
+    [batchNode],
+  );
+
+  const runBatch = useCallback(async () => {
+    if (!batchNode || batchCount === 0) {
+      setMessage("batch: no items");
+      return;
+    }
+    setRunning(true);
+    try {
+      const graph = toWorkflowGraph(nodes, edges);
+      const collected: string[] = [];
+      for (let i = 0; i < batchCount; i++) {
+        setMessage(`batch ${i + 1}/${batchCount}…`);
+        const overrides = new Map([[batchNode.id, { index: i }]]);
+        const result = await runGraph(graph, defaultExecutors, { onStatus: setStatus }, overrides);
+        collected.push(...applyPreviews(graph, result));
+      }
+      setMessage(`batch done: ${batchCount} run(s), ${collected.length} output(s)`);
+    } catch (err) {
+      setMessage(`batch error: ${String(err)}`);
+    } finally {
+      setRunning(false);
+    }
+  }, [batchNode, batchCount, nodes, edges, setStatus, applyPreviews]);
 
   const save = useCallback(() => {
     const json = serializeGraph(toWorkflowGraph(nodes, edges));
@@ -209,6 +253,15 @@ function Studio() {
         <button className="primary" onClick={run} disabled={running || issues.length > 0}>
           {running ? "Running…" : "Run"}
         </button>
+        {batchNode && (
+          <button
+            onClick={runBatch}
+            disabled={running || issues.length > 0 || batchCount === 0}
+            title="run the graph once per batch item"
+          >
+            Run ×{batchCount}
+          </button>
+        )}
         <span className="muted">{message}</span>
         <input
           ref={fileInput}

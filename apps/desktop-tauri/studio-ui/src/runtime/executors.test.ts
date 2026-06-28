@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { defaultExecutors } from "./executors";
+import { batchItems, defaultExecutors } from "./executors";
 
 function ctx(kind: string, params: Record<string, unknown>, inputs: Record<string, unknown> = {}) {
   return { nodeId: `${kind}-1`, kind, params, inputs };
@@ -21,6 +21,22 @@ describe("source executors", () => {
     expect(await defaultExecutors.psdTemplate(ctx("psdTemplate", { path: "/t.psd" }))).toEqual({
       template: "/t.psd",
     });
+  });
+});
+
+describe("batch", () => {
+  it("parses non-empty trimmed lines", () => {
+    expect(batchItems("a\n  b  \n\n c\n")).toEqual(["a", "b", "c"]);
+    expect(batchItems("")).toEqual([]);
+    expect(batchItems(undefined)).toEqual([]);
+  });
+
+  it("emits the item at the swept index, defaulting to the first", async () => {
+    const items = "red fox\nblue jay\ngreen frog";
+    expect(await defaultExecutors.batch(ctx("batch", { items }))).toEqual({ item: "red fox" });
+    expect(await defaultExecutors.batch(ctx("batch", { items, index: 2 }))).toEqual({ item: "green frog" });
+    // Out-of-range index falls back to the first item.
+    expect(await defaultExecutors.batch(ctx("batch", { items, index: 9 }))).toEqual({ item: "red fox" });
   });
 });
 

@@ -13,8 +13,24 @@ import type { ExecutorRegistry } from "./dag";
 // top-level task fields instead.
 const GENERATE_RESERVED = new Set(["provider", "operation", "credentials_ref"]);
 
+/** Non-empty, trimmed lines of a batch node's `items` param. */
+export function batchItems(items: unknown): string[] {
+  return String(items ?? "")
+    .split("\n")
+    .map((s) => s.trim())
+    .filter((s) => s.length > 0);
+}
+
 export const defaultExecutors: ExecutorRegistry = {
   prompt: async (ctx) => ({ text: String(ctx.params.text ?? "") }),
+
+  // Emits a single item from the list. A normal run emits index 0; batch
+  // fan-out sweeps `index` via runGraph's paramOverrides.
+  batch: async (ctx) => {
+    const items = batchItems(ctx.params.items);
+    const index = Number(ctx.params.index ?? 0);
+    return { item: items[index] ?? items[0] ?? "" };
+  },
 
   imageSource: async (ctx) => ({ image: String(ctx.params.path ?? "") || null }),
 

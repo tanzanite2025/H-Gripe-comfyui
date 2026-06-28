@@ -63,6 +63,25 @@ export const NODE_SPECS: Record<string, NodeSpec> = {
       },
     ],
   },
+  batch: {
+    kind: "batch",
+    title: "Batch",
+    description:
+      "Sweeps a list of text items (one per line). A normal Run emits the first item; use \"Run ×N\" to fan out one run per item.",
+    category: "input",
+    inputs: [],
+    outputs: [port("item", "item", "text")],
+    params: [
+      {
+        key: "items",
+        label: "Items (one per line)",
+        control: "textarea",
+        defaultValue: "",
+        hint: "one prompt / value per line",
+        inline: true,
+      },
+    ],
+  },
   imageSource: {
     kind: "imageSource",
     title: "Image Source",

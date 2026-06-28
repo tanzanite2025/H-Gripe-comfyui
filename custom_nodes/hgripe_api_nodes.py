@@ -1483,6 +1483,138 @@ class HGripeVisionAnalyze:
         return (text, json.dumps(result, ensure_ascii=False, indent=2), status)
 
 
+class HGripeVideoJob:
+    """Semantic video node: text-to-video / image-to-video async jobs.
+
+    The concrete video API (Kling, Runway, Veo, a local GPU service, etc.) is
+    described by a ``custom_http`` provider profile that supplies the submit URL,
+    polling URL, status/result JSON paths and auth. This node only carries the
+    production inputs (prompt, optional first-frame image and request body) and
+    runs the generic submit -> poll -> download async job on the Rust broker.
+    """
+
+    @classmethod
+    def INPUT_TYPES(cls):
+        return {
+            "required": {
+                "prompt": ("STRING", {"multiline": True, "default": "A calm ocean at sunset"}),
+                "profile_ref": ("STRING", {"default": ""}),
+                "credentials_ref": ("STRING", {"default": "custom-http-main"}),
+                "auth_mode": (
+                    ["credentials_ref", "env_or_key", "no_auth"],
+                    {"default": "credentials_ref"},
+                ),
+                "api_key_env": ("STRING", {"default": "HGRIPE_CUSTOM_HTTP_API_KEY"}),
+                "api_key": ("STRING", {"default": ""}),
+                "prompt_key": ("STRING", {"default": "prompt"}),
+                "body_json": ("STRING", {"multiline": True, "default": "{}"}),
+                "image_key": ("STRING", {"default": "image"}),
+                "image_format": (["png", "jpeg", "webp"], {"default": "png"}),
+                "image_index": ("INT", {"default": 0, "min": 0, "max": 4095, "step": 1}),
+                "output_extension": ("STRING", {"default": "mp4"}),
+                "download_result": (["enable", "disable"], {"default": "enable"}),
+                "max_polls": ("INT", {"default": 120, "min": 1, "max": 10000, "step": 1}),
+                "poll_interval_ms": (
+                    "INT",
+                    {"default": 3000, "min": 0, "max": 3600000, "step": 100},
+                ),
+                "max_attempts": ("INT", {"default": 2, "min": 1, "max": 10, "step": 1}),
+                "timeout_ms": (
+                    "INT",
+                    {"default": 600000, "min": 1000, "max": 3600000, "step": 1000},
+                ),
+                "force_run_nonce": (
+                    "INT",
+                    {"default": 0, "min": 0, "max": 2147483647, "step": 1},
+                ),
+            },
+            "optional": {
+                "input_image": ("IMAGE",),
+            },
+        }
+
+    RETURN_TYPES = ("STRING", "STRING", "STRING")
+    RETURN_NAMES = ("output_path", "result_json", "status")
+    FUNCTION = "run"
+    CATEGORY = "H-Gripe/API"
+
+    def run(
+        self,
+        prompt: str,
+        profile_ref: str,
+        credentials_ref: str,
+        auth_mode: str,
+        api_key_env: str,
+        api_key: str,
+        prompt_key: str,
+        body_json: str,
+        image_key: str,
+        image_format: str,
+        image_index: int,
+        output_extension: str,
+        download_result: str,
+        max_polls: int,
+        poll_interval_ms: int,
+        max_attempts: int,
+        timeout_ms: int,
+        force_run_nonce: int,
+        input_image=None,
+    ):
+        if not profile_ref.strip():
+            raise ValueError(
+                "H-Gripe Video Job requires a profile_ref describing the custom_http video API"
+            )
+
+        body = _parse_json_object(body_json, "body_json")
+        if prompt_key.strip():
+            body[prompt_key.strip()] = prompt
+        if input_image is not None:
+            if not image_key.strip():
+                raise ValueError("image_key must be set when input_image is provided")
+            body[image_key.strip()] = _tensor_image_to_data_url(
+                input_image, image_index, image_format
+            )
+
+        params: dict[str, Any] = {
+            "profile_ref": profile_ref.strip(),
+            "json": body,
+            "download_result": download_result == "enable",
+            "max_polls": max_polls,
+            "poll_interval_ms": poll_interval_ms,
+        }
+        if output_extension.strip():
+            params["output_extension"] = output_extension.strip()
+
+        task_credentials_ref = _apply_openai_auth(
+            params, auth_mode, credentials_ref, api_key_env, api_key
+        )
+
+        task = {
+            "id": f"comfy-video-job-{uuid.uuid4()}",
+            "provider": "custom_http",
+            "operation": "async_job",
+            "inputs": {"force_run_nonce": force_run_nonce},
+            "params": params,
+            "credentials_ref": task_credentials_ref,
+            "output_type": "files",
+            "cache_policy": {"enabled": False, "ttl_seconds": None, "key": None},
+            "retry_policy": {
+                "max_attempts": max_attempts,
+                "backoff_ms": 500,
+                "timeout_ms": timeout_ms,
+            },
+        }
+
+        result = run_task(task)
+        _raise_if_failed(result, "H-Gripe Video Job")
+        status = str(result.get("status", "unknown"))
+        output_files = result.get("output_files") or []
+        output_path = ""
+        if output_files and isinstance(output_files[0], dict):
+            output_path = str(output_files[0].get("path") or "")
+        return (output_path, json.dumps(result, ensure_ascii=False, indent=2), status)
+
+
 class HGripeReplicateRun:
     @classmethod
     def INPUT_TYPES(cls):
@@ -1793,6 +1925,7 @@ NODE_CLASS_MAPPINGS = {
     "HGripeOpenAICompatibleAudioText": HGripeOpenAICompatibleAudioText,
     "HGripeOpenAICompatibleVision": HGripeOpenAICompatibleVision,
     "HGripeVisionAnalyze": HGripeVisionAnalyze,
+    "HGripeVideoJob": HGripeVideoJob,
     "HGripeReplicateRun": HGripeReplicateRun,
 }
 
@@ -1808,5 +1941,6 @@ NODE_DISPLAY_NAME_MAPPINGS = {
     "HGripeOpenAICompatibleAudioText": "H-Gripe OpenAI Compatible Audio Text",
     "HGripeOpenAICompatibleVision": "H-Gripe OpenAI Compatible Vision",
     "HGripeVisionAnalyze": "H-Gripe Vision Analyze",
+    "HGripeVideoJob": "H-Gripe Video Job",
     "HGripeReplicateRun": "H-Gripe Replicate Run",
 }

@@ -518,6 +518,35 @@ fn studio_optimize_prompt_locally(text: &str, preset: &str) -> String {
     out.join(", ")
 }
 
+// Providers whose broker `supports("text.generate")` returns true. Mirrors the
+// capability declared in crates/hgripe-api (openai_compatible + mock) and the
+// TS `promptOptimizeProviderSupported`; keep all three in sync.
+fn studio_prompt_optimize_provider_supported(provider: &str) -> bool {
+    matches!(provider.trim(), "openai_compatible" | "mock")
+}
+
+/// Read an optional numeric param (accepts a JSON number or a numeric string;
+/// blank/non-numeric yields `None` so the field is omitted from the task).
+fn studio_param_f64(node: &StudioGraphNode, key: &str) -> Option<f64> {
+    match node.params.get(key) {
+        Some(Value::Number(n)) => n.as_f64(),
+        Some(Value::String(s)) => {
+            let trimmed = s.trim();
+            if trimmed.is_empty() {
+                None
+            } else {
+                trimmed.parse::<f64>().ok()
+            }
+        }
+        _ => None,
+    }
+}
+
+/// Like [`studio_param_f64`] but truncates to an integer (for `max_tokens`/`seed`).
+fn studio_param_i64(node: &StudioGraphNode, key: &str) -> Option<i64> {
+    studio_param_f64(node, key).map(|value| value as i64)
+}
+
 async fn execute_studio_prompt_optimize(
     node: &StudioGraphNode,
     inputs: &BTreeMap<String, Value>,
@@ -547,10 +576,18 @@ async fn execute_studio_prompt_optimize(
             if provider.is_empty() {
                 provider = "openai_compatible".to_string();
             }
+            if !studio_prompt_optimize_provider_supported(&provider) {
+                return Err(format!(
+                    "Provider \"{provider}\" can't optimize prompts (no text.generate support). \
+                     Pick an OpenAI-compatible chat profile, or switch mode to \"local\"/\"off\"."
+                ));
+            }
             let mut task = ApiTask::new(provider, "text.generate".to_string());
             task.id = studio_task_id(&node.id);
             task.output_type = OutputType::Text;
-            task.cache_policy.enabled = false;
+            // Cache identical optimisations (same text+instruction+model+sampling)
+            // so re-runs don't re-bill the LLM; the broker derives the key.
+            task.cache_policy.enabled = true;
             task.retry_policy.max_attempts = 1;
             task.retry_policy.backoff_ms = 200;
             task.retry_policy.timeout_ms = Some(60_000);
@@ -564,6 +601,18 @@ async fn execute_studio_prompt_optimize(
             if !instruction.trim().is_empty() {
                 task.params
                     .insert("system_prompt".to_string(), json!(instruction));
+            }
+            // Optional sampling controls (forwarded to the chat call when set).
+            if let Some(temperature) = studio_param_f64(node, "temperature") {
+                task.params
+                    .insert("temperature".to_string(), json!(temperature));
+            }
+            if let Some(max_tokens) = studio_param_i64(node, "max_tokens") {
+                task.params
+                    .insert("max_tokens".to_string(), json!(max_tokens));
+            }
+            if let Some(seed) = studio_param_i64(node, "seed") {
+                task.params.insert("seed".to_string(), json!(seed));
             }
             let credentials_ref = studio_value_to_string(node.params.get("credentials_ref"));
             if !credentials_ref.is_empty() {
@@ -1442,5 +1491,33 @@ mod tests {
     fn optimize_prompt_locally_empty_stays_empty() {
         assert_eq!(studio_optimize_prompt_locally("   ", "photographic"), "");
         assert_eq!(studio_optimize_prompt_locally("", "cleanup"), "");
+    }
+
+    #[test]
+    fn prompt_optimize_provider_support_matches_broker() {
+        assert!(studio_prompt_optimize_provider_supported("openai_compatible"));
+        assert!(studio_prompt_optimize_provider_supported("  mock  "));
+        assert!(!studio_prompt_optimize_provider_supported("custom_http"));
+        assert!(!studio_prompt_optimize_provider_supported("replicate"));
+        assert!(!studio_prompt_optimize_provider_supported(""));
+    }
+
+    #[test]
+    fn numeric_params_parse_from_number_or_string() {
+        let mut params = BTreeMap::new();
+        params.insert("temperature".to_string(), json!(0.7));
+        params.insert("max_tokens".to_string(), json!("128"));
+        params.insert("seed".to_string(), json!(42));
+        params.insert("blank".to_string(), json!("  "));
+        let node = StudioGraphNode {
+            id: "n1".to_string(),
+            kind: "promptOptimize".to_string(),
+            params,
+        };
+        assert_eq!(studio_param_f64(&node, "temperature"), Some(0.7));
+        assert_eq!(studio_param_i64(&node, "max_tokens"), Some(128));
+        assert_eq!(studio_param_i64(&node, "seed"), Some(42));
+        assert_eq!(studio_param_f64(&node, "blank"), None);
+        assert_eq!(studio_param_f64(&node, "missing"), None);
     }
 }

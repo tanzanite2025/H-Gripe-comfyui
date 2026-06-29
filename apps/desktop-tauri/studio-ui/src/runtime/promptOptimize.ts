@@ -29,6 +29,16 @@ const PRESET_TAGS: Record<LocalPreset, string[]> = {
   detailed: ["highly detailed", "intricate", "ultra quality", "masterpiece"],
 };
 
+// Providers whose broker `supports("text.generate")` returns true. Mirrors the
+// capability declared in crates/hgripe-api (openai_compatible + mock) and the
+// Rust `studio_prompt_optimize_provider_supported`; keep all three in sync.
+const TEXT_GENERATE_PROVIDERS = new Set(["openai_compatible", "mock"]);
+
+/** Whether `provider` can run the `api` mode (text.generate). */
+export function promptOptimizeProviderSupported(provider: string): boolean {
+  return TEXT_GENERATE_PROVIDERS.has(provider.trim());
+}
+
 /** Split a prompt into trimmed, non-empty, comma-separated segments. */
 function segments(text: string): string[] {
   return text

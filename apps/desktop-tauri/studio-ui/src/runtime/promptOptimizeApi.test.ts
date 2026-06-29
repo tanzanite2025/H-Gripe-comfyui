@@ -43,4 +43,32 @@ describe("promptOptimize api mode (mocked broker)", () => {
       defaultExecutors.promptOptimize(ctx({ text: "fox", mode: "api" })),
     ).rejects.toThrow(/no credentials configured/);
   });
+
+  it("rejects providers that cannot run text.generate before calling the broker", async () => {
+    await expect(
+      defaultExecutors.promptOptimize(ctx({ text: "fox", mode: "api", provider: "custom_http" })),
+    ).rejects.toThrow(/can't optimize prompts/);
+    expect(runTaskJson).not.toHaveBeenCalled();
+  });
+
+  it("enables caching and forwards sampling params when set", async () => {
+    runTaskJson.mockResolvedValue({ status: "succeeded", output_json: { text: "ok" } });
+    await defaultExecutors.promptOptimize(
+      ctx({ text: "fox", mode: "api", temperature: 0.5, max_tokens: 128, seed: 7 }),
+    );
+    const task = runTaskJson.mock.calls[0][0];
+    expect(task.cache_policy.enabled).toBe(true);
+    expect(task.params).toMatchObject({ temperature: 0.5, max_tokens: 128, seed: 7 });
+  });
+
+  it("omits sampling params left blank", async () => {
+    runTaskJson.mockResolvedValue({ status: "succeeded", output_json: { text: "ok" } });
+    await defaultExecutors.promptOptimize(
+      ctx({ text: "fox", mode: "api", temperature: "", max_tokens: "", seed: "" }),
+    );
+    const task = runTaskJson.mock.calls[0][0];
+    expect(task.params).not.toHaveProperty("temperature");
+    expect(task.params).not.toHaveProperty("max_tokens");
+    expect(task.params).not.toHaveProperty("seed");
+  });
 });

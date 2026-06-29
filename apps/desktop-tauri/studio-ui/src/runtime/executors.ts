@@ -8,7 +8,11 @@
 
 import { composePsd, getOutputDir, runTaskJson } from "../bridge/tauri";
 import type { ExecutorRegistry } from "./dag";
-import { optimizePromptLocally, type LocalPreset } from "./promptOptimize";
+import {
+  optimizePromptLocally,
+  promptOptimizeProviderSupported,
+  type LocalPreset,
+} from "./promptOptimize";
 
 // Params that are not forwarded into the broker task's `params` map; they are
 // top-level task fields instead.
@@ -42,21 +46,37 @@ export const defaultExecutors: ExecutorRegistry = {
 
     if (mode === "api") {
       if (!raw.trim()) return { text: raw };
+      const provider = String(ctx.params.provider ?? "openai_compatible") || "openai_compatible";
+      if (!promptOptimizeProviderSupported(provider)) {
+        throw new Error(
+          `Provider "${provider}" can't optimize prompts (no text.generate support). ` +
+            `Pick an OpenAI-compatible chat profile, or switch mode to "local"/"off".`,
+        );
+      }
       const params: Record<string, unknown> = {};
       const model = String(ctx.params.model ?? "").trim();
       if (model) params.model = model;
       const instruction = String(ctx.params.instruction ?? "").trim();
       if (instruction) params.system_prompt = instruction;
+      // Optional sampling controls (forwarded to the chat call when set).
+      for (const key of ["temperature", "max_tokens", "seed"] as const) {
+        const num = Number(ctx.params[key]);
+        if (ctx.params[key] !== undefined && ctx.params[key] !== "" && Number.isFinite(num)) {
+          params[key] = num;
+        }
+      }
 
       const task = {
         id: `studio-${ctx.nodeId}-${Date.now()}`,
-        provider: String(ctx.params.provider ?? "openai_compatible") || "openai_compatible",
+        provider,
         operation: "text.generate",
         inputs: { prompt: raw },
         params,
         credentials_ref: String(ctx.params.credentials_ref ?? "") || null,
         output_type: "text",
-        cache_policy: { enabled: false, ttl_seconds: null, key: null },
+        // Cache identical optimisations (same text+instruction+model+sampling)
+        // so re-runs don't re-bill the LLM; the broker derives the key.
+        cache_policy: { enabled: true, ttl_seconds: null, key: null },
         retry_policy: { max_attempts: 1, backoff_ms: 200, timeout_ms: 60000 },
       };
 

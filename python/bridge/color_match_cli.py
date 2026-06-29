@@ -34,6 +34,7 @@ with a single message on stderr.
 from __future__ import annotations
 
 import argparse
+import io
 import json
 import sys
 from pathlib import Path
@@ -47,6 +48,14 @@ import numpy as np
 _RATIO_MIN, _RATIO_MAX = 0.5, 2.0
 _CHROMA_NORM = 110.0
 _EPS = 1e-6
+
+# Default ceiling on *input* pixels (~96 MP); a larger image is refused before
+# it is decoded so a decompression-bomb workflow asset cannot exhaust memory.
+_DEFAULT_MAX_DECODE_PIXELS = 96_000_000
+
+# Pillow modes carrying per-pixel transparency / high-bit integer-or-float data.
+_ALPHA_MODES = {"RGBA", "LA", "La", "PA"}
+_HIGHBIT_MODES = {"I", "I;16", "I;16B", "I;16L", "I;16N", "F"}
 
 
 def _safe_stem(image_path: str) -> str:
@@ -77,16 +86,93 @@ def _warmth_label(kelvin: int) -> str:
     return "neutral"
 
 
-def _load_rgb_alpha(path: str) -> tuple["np.ndarray", "np.ndarray"]:
-    """Load an image as (H,W,3 uint8 RGB, H,W float alpha in 0..1)."""
+def _cmyk_to_rgb(img: Any) -> Any:
+    """Convert CMYK to sRGB, honouring an embedded ICC profile when present.
+
+    A bare ``convert("RGB")`` uses a naive transform that visibly shifts colour;
+    with an embedded CMYK profile we run a real profile-to-profile transform
+    into sRGB instead, falling back to the naive path on any error.
+    """
+    icc = img.info.get("icc_profile")
+    if icc:
+        try:
+            from PIL import ImageCms
+
+            src = ImageCms.ImageCmsProfile(io.BytesIO(icc))
+            dst = ImageCms.createProfile("sRGB")
+            return ImageCms.profileToProfile(img, src, dst, outputMode="RGB")
+        except Exception:  # noqa: BLE001 - fall back to the naive conversion
+            pass
+    return img.convert("RGB")
+
+
+def _highbit_to_rgb(img: Any) -> Any:
+    """Normalise a 16-bit / 32-bit / float image down to 8-bit RGB.
+
+    ``convert("RGB")`` on an ``I;16`` image clips to 0..255 and destroys the
+    tonal range, so we scale the actual data range into 8 bits first.
+    """
+    arr = np.asarray(img).astype(np.float64)
+    if arr.size == 0:
+        return img.convert("RGB")
+    peak = float(arr.max())
+    if peak > 255.0:
+        arr = arr * (255.0 / peak)
+    arr = np.clip(arr, 0.0, 255.0).astype(np.uint8)
     from PIL import Image
 
+    return Image.fromarray(arr, mode="L").convert("RGB")
+
+
+def _load_rgb_alpha(
+    path: str, max_decode_pixels: int = _DEFAULT_MAX_DECODE_PIXELS
+) -> tuple["np.ndarray", "np.ndarray", str, bool]:
+    """Load an image as (H,W,3 uint8 RGB, H,W float alpha in 0..1, source_mode, exif_transposed).
+
+    Refuses oversized inputs before decoding, normalises EXIF orientation, and
+    maps CMYK / high-bit / palette / grayscale sources into an 8-bit RGB working
+    space (so colour matching is not skewed by a naive ``convert``). The alpha
+    channel is taken from the source when present, else a fully-opaque plane.
+    """
+    from PIL import Image, ImageOps
+
     img = Image.open(path)
-    img = img.convert("RGBA")
-    arr = np.asarray(img, dtype=np.uint8)
-    rgb = arr[..., :3].copy()
-    alpha = arr[..., 3].astype(np.float32) / 255.0
-    return rgb, alpha
+    width, height = img.size
+    if max_decode_pixels > 0 and width * height > max_decode_pixels:
+        raise ValueError(
+            f"input image too large to decode safely: {width}x{height} "
+            f"({width * height} px > max {max_decode_pixels})"
+        )
+    img.load()
+
+    transposed = False
+    try:
+        fixed = ImageOps.exif_transpose(img)
+    except Exception:  # noqa: BLE001 - a broken EXIF block must not abort matching
+        fixed = img
+    if fixed is not img:
+        transposed = True
+    img = fixed
+
+    source_mode = img.mode
+    had_alpha = source_mode in _ALPHA_MODES or (
+        source_mode == "P" and "transparency" in img.info
+    )
+
+    if had_alpha:
+        rgba = img.convert("RGBA")
+        alpha = np.asarray(rgba.getchannel("A"), dtype=np.float32) / 255.0
+        rgb = np.asarray(rgba.convert("RGB"), dtype=np.uint8).copy()
+    else:
+        if source_mode == "CMYK":
+            rgb_img = _cmyk_to_rgb(img)
+        elif source_mode in _HIGHBIT_MODES:
+            rgb_img = _highbit_to_rgb(img)
+        else:
+            rgb_img = img.convert("RGB")
+        rgb = np.asarray(rgb_img, dtype=np.uint8).copy()
+        alpha = np.ones(rgb.shape[:2], dtype=np.float32)
+    return rgb, alpha, source_mode, transposed
 
 
 def _load_weight(path: str | None, shape: tuple[int, int]) -> "np.ndarray | None":
@@ -175,7 +261,11 @@ def _appearance(rgb: "np.ndarray", weight: "np.ndarray") -> dict[str, Any]:
     }
 
 
-def _prompt_suffix(context: dict[str, Any] | None, background_rgb: "np.ndarray | None") -> str:
+def _prompt_suffix(
+    context: dict[str, Any] | None,
+    background_rgb: "np.ndarray | None",
+    background_weight: "np.ndarray | None" = None,
+) -> str:
     """Reuse the upstream context's suffix when present, else synthesise one
     from the background's colour temperature."""
     if context:
@@ -188,9 +278,9 @@ def _prompt_suffix(context: dict[str, Any] | None, background_rgb: "np.ndarray |
         kelvin = int(lighting.get("color_temperature") or 5500)
         warmth = _warmth_label(kelvin)
     elif background_rgb is not None:
-        mean_rgb, _ = _region_stats(
-            background_rgb.astype(np.float32), np.ones(background_rgb.shape[:2], dtype=np.float32)
-        )
+        if background_weight is None:
+            background_weight = np.ones(background_rgb.shape[:2], dtype=np.float32)
+        mean_rgb, _ = _region_stats(background_rgb.astype(np.float32), background_weight)
         kelvin = _color_temperature(mean_rgb)
         warmth, quality, direction = _warmth_label(kelvin), "soft", "center"
     else:
@@ -207,11 +297,18 @@ def _apply_color_transfer(
     bg_lab: "np.ndarray",
     region: "np.ndarray",
     protect_saturation: bool,
+    bg_region: "np.ndarray | None" = None,
 ) -> tuple["np.ndarray", dict[str, Any]]:
-    """Reinhard mean/std transfer in Lab toward the background statistics."""
+    """Reinhard mean/std transfer in Lab toward the background statistics.
+
+    ``bg_region`` (a 0..1 weight over the background, default fully opaque)
+    excludes transparent background pixels so their colour does not skew the
+    target mean/std.
+    """
     src_mean, src_std = _region_stats(subj_lab, region)
-    bg_weight = np.ones(bg_lab.shape[:2], dtype=np.float32)
-    dst_mean, dst_std = _region_stats(bg_lab, bg_weight)
+    if bg_region is None:
+        bg_region = np.ones(bg_lab.shape[:2], dtype=np.float32)
+    dst_mean, dst_std = _region_stats(bg_lab, bg_region)
     ratio = np.clip(dst_std / (src_std + _EPS), _RATIO_MIN, _RATIO_MAX)
     transferred = (subj_lab - src_mean) * ratio + dst_mean
     if protect_saturation:
@@ -250,7 +347,8 @@ def match(args: argparse.Namespace) -> dict[str, Any]:
         except json.JSONDecodeError:
             context = None
 
-    rgb, alpha = _load_rgb_alpha(image_path)
+    max_decode_pixels = int(getattr(args, "max_decode_pixels", _DEFAULT_MAX_DECODE_PIXELS))
+    rgb, alpha, source_mode, exif_transposed = _load_rgb_alpha(image_path, max_decode_pixels)
     height, width = rgb.shape[:2]
 
     # The correction region: inside the subject's alpha, optionally narrowed by
@@ -263,13 +361,20 @@ def match(args: argparse.Namespace) -> dict[str, Any]:
         region = np.ones((height, width), dtype=np.float32)
 
     background_rgb: "np.ndarray | None" = None
+    background_region: "np.ndarray | None" = None
+    background_mode: str | None = None
     bg_path = (args.background or "").strip()
     if bg_path:
         if not Path(bg_path).is_file():
             raise FileNotFoundError(f"background image not found: {bg_path}")
-        background_rgb, _ = _load_rgb_alpha(bg_path)
+        background_rgb, bg_alpha, background_mode, _ = _load_rgb_alpha(bg_path, max_decode_pixels)
+        # Only opaque background pixels describe the target lighting; transparent
+        # regions (a cut-out background plate) must not skew the statistics.
+        background_region = (bg_alpha > 0.0).astype(np.float32)
+        if float(background_region.sum()) < _EPS:
+            background_region = np.ones(background_rgb.shape[:2], dtype=np.float32)
 
-    prompt_suffix = _prompt_suffix(context, background_rgb)
+    prompt_suffix = _prompt_suffix(context, background_rgb, background_region)
     before = _appearance(rgb, region)
 
     report: dict[str, Any] = {
@@ -279,6 +384,10 @@ def match(args: argparse.Namespace) -> dict[str, Any]:
         "highlight_strength": round(highlight_strength, 4),
         "protect_saturation": bool(args.protect_saturation),
         "protect_brand_color": bool(args.protect_brand_color),
+        "source_mode": source_mode,
+        "background_mode": background_mode,
+        "exif_transposed": exif_transposed,
+        "max_decode_pixels": max_decode_pixels,
         "applied": False,
         "before": before,
         "after": before,
@@ -298,9 +407,10 @@ def match(args: argparse.Namespace) -> dict[str, Any]:
             subj_lab, strength, shadow_strength, highlight_strength, bool(args.protect_brand_color)
         )
 
+        bg_sel = (background_region > 0.5) if background_region is not None else None
         if mode in ("color_transfer", "hybrid"):
             transferred, stats = _apply_color_transfer(
-                subj_lab, bg_lab, region, bool(args.protect_saturation)
+                subj_lab, bg_lab, region, bool(args.protect_saturation), background_region
             )
             report.update(stats)
             result_lab = _blend(subj_lab, transferred, weight)
@@ -315,9 +425,12 @@ def match(args: argparse.Namespace) -> dict[str, Any]:
             for ch in range(3):
                 if args.protect_saturation and ch > 0:
                     continue
+                ref_channel = np.rint(bg_lab[..., ch]).astype(np.int64)
+                if bg_sel is not None:
+                    ref_channel = ref_channel[bg_sel]
                 matched[..., ch] = _histogram_match(
                     np.rint(base[..., ch]).astype(np.int64),
-                    np.rint(bg_lab[..., ch]).astype(np.int64),
+                    ref_channel,
                 ).astype(np.float32)
             result_lab = _blend(base, matched, hist_weight)
 
@@ -402,6 +515,13 @@ def build_parser() -> argparse.ArgumentParser:
         dest="output_name",
         default="",
         help="base name for the matched PNG (default: <image>_matched)",
+    )
+    parser.add_argument(
+        "--max-decode-pixels",
+        dest="max_decode_pixels",
+        type=int,
+        default=_DEFAULT_MAX_DECODE_PIXELS,
+        help="refuse inputs larger than this many pixels before decoding (0 disables)",
     )
     return parser
 

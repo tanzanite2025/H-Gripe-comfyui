@@ -1039,6 +1039,197 @@ fn clear_studio_autosave() -> Result<(), String> {
     }
 }
 
+// --- Explicit workflow save/open + project folder ---------------------------
+// Beyond the single-slot autosave, the editor can save/open named workflow
+// files anywhere on disk and browse a chosen "project folder" of workflows.
+// Recents (last project folder + recently opened files) persist next to the
+// autosave so the editor reopens where the user left off.
+
+fn studio_recents_path() -> PathBuf {
+    studio_workspace_dir().join("recents.workflow.json")
+}
+
+/// A `.workflow.json` (or `.json`) file discovered in a project folder.
+#[derive(Serialize)]
+struct StudioWorkflowFile {
+    /// File name including extension (e.g. `poster.workflow.json`).
+    name: String,
+    path: String,
+    modified_ms: Option<u64>,
+    size_bytes: u64,
+}
+
+/// Persisted editor session pointers: the active project folder and the
+/// most-recently-opened workflow files (newest first).
+#[derive(Serialize, Deserialize, Default)]
+struct StudioRecents {
+    #[serde(default)]
+    project_dir: Option<String>,
+    #[serde(default)]
+    current_file: Option<String>,
+    #[serde(default)]
+    files: Vec<String>,
+}
+
+fn studio_is_workflow_file(path: &Path) -> bool {
+    path.extension()
+        .and_then(|ext| ext.to_str())
+        .map(|ext| ext.eq_ignore_ascii_case("json"))
+        .unwrap_or(false)
+}
+
+/// Open a native save dialog scoped to workflow JSON and return the chosen
+/// path, or `None` if cancelled.
+#[tauri::command]
+fn pick_workflow_save_path(
+    app: tauri::AppHandle,
+    default_name: Option<String>,
+    dir: Option<String>,
+) -> Option<String> {
+    use tauri_plugin_dialog::DialogExt;
+    let mut builder = app
+        .dialog()
+        .file()
+        .set_title("Save Workflow")
+        .add_filter("Workflow", &["json"])
+        .set_file_name(default_name.unwrap_or_else(|| "workflow.json".to_string()));
+    if let Some(dir) = dir.as_deref().filter(|d| !d.trim().is_empty()) {
+        builder = builder.set_directory(dir);
+    }
+    builder.blocking_save_file().map(|path| path.to_string())
+}
+
+/// Open a native open dialog scoped to workflow JSON and return the chosen
+/// path, or `None` if cancelled.
+#[tauri::command]
+fn pick_workflow_open_path(app: tauri::AppHandle, dir: Option<String>) -> Option<String> {
+    use tauri_plugin_dialog::DialogExt;
+    let mut builder = app
+        .dialog()
+        .file()
+        .set_title("Open Workflow")
+        .add_filter("Workflow", &["json"]);
+    if let Some(dir) = dir.as_deref().filter(|d| !d.trim().is_empty()) {
+        builder = builder.set_directory(dir);
+    }
+    builder.blocking_pick_file().map(|path| path.to_string())
+}
+
+/// Open a native folder-picker and return the chosen directory, or `None`.
+#[tauri::command]
+fn pick_project_folder(app: tauri::AppHandle, dir: Option<String>) -> Option<String> {
+    use tauri_plugin_dialog::DialogExt;
+    let mut builder = app.dialog().file().set_title("Choose Project Folder");
+    if let Some(dir) = dir.as_deref().filter(|d| !d.trim().is_empty()) {
+        builder = builder.set_directory(dir);
+    }
+    builder.blocking_pick_folder().map(|path| path.to_string())
+}
+
+/// Read a workflow file from disk, validating it parses as a Studio graph.
+#[tauri::command]
+fn read_studio_workflow(path: String) -> Result<String, String> {
+    let path = Path::new(path.trim());
+    let text = fs::read_to_string(path)
+        .map_err(|err| format!("failed to read {}: {err}", path.display()))?;
+    serde_json::from_str::<StudioWorkflowGraph>(&text)
+        .map_err(|err| format!("not a valid Studio workflow ({}): {err}", path.display()))?;
+    Ok(text)
+}
+
+/// Write a workflow file to disk, validating the payload first and creating
+/// parent directories as needed.
+#[tauri::command]
+fn write_studio_workflow(path: String, graph_json: String) -> Result<(), String> {
+    let graph: StudioWorkflowGraph = serde_json::from_str(&graph_json)
+        .map_err(|err| format!("invalid Studio graph JSON: {err}"))?;
+    if graph.version != 1 {
+        return Err(format!(
+            "unsupported Studio graph version: {} (expected 1)",
+            graph.version
+        ));
+    }
+    let path = Path::new(path.trim());
+    if let Some(parent) = path.parent().filter(|p| !p.as_os_str().is_empty()) {
+        fs::create_dir_all(parent)
+            .map_err(|err| format!("failed to create {}: {err}", parent.display()))?;
+    }
+    fs::write(path, graph_json)
+        .map_err(|err| format!("failed to write {}: {err}", path.display()))
+}
+
+/// List workflow JSON files in a project folder (non-recursive), newest first.
+#[tauri::command]
+fn list_studio_workflows(dir: String) -> Result<Vec<StudioWorkflowFile>, String> {
+    let dir = dir.trim();
+    if dir.is_empty() {
+        return Err("project folder is empty".to_string());
+    }
+    let path = Path::new(dir);
+    if !path.is_dir() {
+        return Err(format!("not a directory: {dir}"));
+    }
+
+    let mut files = Vec::new();
+    for entry in
+        fs::read_dir(path).map_err(|err| format!("failed to read {}: {err}", path.display()))?
+    {
+        let entry = match entry {
+            Ok(entry) => entry,
+            Err(_) => continue,
+        };
+        let file_path = entry.path();
+        if !file_path.is_file() || !studio_is_workflow_file(&file_path) {
+            continue;
+        }
+        let name = match file_path.file_name().and_then(|s| s.to_str()) {
+            Some(name) => name.to_string(),
+            None => continue,
+        };
+        let metadata = entry.metadata().ok();
+        files.push(StudioWorkflowFile {
+            name,
+            path: file_path.to_string_lossy().to_string(),
+            modified_ms: metadata.as_ref().and_then(modified_ms),
+            size_bytes: metadata.as_ref().map(|m| m.len()).unwrap_or(0),
+        });
+    }
+
+    files.sort_by(|a, b| {
+        b.modified_ms
+            .cmp(&a.modified_ms)
+            .then_with(|| a.name.cmp(&b.name))
+    });
+    Ok(files)
+}
+
+/// Read the persisted editor session pointers (project folder + recent files).
+#[tauri::command]
+fn read_studio_recents() -> Result<StudioRecents, String> {
+    let path = studio_recents_path();
+    if !path.exists() {
+        return Ok(StudioRecents::default());
+    }
+    let text = fs::read_to_string(&path)
+        .map_err(|err| format!("failed to read {}: {err}", path.display()))?;
+    serde_json::from_str(&text)
+        .map_err(|err| format!("invalid Studio recents {}: {err}", path.display()))
+}
+
+/// Persist the editor session pointers (project folder + recent files).
+#[tauri::command]
+fn write_studio_recents(recents: StudioRecents) -> Result<(), String> {
+    let path = studio_recents_path();
+    if let Some(parent) = path.parent() {
+        fs::create_dir_all(parent)
+            .map_err(|err| format!("failed to create {}: {err}", parent.display()))?;
+    }
+    let text = serde_json::to_string_pretty(&recents)
+        .map_err(|err| format!("failed to serialize Studio recents: {err}"))?;
+    fs::write(&path, text)
+        .map_err(|err| format!("failed to write {}: {err}", path.display()))
+}
+
 #[tauri::command]
 fn cancel_studio_run(
     app: tauri::AppHandle,
@@ -1676,6 +1867,14 @@ fn main() {
             read_studio_autosave,
             write_studio_autosave,
             clear_studio_autosave,
+            pick_workflow_save_path,
+            pick_workflow_open_path,
+            pick_project_folder,
+            read_studio_workflow,
+            write_studio_workflow,
+            list_studio_workflows,
+            read_studio_recents,
+            write_studio_recents,
             cancel_studio_run,
             rerun_task,
             open_url,

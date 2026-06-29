@@ -14,6 +14,7 @@ use serde::Serialize;
 use serde_json::{json, Value};
 use tauri::Emitter;
 
+use super::color_match::execute_studio_match_light_color;
 use super::graph::{
     studio_non_empty, studio_output_map, studio_truthy, studio_value_to_number,
     studio_value_to_string, StudioGraphEdge, StudioGraphNode, StudioWorkflowGraph,
@@ -678,6 +679,7 @@ async fn execute_studio_node(
             ),
         ])),
         "psdContextAnalyze" => execute_studio_psd_context_analyze(node, &inputs),
+        "matchLightColor" => execute_studio_match_light_color(node, &inputs),
         "psdExport" => execute_studio_psd_export(node, &inputs),
         other => Err(format!("unsupported Studio node kind: {other}")),
     }

@@ -6,7 +6,8 @@
 // sinks. This wires the renderer-agnostic DAG runtime to real backend
 // capability.
 
-import { analyzePsdContext, composePsd, getOutputDir, runTaskJson } from "../bridge/tauri";
+import { analyzePsdContext, composePsd, getOutputDir, matchLightColor, runTaskJson } from "../bridge/tauri";
+import type { VisualContext } from "../types/production";
 import type { ExecutorRegistry } from "./dag";
 import {
   optimizePromptLocally,
@@ -276,6 +277,36 @@ export const defaultExecutors: ExecutorRegistry = {
       background_image: context.background.image_path,
       placeholder_mask: context.placeholder.mask_path,
       placeholder_bounds: context.placeholder.bounds,
+    };
+  },
+
+  // Nudges the upstream subject image's light & colour toward the PSD
+  // background (Reinhard Lab transfer / histogram match, sparing brand colours)
+  // via the backend `match_light_color` command, exposing the matched image,
+  // the match report, and a prompt suffix.
+  matchLightColor: async (ctx) => {
+    const image = (ctx.inputs.image as string | undefined) ?? null;
+    if (!image) throw new Error("Light & Color Match needs a connected image input");
+
+    const outputDir = String(ctx.params.output_dir ?? "").trim() || (await getOutputDir());
+    const result = await matchLightColor({
+      image,
+      background: (ctx.inputs.background as string | undefined) || undefined,
+      mask: (ctx.inputs.mask as string | undefined) || undefined,
+      context: (ctx.inputs.visual_context as VisualContext | undefined) ?? undefined,
+      mode: String(ctx.params.mode ?? "color_transfer") || undefined,
+      strength: Number(ctx.params.strength ?? 0.6),
+      shadowStrength: Number(ctx.params.shadow_strength ?? 0),
+      highlightStrength: Number(ctx.params.highlight_strength ?? 0),
+      protectSaturation: Boolean(ctx.params.protect_saturation ?? false),
+      protectBrandColor: Boolean(ctx.params.protect_brand_color ?? true),
+      outputDir: outputDir || undefined,
+      outputName: String(ctx.params.output_name ?? "").trim() || undefined,
+    });
+    return {
+      matched_image: result.matched_image,
+      match_report: result.match_report,
+      prompt_suffix: result.prompt_suffix,
     };
   },
 

@@ -19,6 +19,7 @@ import "@xyflow/react/dist/style.css";
 import { HgripeNode, type HgripeNodeData } from "./HgripeNode";
 import { GroupNode } from "./GroupNode";
 import { HelperLines } from "./HelperLines";
+import { SmartEdge } from "./SmartEdge";
 import { miniMapColor } from "./minimap";
 import { DND_NODE_KIND } from "./Palette";
 import { nodeSpec } from "../graph/nodeSpecs";
@@ -44,10 +45,16 @@ interface FlowCanvasProps {
   /** Alignment guide lines (flow-space coords) to draw, if any. */
   helperLines?: { horizontal?: number; vertical?: number };
   /** Edge rendering style applied to existing + new edges. */
-  edgeType?: "default" | "smoothstep";
+  edgeType?: EdgeStyle;
   /** Whether to render the minimap. */
   showMinimap?: boolean;
+  /** Right-click on a node (screen coords + node id). */
+  onNodeContextMenu?: (nodeId: string, at: { x: number; y: number }) => void;
+  /** Right-click on empty canvas (screen coords). */
+  onPaneContextMenu?: (at: { x: number; y: number }) => void;
 }
+
+export type EdgeStyle = "default" | "smoothstep" | "smart";
 
 const SNAP_GRID: [number, number] = [16, 16];
 
@@ -65,9 +72,12 @@ export function FlowCanvas({
   helperLines,
   edgeType = "default",
   showMinimap = true,
+  onNodeContextMenu,
+  onPaneContextMenu,
 }: FlowCanvasProps) {
   // Declared once so React does not re-create the map each render.
   const nodeTypes = useMemo(() => ({ hgripe: HgripeNode, group: GroupNode }), []);
+  const edgeTypes = useMemo(() => ({ smart: SmartEdge }), []);
   const { screenToFlowPosition } = useReactFlow();
 
   const portType = useCallback(
@@ -114,6 +124,21 @@ export function FlowCanvas({
 
   const defaultEdgeOptions = useMemo(() => ({ type: edgeType }), [edgeType]);
 
+  const handleNodeContextMenu = useCallback(
+    (e: React.MouseEvent, node: Node) => {
+      e.preventDefault();
+      onNodeContextMenu?.(node.id, { x: e.clientX, y: e.clientY });
+    },
+    [onNodeContextMenu],
+  );
+  const handlePaneContextMenu = useCallback(
+    (e: React.MouseEvent | MouseEvent) => {
+      e.preventDefault();
+      onPaneContextMenu?.({ x: (e as MouseEvent).clientX, y: (e as MouseEvent).clientY });
+    },
+    [onPaneContextMenu],
+  );
+
   const onDragOver = useCallback((e: React.DragEvent) => {
     e.preventDefault();
     e.dataTransfer.dropEffect = "move";
@@ -135,6 +160,9 @@ export function FlowCanvas({
       nodes={nodes}
       edges={edges}
       nodeTypes={nodeTypes}
+      edgeTypes={edgeTypes}
+      onNodeContextMenu={handleNodeContextMenu}
+      onPaneContextMenu={handlePaneContextMenu}
       onNodesChange={onNodesChange}
       onEdgesChange={onEdgesChange}
       onConnect={onConnect}

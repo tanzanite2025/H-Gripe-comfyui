@@ -1935,6 +1935,84 @@ fn compose_psd(
     })
 }
 
+/// A single PSD layer, mirroring the rows printed by `inspect_psd_cli.py`.
+#[derive(Serialize, Deserialize)]
+struct PsdLayerInfo {
+    name: String,
+    /// "group" | "smartobject" | "pixel".
+    kind: String,
+}
+
+/// Result of an `inspect_psd` run, mirroring the JSON printed by the
+/// `inspect_psd_cli.py` helper.
+#[derive(Serialize, Deserialize)]
+struct InspectPsdResult {
+    status: String,
+    /// `false` when the template path does not point at a file on disk.
+    exists: bool,
+    width: u32,
+    height: u32,
+    /// Flat list of every layer (groups and their children), newest-first as
+    /// PSD stores them.
+    layers: Vec<PsdLayerInfo>,
+    /// Subset of the requested `names` that were not found in the PSD.
+    missing: Vec<String>,
+}
+
+/// Inspect a PSD template: report whether it exists on disk, its canvas size,
+/// and the names/kinds of its layers, plus which of the requested placeholder
+/// `names` are missing. This lets the editor validate a real PSD before a run
+/// (file present, placeholder layer name actually exists) instead of only
+/// surfacing the problem mid-compose.
+///
+/// Like `compose_psd`, this shells out to `python/bridge/inspect_psd_cli.py`
+/// using the same Python interpreter resolution as ComfyUI, reusing the
+/// vendored psd-tools pipeline without a running ComfyUI server.
+#[tauri::command]
+fn inspect_psd(
+    dir: Option<String>,
+    template: String,
+    names: Option<Vec<String>>,
+) -> Result<InspectPsdResult, String> {
+    let dir = resolve_comfy_dir(&dir)?;
+    let python = comfy_python(&dir);
+    let script = dir.join("python").join("bridge").join("inspect_psd_cli.py");
+    if !script.is_file() {
+        return Err(format!("inspect_psd_cli.py not found at {}", script.display()));
+    }
+    let names_json =
+        serde_json::to_string(&names.unwrap_or_default()).map_err(|err| err.to_string())?;
+
+    let mut cmd = std::process::Command::new(&python);
+    cmd.arg(&script)
+        .arg("--template")
+        .arg(&template)
+        .arg("--names")
+        .arg(&names_json)
+        .current_dir(&dir);
+    #[cfg(windows)]
+    {
+        use std::os::windows::process::CommandExt;
+        // CREATE_NO_WINDOW: don't pop a console window for the child.
+        cmd.creation_flags(0x0800_0000);
+    }
+
+    let output = cmd
+        .output()
+        .map_err(|err| format!("failed to launch {}: {err}", python.display()))?;
+    if !output.status.success() {
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        return Err(format!("inspect_psd failed: {}", stderr.trim()));
+    }
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    serde_json::from_str::<InspectPsdResult>(stdout.trim()).map_err(|err| {
+        format!(
+            "could not parse inspect_psd output: {err} (raw: {})",
+            stdout.trim()
+        )
+    })
+}
+
 fn main() {
     tauri::Builder::default()
         .plugin(tauri_plugin_dialog::init())
@@ -1983,7 +2061,8 @@ fn main() {
             comfyui_status,
             start_comfyui,
             stop_comfyui,
-            compose_psd
+            compose_psd,
+            inspect_psd
         ])
         .run(tauri::generate_context!())
         .expect("error while running H-Gripe Desktop");

@@ -1,7 +1,12 @@
 import { describe, expect, it } from "vitest";
 
 import { GRAPH_VERSION, type WorkflowGraph } from "../graph/model";
-import { psdTemplatePathWarning, validatePsdChain } from "./psdcheck";
+import {
+  psdExportTargets,
+  psdTemplatePathWarning,
+  psdTemplatePaths,
+  validatePsdChain,
+} from "./psdcheck";
 
 const node = (id: string, kind: string, params: Record<string, unknown> = {}) => ({
   id,
@@ -60,5 +65,44 @@ describe("validatePsdChain", () => {
       edge("e2", "t", "template", "e", "template"),
     ];
     expect(validatePsdChain(graph(nodes, edges))).toEqual([]);
+  });
+});
+
+describe("psdTemplatePaths", () => {
+  it("collects only psdTemplate nodes with a non-empty path", () => {
+    const nodes = [
+      node("t1", "psdTemplate", { path: "/x/a.psd" }),
+      node("t2", "psdTemplate", { path: "  " }),
+      node("g", "generate", { path: "/x/ignored.psd" }),
+    ];
+    expect(psdTemplatePaths(graph(nodes, []))).toEqual([{ node: "t1", path: "/x/a.psd" }]);
+  });
+});
+
+describe("psdExportTargets", () => {
+  it("resolves the connected template path and placeholder for each export", () => {
+    const nodes = [
+      node("t", "psdTemplate", { path: "/x/a.psd" }),
+      node("e", "psdExport", { placeholder: "main" }),
+    ];
+    const edges = [edge("e2", "t", "template", "e", "template")];
+    expect(psdExportTargets(graph(nodes, edges))).toEqual([
+      { node: "e", templatePath: "/x/a.psd", placeholder: "main" },
+    ]);
+  });
+
+  it("reports a null template path when nothing feeds the template input", () => {
+    const nodes = [node("e", "psdExport", { placeholder: "main" })];
+    expect(psdExportTargets(graph(nodes, []))).toEqual([
+      { node: "e", templatePath: null, placeholder: "main" },
+    ]);
+  });
+
+  it("ignores a template input not fed by a psdTemplate node", () => {
+    const nodes = [node("g", "generate"), node("e", "psdExport", { placeholder: "main" })];
+    const edges = [edge("e1", "g", "image", "e", "template")];
+    expect(psdExportTargets(graph(nodes, edges))).toEqual([
+      { node: "e", templatePath: null, placeholder: "main" },
+    ]);
   });
 });

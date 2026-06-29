@@ -50,6 +50,7 @@ import {
   loadAutoSnapshotPref,
   loadSnapshots,
   newSnapshotId,
+  parseSnapshots,
   removeSnapshot,
   renameSnapshot,
   saveAutoSnapshotPref,
@@ -75,11 +76,13 @@ import {
   pickWorkflowSavePath,
   readStudioAutosave,
   readStudioRecents,
+  readStudioSnapshots,
   readStudioWorkflow,
   renameStudioWorkflow,
   runStudioGraph,
   writeStudioAutosave,
   writeStudioRecents,
+  writeStudioSnapshots,
   writeStudioWorkflow,
   type StudioGraphRunEvent,
   type StudioGraphRunResult,
@@ -197,6 +200,11 @@ function Studio() {
   // Skips the next dirty-mark when the graph is swapped programmatically
   // (mount restore, open, new) rather than by a user edit.
   const skipDirty = useRef(true);
+  // On desktop with a project folder selected, snapshots persist into that
+  // folder so they travel with the project; otherwise they fall back to
+  // localStorage. `skipSnapshotPersist` avoids writing straight back to disk
+  // right after loading a project's snapshots into state.
+  const skipSnapshotPersist = useRef(false);
 
   const idSeq = useRef(0);
   const logSeq = useRef(0);
@@ -909,9 +917,50 @@ function Studio() {
     [fileDirty, currentFile],
   );
 
-  // Persist snapshots to localStorage whenever the list changes.
+  // The folder snapshots persist into, or null to use localStorage. Read
+  // through a ref inside the persist effect so a folder switch does not write
+  // the previous scope's snapshots into the new folder.
+  const snapshotDir = isDesktop ? projectDir : null;
+  const snapshotDirRef = useRef(snapshotDir);
+  snapshotDirRef.current = snapshotDir;
+  const loadedSnapshotDir = useRef<string | null>(null);
+
+  // Load the selected project folder's snapshots when it changes (desktop).
   useEffect(() => {
-    saveSnapshots(snapshots);
+    if (!snapshotDir) {
+      loadedSnapshotDir.current = null;
+      return;
+    }
+    if (loadedSnapshotDir.current === snapshotDir) return;
+    loadedSnapshotDir.current = snapshotDir;
+    let cancelled = false;
+    void readStudioSnapshots(snapshotDir)
+      .then((raw) => {
+        if (cancelled || raw === null) return;
+        skipSnapshotPersist.current = true;
+        setSnapshots(parseSnapshots(raw));
+      })
+      .catch((err) => setMessage(`load snapshots failed: ${String(err)}`));
+    return () => {
+      cancelled = true;
+    };
+  }, [snapshotDir]);
+
+  // Persist snapshots whenever the list changes: into the project folder on
+  // desktop, else to localStorage.
+  useEffect(() => {
+    if (skipSnapshotPersist.current) {
+      skipSnapshotPersist.current = false;
+      return;
+    }
+    const dir = snapshotDirRef.current;
+    if (dir) {
+      void writeStudioSnapshots(dir, snapshots).catch((err) =>
+        setMessage(`save snapshots failed: ${String(err)}`),
+      );
+    } else {
+      saveSnapshots(snapshots);
+    }
   }, [snapshots]);
 
   // Persist the auto-snapshot preference.

@@ -1322,6 +1322,47 @@ fn duplicate_studio_workflow(path: String) -> Result<String, String> {
     Ok(to.to_string_lossy().to_string())
 }
 
+// --- Project-scoped snapshots -----------------------------------------------
+// Named graph snapshots can be persisted into the active project folder (as a
+// single `.hgripe-snapshots.json`) so they travel with the project and survive
+// a cache wipe / machine change, instead of living only in browser
+// localStorage. The renderer owns the JSON shape (an array of snapshots); the
+// backend just reads/writes the file, mirroring the autosave slot.
+
+fn studio_snapshots_path(dir: &str) -> Result<PathBuf, String> {
+    let dir = dir.trim();
+    if dir.is_empty() {
+        return Err("project folder is empty".to_string());
+    }
+    let path = Path::new(dir);
+    if !path.is_dir() {
+        return Err(format!("not a directory: {dir}"));
+    }
+    Ok(path.join(".hgripe-snapshots.json"))
+}
+
+/// Read the project folder's persisted snapshots file, returning its raw JSON
+/// text (an array). Returns `"[]"` when the file does not exist yet.
+#[tauri::command]
+fn read_studio_snapshots(dir: String) -> Result<String, String> {
+    let path = studio_snapshots_path(&dir)?;
+    if !path.exists() {
+        return Ok("[]".to_string());
+    }
+    fs::read_to_string(&path).map_err(|err| format!("failed to read {}: {err}", path.display()))
+}
+
+/// Write the project folder's snapshots file. `snapshots_json` is the renderer's
+/// serialized array; it is validated as JSON before writing.
+#[tauri::command]
+fn write_studio_snapshots(dir: String, snapshots_json: String) -> Result<(), String> {
+    serde_json::from_str::<serde_json::Value>(&snapshots_json)
+        .map_err(|err| format!("invalid snapshots JSON: {err}"))?;
+    let path = studio_snapshots_path(&dir)?;
+    fs::write(&path, snapshots_json)
+        .map_err(|err| format!("failed to write {}: {err}", path.display()))
+}
+
 #[tauri::command]
 fn cancel_studio_run(
     app: tauri::AppHandle,
@@ -2046,6 +2087,8 @@ fn main() {
             rename_studio_workflow,
             delete_studio_workflow,
             duplicate_studio_workflow,
+            read_studio_snapshots,
+            write_studio_snapshots,
             read_studio_recents,
             write_studio_recents,
             cancel_studio_run,

@@ -64,14 +64,26 @@ function isSnapshot(value: unknown): value is Snapshot {
   );
 }
 
+/**
+ * Parse a serialized snapshot array (from localStorage or a project file),
+ * keeping only well-formed entries. Returns [] on any parse error.
+ */
+export function parseSnapshots(raw: string): Snapshot[] {
+  try {
+    const parsed: unknown = JSON.parse(raw);
+    if (!Array.isArray(parsed)) return [];
+    return parsed.filter(isSnapshot);
+  } catch {
+    return [];
+  }
+}
+
 /** Restore the persisted snapshot list (newest first), or [] if none/unreadable. */
 export function loadSnapshots(): Snapshot[] {
   try {
     const raw = localStorage.getItem(STORAGE_KEY);
     if (!raw) return [];
-    const parsed: unknown = JSON.parse(raw);
-    if (!Array.isArray(parsed)) return [];
-    return parsed.filter(isSnapshot);
+    return parseSnapshots(raw);
   } catch {
     return [];
   }

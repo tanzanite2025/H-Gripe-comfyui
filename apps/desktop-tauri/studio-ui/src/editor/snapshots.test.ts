@@ -3,6 +3,7 @@ import { describe, expect, it } from "vitest";
 import type { WorkflowGraph } from "../graph/model";
 import {
   addSnapshot,
+  parseSnapshots,
   removeSnapshot,
   renameSnapshot,
   SNAPSHOT_CAP,
@@ -26,6 +27,18 @@ describe("addSnapshot", () => {
     expect(list).toHaveLength(SNAPSHOT_CAP);
     expect(list[0].id).toBe(`s${SNAPSHOT_CAP + 2}`);
     expect(list.some((s) => s.id === "s0")).toBe(false);
+  });
+});
+
+describe("parseSnapshots", () => {
+  it("parses a serialized array, keeping only well-formed entries", () => {
+    const raw = JSON.stringify([snap("a"), { id: "bad" }, snap("b")]);
+    expect(parseSnapshots(raw).map((s) => s.id)).toEqual(["a", "b"]);
+  });
+
+  it("returns [] for non-array or invalid JSON", () => {
+    expect(parseSnapshots("{}")).toEqual([]);
+    expect(parseSnapshots("not json")).toEqual([]);
   });
 });
 

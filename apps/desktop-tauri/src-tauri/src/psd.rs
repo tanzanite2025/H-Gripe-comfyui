@@ -167,6 +167,7 @@ pub(crate) fn compose_psd(
     dir: Option<String>,
     template: String,
     image: String,
+    mask: Option<String>,
     output_dir: String,
     filename: Option<String>,
     placeholder: Option<String>,
@@ -199,6 +200,8 @@ pub(crate) fn compose_psd(
         .arg(&template)
         .arg("--image")
         .arg(&image)
+        .arg("--mask")
+        .arg(mask.as_deref().unwrap_or(""))
         .arg("--output-dir")
         .arg(&output_dir)
         .arg("--filename")

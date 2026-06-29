@@ -669,11 +669,13 @@ export const NODE_SPECS: Record<string, NodeSpec> = {
     kind: "psdExport",
     title: "PSD Export",
     description:
-      "Write the generated image into a PSD template's placeholder (true smart-object replacement when possible) and export final.psd + preview.png + metadata.json.",
+      "Write the generated image into a PSD template's placeholder (true smart-object replacement when possible) and export final.psd + preview.png + metadata.json. Accepts an optional refined mask (applied as the image's alpha) and a production metadata object merged into the exported metadata.",
     category: "output",
     inputs: [
       port("image", "image", "image"),
       port("template", "template", "any"),
+      port("mask", "mask", "image"),
+      port("metadata", "metadata", "any"),
     ],
     outputs: [],
     params: [

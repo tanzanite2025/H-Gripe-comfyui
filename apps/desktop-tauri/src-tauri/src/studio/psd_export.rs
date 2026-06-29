@@ -46,10 +46,30 @@ pub(super) fn execute_studio_psd_export(
         Some(json!({ "name": placeholder_name }).to_string())
     };
 
+    // Optional explicit matte (e.g. Mask Edge Refine's `refined_mask`) applied
+    // as the image's alpha before compositing.
+    let mask = Some(
+        studio_value_to_string(inputs.get("mask"))
+            .trim()
+            .to_string(),
+    )
+    .filter(|value| !value.is_empty());
+
+    // Optional upstream production metadata (any JSON object) merged into the
+    // exported `_metadata.json`.
+    let metadata = match inputs.get("metadata") {
+        Some(value) if !value.is_null() => Some(
+            serde_json::to_string(value)
+                .map_err(|err| format!("failed to encode metadata input: {err}"))?,
+        ),
+        _ => None,
+    };
+
     let result = compose_psd(
         None,
         template,
         image,
+        mask,
         output_dir,
         Some(filename),
         placeholder,
@@ -67,7 +87,7 @@ pub(super) fn execute_studio_psd_export(
         )
         .filter(|value| !value.is_empty()),
         None,
-        None,
+        metadata,
         None,
     )?;
 

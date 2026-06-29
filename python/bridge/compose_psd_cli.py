@@ -57,6 +57,21 @@ def _parse_json_object(raw: str, field_name: str) -> dict[str, Any]:
     return value
 
 
+def _apply_mask(gen_pil: Any, mask_path: str) -> Any:
+    """Use an explicit matte (e.g. Mask Edge Refine's ``refined_mask``) as the
+    image's alpha. The mask is read as grayscale, resized to the image, and
+    multiplied into any existing alpha so a pre-cut subject is not re-opened."""
+    from PIL import Image, ImageChops
+
+    mask = Image.open(mask_path).convert("L")
+    if mask.size != gen_pil.size:
+        mask = mask.resize(gen_pil.size, Image.LANCZOS)
+    alpha = ImageChops.multiply(gen_pil.getchannel("A"), mask)
+    out = gen_pil.copy()
+    out.putalpha(alpha)
+    return out
+
+
 def compose_and_export(args: argparse.Namespace) -> dict[str, Any]:
     from PIL import Image
 
@@ -69,6 +84,10 @@ def compose_and_export(args: argparse.Namespace) -> dict[str, Any]:
         raise FileNotFoundError(f"PSD template not found: {template_path}")
     if not image_path or not Path(image_path).is_file():
         raise FileNotFoundError(f"generated image not found: {image_path}")
+
+    mask_path = (args.mask or "").strip()
+    if mask_path and not Path(mask_path).is_file():
+        raise FileNotFoundError(f"mask not found: {mask_path}")
 
     psd = PSDImage.open(template_path)
     canvas_w, canvas_h = int(psd.width), int(psd.height)
@@ -83,6 +102,8 @@ def compose_and_export(args: argparse.Namespace) -> dict[str, Any]:
         placeholder_kind = "smartobject" if _is_smart_object(ph_layer) else "pixel"
 
     gen_pil = Image.open(image_path).convert("RGBA")
+    if mask_path:
+        gen_pil = _apply_mask(gen_pil, mask_path)
     fitted, off_x, off_y = _fit_into_box(gen_pil, box_w, box_h, args.fit_mode)
     main_name = (args.generated_layer_name or "generated").strip() or "generated"
 
@@ -122,6 +143,8 @@ def compose_and_export(args: argparse.Namespace) -> dict[str, Any]:
             "created_at": datetime.now(timezone.utc).isoformat(),
             "template_path": template_path,
             "source_image": image_path,
+            "mask_applied": bool(mask_path),
+            "mask_source": mask_path or None,
             "canvas": [canvas_w, canvas_h],
             "placeholder": {"left": left, "top": top, "width": box_w, "height": box_h},
             "placeholder_name": plan.get("name"),
@@ -169,6 +192,7 @@ def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description="Compose a generated image into a PSD template and export.")
     parser.add_argument("--template", required=True, help="path to the .psd template")
     parser.add_argument("--image", required=True, help="path to the generated image to place")
+    parser.add_argument("--mask", default="", help="optional matte applied as the image's alpha")
     parser.add_argument("--output-dir", dest="output_dir", required=True, help="directory for the exported files")
     parser.add_argument("--filename", default="final", help="base name for the exported files")
     parser.add_argument(

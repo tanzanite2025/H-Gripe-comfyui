@@ -253,6 +253,24 @@ describe("psdExport sink", () => {
     expect(out.psdPath).toBe("/mock/outputs/final.psd");
   });
 
+  it("accepts an optional refined mask and a production metadata object", async () => {
+    // The refined mask + metadata object flow through to compose_psd; the
+    // browser mock ignores them, so we just assert the export still succeeds.
+    const out = (await defaultExecutors.psdExport(
+      ctx(
+        "psdExport",
+        { filename: "poster", output_dir: "/out" },
+        {
+          image: "/gen/x.png",
+          template: "/t.psd",
+          mask: "/gen/x_mask.png",
+          metadata: { workflow_id: "wf-1", source_psd: "/t.psd" },
+        },
+      ),
+    )) as { psdPath: string };
+    expect(out.psdPath).toBe("/out/poster.psd");
+  });
+
   it("requires both an image and a template input", async () => {
     await expect(
       defaultExecutors.psdExport(ctx("psdExport", {}, { template: "/t.psd" })),

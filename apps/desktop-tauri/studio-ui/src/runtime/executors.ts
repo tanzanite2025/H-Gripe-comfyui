@@ -355,14 +355,26 @@ export const defaultExecutors: ExecutorRegistry = {
     if (!outputDir) throw new Error("PSD Export needs an output directory");
 
     const placeholderName = String(ctx.params.placeholder ?? "").trim();
+    // Optional refined matte applied as the image's alpha, and any upstream
+    // production metadata object merged into the exported _metadata.json.
+    const mask = (ctx.inputs.mask as string | undefined) || undefined;
+    const metadataInput = ctx.inputs.metadata;
+    const metadata =
+      metadataInput != null
+        ? typeof metadataInput === "string"
+          ? metadataInput
+          : JSON.stringify(metadataInput)
+        : undefined;
     const result = await composePsd({
       template,
       image,
+      mask,
       outputDir,
       filename: String(ctx.params.filename ?? "final") || "final",
       placeholder: placeholderName ? JSON.stringify({ name: placeholderName }) : undefined,
       fitMode: (String(ctx.params.fit_mode ?? "contain") as "contain" | "cover" | "stretch"),
       smartObjectMode: (String(ctx.params.smart_object_mode ?? "disable") as "disable" | "replace_content"),
+      metadata,
     });
     if (result.status !== "succeeded") {
       throw new Error(`PSD export failed: ${result.status}`);

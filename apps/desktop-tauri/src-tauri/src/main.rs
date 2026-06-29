@@ -1322,14 +1322,15 @@ fn duplicate_studio_workflow(path: String) -> Result<String, String> {
     Ok(to.to_string_lossy().to_string())
 }
 
-// --- Project-scoped snapshots -----------------------------------------------
-// Named graph snapshots can be persisted into the active project folder (as a
-// single `.hgripe-snapshots.json`) so they travel with the project and survive
-// a cache wipe / machine change, instead of living only in browser
-// localStorage. The renderer owns the JSON shape (an array of snapshots); the
-// backend just reads/writes the file, mirroring the autosave slot.
+// --- Project-scoped JSON stores ---------------------------------------------
+// Some renderer state (named graph snapshots, run history) can be persisted
+// into the active project folder as a single JSON file so it travels with the
+// project and survives a cache wipe / machine change, instead of living only in
+// browser localStorage. The renderer owns the JSON shape (an array); the
+// backend just reads/writes one file per store, mirroring the autosave slot.
 
-fn studio_snapshots_path(dir: &str) -> Result<PathBuf, String> {
+/// Resolve `<dir>/<filename>`, validating that `dir` is a real directory.
+fn studio_store_path(dir: &str, filename: &str) -> Result<PathBuf, String> {
     let dir = dir.trim();
     if dir.is_empty() {
         return Err("project folder is empty".to_string());
@@ -1338,69 +1339,51 @@ fn studio_snapshots_path(dir: &str) -> Result<PathBuf, String> {
     if !path.is_dir() {
         return Err(format!("not a directory: {dir}"));
     }
-    Ok(path.join(".hgripe-snapshots.json"))
+    Ok(path.join(filename))
 }
 
-/// Read the project folder's persisted snapshots file, returning its raw JSON
-/// text (an array). Returns `"[]"` when the file does not exist yet.
+/// Read a project-scoped store file as raw JSON text, or `"[]"` if absent.
+fn read_studio_store(dir: &str, filename: &str) -> Result<String, String> {
+    let path = studio_store_path(dir, filename)?;
+    if !path.exists() {
+        return Ok("[]".to_string());
+    }
+    fs::read_to_string(&path).map_err(|err| format!("failed to read {}: {err}", path.display()))
+}
+
+/// Write `json` to a project-scoped store file, validating it as JSON first.
+fn write_studio_store(dir: &str, filename: &str, json: &str) -> Result<(), String> {
+    serde_json::from_str::<serde_json::Value>(json)
+        .map_err(|err| format!("invalid JSON for {filename}: {err}"))?;
+    let path = studio_store_path(dir, filename)?;
+    fs::write(&path, json).map_err(|err| format!("failed to write {}: {err}", path.display()))
+}
+
+const SNAPSHOTS_FILE: &str = ".hgripe-snapshots.json";
+const RUN_HISTORY_FILE: &str = ".hgripe-runhistory.json";
+
+/// Read the project folder's persisted snapshots file (raw JSON array text).
 #[tauri::command]
 fn read_studio_snapshots(dir: String) -> Result<String, String> {
-    let path = studio_snapshots_path(&dir)?;
-    if !path.exists() {
-        return Ok("[]".to_string());
-    }
-    fs::read_to_string(&path).map_err(|err| format!("failed to read {}: {err}", path.display()))
+    read_studio_store(&dir, SNAPSHOTS_FILE)
 }
 
-/// Write the project folder's snapshots file. `snapshots_json` is the renderer's
-/// serialized array; it is validated as JSON before writing.
+/// Write the project folder's snapshots file (renderer's serialized array).
 #[tauri::command]
 fn write_studio_snapshots(dir: String, snapshots_json: String) -> Result<(), String> {
-    serde_json::from_str::<serde_json::Value>(&snapshots_json)
-        .map_err(|err| format!("invalid snapshots JSON: {err}"))?;
-    let path = studio_snapshots_path(&dir)?;
-    fs::write(&path, snapshots_json)
-        .map_err(|err| format!("failed to write {}: {err}", path.display()))
+    write_studio_store(&dir, SNAPSHOTS_FILE, &snapshots_json)
 }
 
-// --- Project-scoped run history ---------------------------------------------
-// Past Run/Batch executions can be persisted into the active project folder (as
-// `.hgripe-runhistory.json`) so they survive a refresh / machine change and can
-// be reviewed later, instead of the run log living only in memory. Same
-// renderer-owns-the-shape contract as the snapshots file.
-
-fn studio_run_history_path(dir: &str) -> Result<PathBuf, String> {
-    let dir = dir.trim();
-    if dir.is_empty() {
-        return Err("project folder is empty".to_string());
-    }
-    let path = Path::new(dir);
-    if !path.is_dir() {
-        return Err(format!("not a directory: {dir}"));
-    }
-    Ok(path.join(".hgripe-runhistory.json"))
-}
-
-/// Read the project folder's run-history file (raw JSON array text). Returns
-/// `"[]"` when the file does not exist yet.
+/// Read the project folder's run-history file (raw JSON array text).
 #[tauri::command]
 fn read_studio_run_history(dir: String) -> Result<String, String> {
-    let path = studio_run_history_path(&dir)?;
-    if !path.exists() {
-        return Ok("[]".to_string());
-    }
-    fs::read_to_string(&path).map_err(|err| format!("failed to read {}: {err}", path.display()))
+    read_studio_store(&dir, RUN_HISTORY_FILE)
 }
 
-/// Write the project folder's run-history file. `history_json` is the renderer's
-/// serialized array; it is validated as JSON before writing.
+/// Write the project folder's run-history file (renderer's serialized array).
 #[tauri::command]
 fn write_studio_run_history(dir: String, history_json: String) -> Result<(), String> {
-    serde_json::from_str::<serde_json::Value>(&history_json)
-        .map_err(|err| format!("invalid run history JSON: {err}"))?;
-    let path = studio_run_history_path(&dir)?;
-    fs::write(&path, history_json)
-        .map_err(|err| format!("failed to write {}: {err}", path.display()))
+    write_studio_store(&dir, RUN_HISTORY_FILE, &history_json)
 }
 
 #[tauri::command]

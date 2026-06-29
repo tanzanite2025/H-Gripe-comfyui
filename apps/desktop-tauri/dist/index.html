@@ -8,35 +8,36 @@
   </head>
   <body>
     <header class="topbar">
-      <h1>H-Gripe Desktop</h1>
-      <span class="subtitle">API-first control shell</span>
+      <h1 data-i18n="brand.title">H-Gripe Desktop</h1>
+      <span class="subtitle" data-i18n="brand.subtitle">API-first control shell</span>
+      <button id="lang-toggle" class="lang-toggle" data-i18n="lang.toggle" data-i18n-title="lang.toggleTitle">中文</button>
     </header>
 
     <nav class="tabs" id="tabs">
-      <button data-tab="dashboard" class="active">Dashboard</button>
-      <button data-tab="studio">PSD Studio</button>
-      <button data-tab="credentials">Credentials</button>
-      <button data-tab="profiles">Profiles</button>
-      <button data-tab="run">Run Task</button>
-      <button data-tab="history">History</button>
-      <button data-tab="psd">PSD</button>
+      <button data-tab="dashboard" class="active" data-i18n="tab.dashboard">Dashboard</button>
+      <button data-tab="studio" data-i18n="tab.studio">PSD Studio</button>
+      <button data-tab="credentials" data-i18n="tab.credentials">Credentials</button>
+      <button data-tab="profiles" data-i18n="tab.profiles">Profiles</button>
+      <button data-tab="run" data-i18n="tab.run">Run Task</button>
+      <button data-tab="history" data-i18n="tab.history">History</button>
+      <button data-tab="psd" data-i18n="tab.psd">PSD</button>
       <!-- Node Editor: H-Gripe's own visual workflow canvas (React Flow). The
            in-house production counterpart to the embedded ComfyUI canvas. -->
-      <button data-tab="node-editor">Node Editor</button>
+      <button data-tab="node-editor" data-i18n="tab.nodeEditor">Node Editor</button>
       <!-- Advanced Canvas (embedded ComfyUI) is an advanced/escape-hatch tab,
            not the product's main surface; keep it last in the nav. -->
-      <button data-tab="comfyui">Advanced Canvas</button>
+      <button data-tab="comfyui" data-i18n="tab.comfy">Advanced Canvas</button>
     </nav>
 
     <main>
       <section id="dashboard" class="panel active">
         <div class="row">
-          <h2>Runtime</h2>
-          <button id="refresh-dashboard">Refresh</button>
+          <h2 data-i18n="dashboard.runtime">Runtime</h2>
+          <button id="refresh-dashboard" data-i18n="btn.refresh">Refresh</button>
         </div>
         <div id="runtime-info" class="cards"></div>
-        <h2>Doctor</h2>
-        <pre id="doctor-output" class="json">Loading…</pre>
+        <h2 data-i18n="dashboard.doctor">Doctor</h2>
+        <pre id="doctor-output" class="json" data-i18n="common.loading">Loading…</pre>
       </section>
 
       <!-- PSD Studio: H-Gripe's own production entry point. It composes an
@@ -45,22 +46,22 @@
            H-Gripe panels rather than the embedded ComfyUI canvas. -->
       <section id="studio" class="panel">
         <div class="row wrap">
-          <h2>PSD Studio</h2>
-          <span class="hint">Compose a production job — pick a provider profile, add a prompt / reference image / PSD template, and generate.</span>
+          <h2 data-i18n="studio.heading">PSD Studio</h2>
+          <span class="hint" data-i18n="studio.hint">Compose a production job — pick a provider profile, add a prompt / reference image / PSD template, and generate.</span>
         </div>
 
         <div class="studio-grid">
           <div class="studio-field">
-            <label for="studio-profile">Provider profile</label>
-            <select id="studio-profile"><option value="">— none (use provider below) —</option></select>
+            <label for="studio-profile" data-i18n="studio.providerProfile">Provider profile</label>
+            <select id="studio-profile"><option value="" data-i18n="studio.optionNone">— none (use provider below) —</option></select>
             <div id="studio-profile-summary" class="hint"></div>
           </div>
           <div class="studio-field">
-            <label for="studio-provider">Provider</label>
-            <input id="studio-provider" placeholder="mock / openai_compatible / custom_http / replicate" />
+            <label for="studio-provider" data-i18n="studio.provider">Provider</label>
+            <input id="studio-provider" data-i18n-placeholder="studio.providerPh" placeholder="mock / openai_compatible / custom_http / replicate" />
           </div>
           <div class="studio-field">
-            <label for="studio-operation">Operation</label>
+            <label for="studio-operation" data-i18n="studio.operation">Operation</label>
             <select id="studio-operation">
               <option value="image.generate">image.generate</option>
               <option value="image.edit">image.edit</option>
@@ -69,7 +70,7 @@
             </select>
           </div>
           <div class="studio-field">
-            <label for="studio-output">Output type</label>
+            <label for="studio-output" data-i18n="studio.outputType">Output type</label>
             <select id="studio-output">
               <option value="image">image</option>
               <option value="json">json</option>
@@ -80,129 +81,129 @@
           </div>
         </div>
 
-        <label for="studio-prompt">Prompt</label>
-        <textarea id="studio-prompt" spellcheck="false" placeholder="Describe what to generate…"></textarea>
+        <label for="studio-prompt" data-i18n="studio.prompt">Prompt</label>
+        <textarea id="studio-prompt" spellcheck="false" data-i18n-placeholder="studio.promptPh" placeholder="Describe what to generate…"></textarea>
 
         <div class="studio-grid">
           <div class="studio-field">
-            <label for="studio-template">PSD template (path)</label>
-            <input id="studio-template" placeholder="path to .psd template (optional)" />
+            <label for="studio-template" data-i18n="studio.psdTemplate">PSD template (path)</label>
+            <input id="studio-template" data-i18n-placeholder="studio.psdTemplatePh" placeholder="path to .psd template (optional)" />
             <div class="row">
-              <button id="studio-template-from-psd">Pick from PSD outputs</button>
+              <button id="studio-template-from-psd" data-i18n="studio.pickFromPsd">Pick from PSD outputs</button>
             </div>
           </div>
           <div class="studio-field">
-            <label for="studio-reference">Reference image (path)</label>
-            <input id="studio-reference" placeholder="path to a reference image (optional)" />
+            <label for="studio-reference" data-i18n="studio.reference">Reference image (path)</label>
+            <input id="studio-reference" data-i18n-placeholder="studio.referencePh" placeholder="path to a reference image (optional)" />
             <div class="row">
-              <button id="studio-reference-preview">Preview</button>
-              <span class="hint">sent as <code>image_path</code> (used by <code>image.edit</code>)</span>
+              <button id="studio-reference-preview" data-i18n="studio.preview">Preview</button>
+              <span class="hint" data-i18n-html="studio.referenceHint">sent as <code>image_path</code> (used by <code>image.edit</code>)</span>
             </div>
           </div>
         </div>
         <img id="studio-reference-img" class="psd-preview hidden" alt="reference preview" />
 
-        <label for="studio-params">Params (JSON)</label>
+        <label for="studio-params" data-i18n="studio.params">Params (JSON)</label>
         <textarea id="studio-params" spellcheck="false" placeholder='{ "model": "…", "size": "1024x1024" }'></textarea>
 
         <div class="row wrap">
-          <button id="studio-preview">Preview task JSON</button>
-          <button id="studio-run" class="primary">Generate</button>
+          <button id="studio-preview" data-i18n="studio.previewTask">Preview task JSON</button>
+          <button id="studio-run" class="primary" data-i18n="studio.generate">Generate</button>
           <span id="studio-status" class="status"></span>
         </div>
 
-        <h3>Task</h3>
+        <h3 data-i18n="studio.task">Task</h3>
         <pre id="studio-task" class="json"></pre>
-        <h3>Result</h3>
+        <h3 data-i18n="studio.result">Result</h3>
         <pre id="studio-result" class="json"></pre>
         <div id="studio-outputs" class="cards"></div>
       </section>
 
       <section id="credentials" class="panel">
         <div class="row">
-          <h2>Credentials</h2>
-          <button data-validate="credentials">Validate</button>
+          <h2 data-i18n="creds.heading">Credentials</h2>
+          <button data-validate="credentials" data-i18n="btn.validate">Validate</button>
         </div>
         <div id="credentials-summary" class="cards"></div>
         <div id="credentials-validation" class="validation"></div>
-        <h3>credentials.json</h3>
+        <h3 data-i18n="creds.file">credentials.json</h3>
         <textarea id="credentials-editor" spellcheck="false"></textarea>
         <div class="row">
-          <button data-load="credentials">Reload</button>
-          <button data-save="credentials" class="primary">Save</button>
+          <button data-load="credentials" data-i18n="btn.reload">Reload</button>
+          <button data-save="credentials" class="primary" data-i18n="btn.save">Save</button>
           <span data-status="credentials" class="status"></span>
         </div>
       </section>
 
       <section id="profiles" class="panel">
         <div class="row">
-          <h2>Provider Profiles</h2>
-          <button data-validate="profiles">Validate</button>
+          <h2 data-i18n="profiles.heading">Provider Profiles</h2>
+          <button data-validate="profiles" data-i18n="btn.validate">Validate</button>
         </div>
         <div id="profiles-summary" class="cards"></div>
         <div id="profiles-validation" class="validation"></div>
-        <h3>provider_profiles.json</h3>
+        <h3 data-i18n="profiles.file">provider_profiles.json</h3>
         <textarea id="profiles-editor" spellcheck="false"></textarea>
         <div class="row">
-          <button data-load="profiles">Reload</button>
-          <button data-save="profiles" class="primary">Save</button>
+          <button data-load="profiles" data-i18n="btn.reload">Reload</button>
+          <button data-save="profiles" class="primary" data-i18n="btn.save">Save</button>
           <span data-status="profiles" class="status"></span>
         </div>
       </section>
 
       <section id="run" class="panel">
-        <h2>Run API Task</h2>
-        <p class="hint">Paste an <code>ApiTask</code> JSON payload and submit it to the broker.</p>
+        <h2 data-i18n="run.heading">Run API Task</h2>
+        <p class="hint" data-i18n-html="run.hint">Paste an <code>ApiTask</code> JSON payload and submit it to the broker.</p>
         <textarea id="task-editor" spellcheck="false"></textarea>
         <div class="row">
-          <button id="task-template">Insert mock template</button>
-          <button id="task-run" class="primary">Run task</button>
+          <button id="task-template" data-i18n="run.insertTemplate">Insert mock template</button>
+          <button id="task-run" class="primary" data-i18n="run.runTask">Run task</button>
           <span id="task-status" class="status"></span>
         </div>
-        <h3>Result</h3>
+        <h3 data-i18n="studio.result">Result</h3>
         <pre id="task-result" class="json"></pre>
       </section>
 
       <section id="history" class="panel">
         <div class="row wrap">
-          <h2>Task History</h2>
-          <input id="history-provider" placeholder="provider filter" />
+          <h2 data-i18n="history.heading">Task History</h2>
+          <input id="history-provider" data-i18n-placeholder="history.providerFilter" placeholder="provider filter" />
           <select id="history-status">
-            <option value="">any status</option>
-            <option value="succeeded">succeeded</option>
-            <option value="failed">failed</option>
-            <option value="cached">cached</option>
-            <option value="cancelled">cancelled</option>
+            <option value="" data-i18n="history.anyStatus">any status</option>
+            <option value="succeeded" data-i18n="history.statusSucceeded">succeeded</option>
+            <option value="failed" data-i18n="history.statusFailed">failed</option>
+            <option value="cached" data-i18n="history.statusCached">cached</option>
+            <option value="cancelled" data-i18n="history.statusCancelled">cancelled</option>
           </select>
           <input id="history-limit" type="number" value="50" min="1" style="width:80px" />
-          <button id="history-refresh" class="primary">Load</button>
+          <button id="history-refresh" class="primary" data-i18n="btn.load">Load</button>
         </div>
         <table id="history-table">
           <thead>
-            <tr><th>Time</th><th>Provider</th><th>Operation</th><th>Status</th><th>Files</th><th></th></tr>
+            <tr><th data-i18n="history.colTime">Time</th><th data-i18n="history.colProvider">Provider</th><th data-i18n="history.colOperation">Operation</th><th data-i18n="history.colStatus">Status</th><th data-i18n="history.colFiles">Files</th><th></th></tr>
           </thead>
           <tbody></tbody>
         </table>
-        <h3>Detail</h3>
+        <h3 data-i18n="history.detail">Detail</h3>
         <pre id="history-detail" class="json"></pre>
-        <h3>Cleanup</h3>
+        <h3 data-i18n="history.cleanup">Cleanup</h3>
         <div class="row wrap">
-          <label>keep latest <input id="cleanup-keep" type="number" min="0" style="width:80px" /></label>
-          <label><input id="cleanup-delete-files" type="checkbox" /> delete output files</label>
-          <button id="cleanup-preview">Preview</button>
-          <button id="cleanup-apply" class="danger">Apply</button>
+          <label><span data-i18n="cleanup.keepLatest">keep latest</span> <input id="cleanup-keep" type="number" min="0" style="width:80px" /></label>
+          <label><input id="cleanup-delete-files" type="checkbox" /> <span data-i18n="cleanup.deleteFiles">delete output files</span></label>
+          <button id="cleanup-preview" data-i18n="cleanup.preview">Preview</button>
+          <button id="cleanup-apply" class="danger" data-i18n="cleanup.apply">Apply</button>
         </div>
         <pre id="cleanup-output" class="json"></pre>
       </section>
 
       <section id="psd" class="panel">
         <div class="row wrap">
-          <h2>PSD Outputs</h2>
-          <input id="psd-dir" placeholder="output directory" style="flex:1" />
-          <button id="psd-use-output">Use output dir</button>
-          <button id="psd-refresh" class="primary">Load</button>
+          <h2 data-i18n="psd.heading">PSD Outputs</h2>
+          <input id="psd-dir" data-i18n-placeholder="psd.dirPh" placeholder="output directory" style="flex:1" />
+          <button id="psd-use-output" data-i18n="psd.useOutput">Use output dir</button>
+          <button id="psd-refresh" class="primary" data-i18n="btn.load">Load</button>
         </div>
-        <p class="hint">
+        <p class="hint" data-i18n-html="psd.scanHint">
           Scans a folder for PSD exports (<code>&lt;name&gt;.psd</code> with matching
           <code>_preview.png</code> / <code>_metadata.json</code>) produced by the
           <code>H-Gripe PSD Export</code> node.
@@ -211,15 +212,15 @@
         <div id="psd-detail" class="psd-detail hidden">
           <div class="row wrap">
             <h3 id="psd-detail-name"></h3>
-            <button data-psd-open="psd">Open PSD</button>
-            <button data-psd-open="folder">Open folder</button>
+            <button data-psd-open="psd" data-i18n="psd.openPsd">Open PSD</button>
+            <button data-psd-open="folder" data-i18n="psd.openFolder">Open folder</button>
           </div>
           <div id="psd-detail-so" class="so-note hidden">
-            <span class="badge so">smart object</span>
-            Generated image was written <em>inside</em> the template's smart object (editable in Photoshop).
+            <span class="badge so" data-i18n="psd.smartObject">smart object</span>
+            <span data-i18n-html="psd.smartObjectNote">Generated image was written <em>inside</em> the template's smart object (editable in Photoshop).</span>
           </div>
           <img id="psd-detail-preview" class="psd-preview" alt="preview" />
-          <h4>metadata.json</h4>
+          <h4 data-i18n="psd.metadata">metadata.json</h4>
           <pre id="psd-detail-metadata" class="json"></pre>
         </div>
       </section>
@@ -233,8 +234,8 @@
         <div class="node-editor-stage">
           <iframe id="studio-frame" class="studio-frame hidden" title="H-Gripe Node Editor"></iframe>
           <div id="studio-placeholder" class="comfy-placeholder">
-            <p>H-Gripe Node Editor</p>
-            <p class="hint">Loading the visual workflow canvas…</p>
+            <p data-i18n="node.title">H-Gripe Node Editor</p>
+            <p class="hint" data-i18n="node.loading">Loading the visual workflow canvas…</p>
           </div>
         </div>
       </section>
@@ -245,34 +246,35 @@
            H-Gripe panels above, not here. ComfyUI stays embedded as the
            advanced canvas; it is not the product's main UI. -->
       <section id="comfyui" class="panel comfyui-panel">
-        <p class="hint">
+        <p class="hint" data-i18n-html="comfy.intro">
           <strong>Advanced Canvas</strong> embeds the full ComfyUI node editor
           for complex workflows, legacy graphs, and mature plugins. For routine
           work, prefer the H-Gripe production panels (Dashboard, Run Task, PSD).
         </p>
         <div class="row comfy-bar">
           <input id="comfy-url" value="http://127.0.0.1:8188" />
-          <button id="comfy-start" class="primary">Start ComfyUI</button>
-          <button id="comfy-stop">Stop</button>
-          <button id="comfy-reload">Reload</button>
-          <button id="comfy-open">Open in browser</button>
+          <button id="comfy-start" class="primary" data-i18n="comfy.start">Start ComfyUI</button>
+          <button id="comfy-stop" data-i18n="comfy.stop">Stop</button>
+          <button id="comfy-reload" data-i18n="comfy.reload">Reload</button>
+          <button id="comfy-open" data-i18n="comfy.openBrowser">Open in browser</button>
           <span id="comfy-status" class="status"></span>
         </div>
         <div class="row comfy-bar">
-          <input id="comfy-dir" placeholder="ComfyUI folder (blank = app working dir)" />
-          <input id="comfy-args" placeholder="extra args (e.g. --cpu --listen)" />
+          <input id="comfy-dir" data-i18n-placeholder="comfy.dirPh" placeholder="ComfyUI folder (blank = app working dir)" />
+          <input id="comfy-args" data-i18n-placeholder="comfy.argsPh" placeholder="extra args (e.g. --cpu --listen)" />
         </div>
         <div class="comfy-stage">
           <iframe id="comfy-frame" class="comfy-frame hidden" title="ComfyUI"></iframe>
           <div id="comfy-placeholder" class="comfy-placeholder">
-            <p>Embedding the running ComfyUI web UI.</p>
-            <p class="hint">Click <strong>Start ComfyUI</strong> to launch a local server (it embeds automatically when ready), or point the URL at an already-running instance and click <strong>Reload</strong>. The full node editor loads here inside the app.</p>
+            <p data-i18n="comfy.embedding">Embedding the running ComfyUI web UI.</p>
+            <p class="hint" data-i18n-html="comfy.embedHint">Click <strong>Start ComfyUI</strong> to launch a local server (it embeds automatically when ready), or point the URL at an already-running instance and click <strong>Reload</strong>. The full node editor loads here inside the app.</p>
           </div>
         </div>
       </section>
     </main>
 
     <div id="toast" class="toast"></div>
+    <script src="i18n.js"></script>
     <script src="app.js"></script>
   </body>
 </html>

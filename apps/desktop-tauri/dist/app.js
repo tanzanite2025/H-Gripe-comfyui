@@ -29,6 +29,42 @@ function esc(value) {
     .replace(/'/g, "&#39;");
 }
 
+// Translate a key (with optional `{name}` vars) via the i18n module.
+const t = (key, vars) => window.I18N.t(key, vars);
+
+// Set a `.status` element's text + state in one call (target may be a selector
+// or an element). Centralizes the repeated `textContent` + `className` pair.
+function setStatus(target, text, kind = "") {
+  const el = typeof target === "string" ? $(target) : target;
+  if (!el) return;
+  el.textContent = text;
+  el.className = "status " + kind;
+}
+
+// Run an async command with the shared status lifecycle: show `running`, then
+// on success show `done` and on failure show the error (optionally toasting it).
+// `done` is a string (shown with the "ok" state) or a function of the result
+// returning `{ text, kind }`. Returns `{ ok, result | err }` for follow-ups.
+async function runWithStatus(target, opts, command) {
+  setStatus(target, opts.running, "");
+  try {
+    const result = await command();
+    const done = typeof opts.done === "function" ? opts.done(result) : opts.done;
+    if (done) setStatus(target, done.text ?? done, done.kind ?? "ok");
+    return { ok: true, result };
+  } catch (err) {
+    setStatus(target, String(err), "err");
+    if (opts.toastErr) toast(String(err), "err");
+    return { ok: false, err };
+  }
+}
+
+// ---- language toggle ----
+window.I18N.applyI18n();
+$("#lang-toggle").addEventListener("click", () => {
+  window.I18N.setLang(window.I18N.getLang() === "zh" ? "en" : "zh");
+});
+
 // ---- tabs ----
 $$("#tabs button").forEach((btn) => {
   btn.addEventListener("click", () => {
@@ -45,7 +81,7 @@ $$("#tabs button").forEach((btn) => {
 // ---- dashboard ----
 function pathCard(label, info) {
   const cls = info.exists ? "ok" : "missing";
-  const flag = info.exists ? "found" : "missing";
+  const flag = info.exists ? t("common.found") : t("common.missing");
   return `<div class="card"><div class="label">${esc(label)} (${flag})</div><div class="value ${cls}">${esc(info.path)}</div></div>`;
 }
 
@@ -77,16 +113,16 @@ const summaryRenderers = {
     items
       .map(
         (c) =>
-          `<div class="card"><div class="label">${esc(c.credential_ref)}</div><div class="value">provider: ${esc(c.provider ?? "-")}<br/>key: ${c.api_key_configured ? "set" : c.api_key_env ? "env:" + esc(c.api_key_env) : "none"}<br/>headers: ${esc(c.headers_count)}</div></div>`
+          `<div class="card"><div class="label">${esc(c.credential_ref)}</div><div class="value">${esc(t("field.provider"))}: ${esc(c.provider ?? "-")}<br/>${esc(t("field.key"))}: ${c.api_key_configured ? esc(t("creds.keySet")) : c.api_key_env ? esc(t("creds.keyEnv")) + esc(c.api_key_env) : esc(t("creds.keyNone"))}<br/>${esc(t("field.headers"))}: ${esc(c.headers_count)}</div></div>`
       )
-      .join("") || `<div class="card"><div class="value">no entries</div></div>`,
+      .join("") || `<div class="card"><div class="value">${esc(t("common.noEntries"))}</div></div>`,
   profiles: (items) =>
     items
       .map(
         (p) =>
-          `<div class="card"><div class="label">${esc(p.profile_ref)}</div><div class="value">provider: ${esc(p.provider ?? "-")}<br/>model: ${esc(p.model ?? "-")}<br/>creds: ${esc(p.credentials_ref ?? "-")}<br/>params: ${esc(p.params_count)}</div></div>`
+          `<div class="card"><div class="label">${esc(p.profile_ref)}</div><div class="value">${esc(t("field.provider"))}: ${esc(p.provider ?? "-")}<br/>${esc(t("field.model"))}: ${esc(p.model ?? "-")}<br/>${esc(t("field.creds"))}: ${esc(p.credentials_ref ?? "-")}<br/>${esc(t("field.params"))}: ${esc(p.params_count)}</div></div>`
       )
-      .join("") || `<div class="card"><div class="value">no entries</div></div>`,
+      .join("") || `<div class="card"><div class="value">${esc(t("common.noEntries"))}</div></div>`,
 };
 
 async function loadConfig(kind) {
@@ -107,16 +143,14 @@ async function loadConfig(kind) {
 async function saveConfig(kind) {
   const content = $(`#${kind}-editor`).value;
   const status = $(`[data-status="${kind}"]`);
-  try {
-    await invoke("write_config_file", { kind, content });
-    status.textContent = "saved";
-    status.className = "status ok";
-    toast(`${kind} saved`, "ok");
+  const res = await runWithStatus(
+    status,
+    { running: t("status.saving"), done: t("status.saved"), toastErr: true },
+    () => invoke("write_config_file", { kind, content })
+  );
+  if (res.ok) {
+    toast(t("toast.savedKind", { kind }), "ok");
     loadConfig(kind);
-  } catch (err) {
-    status.textContent = String(err);
-    status.className = "status err";
-    toast(String(err), "err");
   }
 }
 
@@ -128,7 +162,7 @@ async function validateConfig(kind) {
     const issues = result.issues ?? [];
     const ok = result.ok ?? issues.length === 0;
     target.innerHTML =
-      `<span class="badge ${ok ? "ok" : "err"}">${ok ? "valid" : issues.length + " issue(s)"}</span>` +
+      `<span class="badge ${ok ? "ok" : "err"}">${esc(ok ? t("validation.valid") : t("validation.issues", { count: issues.length }))}</span>` +
       (issues.length ? `<pre class="json">${esc(pretty(issues))}</pre>` : "");
   } catch (err) {
     target.innerHTML = `<span class="badge err">${esc(err)}</span>`;
@@ -156,17 +190,14 @@ $("#task-template").addEventListener("click", () => {
 
 $("#task-run").addEventListener("click", async () => {
   const status = $("#task-status");
-  status.textContent = "running…";
-  status.className = "status";
+  setStatus(status, t("run.running"), "");
   try {
     const result = await invoke("run_task_json", { taskJson: $("#task-editor").value });
     $("#task-result").textContent = pretty(result);
-    status.textContent = result.status;
-    status.className = "status " + (result.status === "failed" ? "err" : "ok");
+    setStatus(status, result.status, result.status === "failed" ? "err" : "ok");
   } catch (err) {
     $("#task-result").textContent = String(err);
-    status.textContent = "error";
-    status.className = "status err";
+    setStatus(status, t("common.error"), "err");
   }
 });
 
@@ -188,11 +219,11 @@ async function loadHistory() {
         return `<tr>
           <td>${esc(time)}</td><td>${esc(r.provider)}</td><td>${esc(r.operation)}</td>
           <td>${esc(r.status)}</td><td>${esc(r.output_file_count)}</td>
-          <td><button data-detail="${esc(r.task_id)}">view</button> <button data-rerun="${esc(r.task_id)}">rerun</button></td>
+          <td><button data-detail="${esc(r.task_id)}">${esc(t("history.view"))}</button> <button data-rerun="${esc(r.task_id)}">${esc(t("history.rerun"))}</button></td>
         </tr>`;
       })
       .join("");
-    if (!records.length) tbody.innerHTML = `<tr><td colspan="6">no records</td></tr>`;
+    if (!records.length) tbody.innerHTML = `<tr><td colspan="6">${esc(t("history.noRecords"))}</td></tr>`;
   } catch (err) {
     tbody.innerHTML = `<tr><td colspan="6" class="status err">${esc(err)}</td></tr>`;
   }
@@ -208,11 +239,11 @@ $("#history-table").addEventListener("click", async (e) => {
       $("#history-detail").textContent = String(err);
     }
   } else if (rerunId) {
-    toast("rerunning " + rerunId);
+    toast(t("history.rerunning", { id: rerunId }));
     try {
       const result = await invoke("rerun_task", { taskId: rerunId, disableCache: true });
       $("#history-detail").textContent = pretty(result);
-      toast("rerun " + result.status, result.status === "failed" ? "err" : "ok");
+      toast(t("history.rerunDone", { status: result.status }), result.status === "failed" ? "err" : "ok");
       loadHistory();
     } catch (err) {
       toast(String(err), "err");
@@ -249,7 +280,7 @@ $("#cleanup-apply").addEventListener("click", async () => {
   try {
     const result = await invoke("history_cleanup_apply", { options: cleanupOptions() });
     $("#cleanup-output").textContent = pretty(result);
-    toast("cleanup applied", "ok");
+    toast(t("cleanup.applied"), "ok");
     loadHistory();
   } catch (err) {
     $("#cleanup-output").textContent = String(err);
@@ -271,25 +302,25 @@ async function loadPsdOutputs() {
   const list = $("#psd-list");
   $("#psd-detail").classList.add("hidden");
   if (!dir) {
-    list.innerHTML = `<div class="card"><div class="value missing">enter an output directory</div></div>`;
+    list.innerHTML = `<div class="card"><div class="value missing">${esc(t("psd.enterDir"))}</div></div>`;
     return;
   }
-  list.innerHTML = `<div class="card"><div class="value">loading…</div></div>`;
+  list.innerHTML = `<div class="card"><div class="value">${esc(t("common.loadingShort"))}</div></div>`;
   try {
     psdOutputs = await invoke("list_psd_outputs", { dir });
     if (!psdOutputs.length) {
-      list.innerHTML = `<div class="card"><div class="value">no PSD files found</div></div>`;
+      list.innerHTML = `<div class="card"><div class="value">${esc(t("psd.noFiles"))}</div></div>`;
       return;
     }
     list.innerHTML = psdOutputs
       .map((o, i) => {
         const time = o.modified_ms ? new Date(Number(o.modified_ms)).toLocaleString() : "-";
         const tags = [
-          o.preview_path ? "preview" : null,
-          o.metadata_path ? "metadata" : null,
+          o.preview_path ? t("psd.tagPreview") : null,
+          o.metadata_path ? t("psd.tagMetadata") : null,
         ].filter(Boolean);
-        const badges = tags.map((t) => `<span class="badge ok">${t}</span>`).join(" ");
-        const soBadge = o.smart_object ? ` <span class="badge so">smart object</span>` : "";
+        const badges = tags.map((tag) => `<span class="badge ok">${esc(tag)}</span>`).join(" ");
+        const soBadge = o.smart_object ? ` <span class="badge so">${esc(t("psd.smartObject"))}</span>` : "";
         return `<div class="card psd-card" data-psd-index="${i}">
           <div class="label">${esc(o.name)}.psd</div>
           <div class="value">${esc(time)}<br/>${fmtBytes(o.size_bytes)} ${badges}${soBadge}</div>
@@ -315,7 +346,7 @@ async function showPsdDetail(index) {
   const img = $("#psd-detail-preview");
   if (o.preview_path) {
     img.classList.remove("hidden");
-    img.alt = "loading preview…";
+    img.alt = t("psd.loadingPreview");
     try {
       img.src = await invoke("read_image_data_url", { path: o.preview_path });
     } catch (err) {
@@ -335,7 +366,7 @@ async function showPsdDetail(index) {
       meta.textContent = String(err);
     }
   } else {
-    meta.textContent = "(no metadata.json)";
+    meta.textContent = t("psd.noMetadata");
   }
 }
 
@@ -352,7 +383,7 @@ $("#psd-detail").addEventListener("click", async (e) => {
   const path = which === "folder" ? o.psd_path.replace(/[/\\][^/\\]*$/, "") : o.psd_path;
   try {
     await invoke("open_path", { path });
-    toast(which === "folder" ? "opened folder" : "opened PSD", "ok");
+    toast(which === "folder" ? t("psd.openedFolder") : t("psd.openedPsd"), "ok");
   } catch (err) {
     toast(String(err), "err");
   }
@@ -387,11 +418,8 @@ async function ensureNodeEditorEmbedded() {
     if (!res.ok) throw new Error(String(res.status));
   } catch {
     placeholder.innerHTML =
-      "<p>Node Editor build not found</p>" +
-      '<p class="hint">Build it once with ' +
-      "<code>npm --prefix apps/desktop-tauri/studio-ui ci &amp;&amp; " +
-      "npm --prefix apps/desktop-tauri/studio-ui run build</code>, then reopen this tab. " +
-      "(The Tauri CLI does this automatically; a plain <code>cargo run</code> does not.)</p>";
+      "<p>" + esc(t("node.buildMissing")) + "</p>" +
+      '<p class="hint">' + t("node.buildHint") + "</p>";
     return;
   }
   frame.addEventListener("load", () => {
@@ -425,17 +453,14 @@ function embedComfy() {
   const status = $("#comfy-status");
   const placeholder = $("#comfy-placeholder");
   if (!url) {
-    status.textContent = "enter a ComfyUI URL";
-    status.className = "status err";
+    setStatus(status, t("comfy.enterUrl"), "err");
     return;
   }
   if (!isLoopbackComfyUrl(url)) {
-    status.textContent = "only local ComfyUI is allowed (127.0.0.1 / localhost)";
-    status.className = "status err";
+    setStatus(status, t("comfy.onlyLocal"), "err");
     return;
   }
-  status.textContent = "connecting…";
-  status.className = "status";
+  setStatus(status, t("comfy.connecting"), "");
   placeholder.classList.add("hidden");
   frame.classList.remove("hidden");
   // Cache-bust so Reload re-fetches even if the URL is unchanged.
@@ -448,9 +473,7 @@ function ensureComfyEmbedded() {
 }
 
 $("#comfy-frame").addEventListener("load", () => {
-  const status = $("#comfy-status");
-  status.textContent = "connected";
-  status.className = "status ok";
+  setStatus("#comfy-status", t("comfy.connected"), "ok");
 });
 
 function comfyPort() {
@@ -469,14 +492,13 @@ $("#comfy-start").addEventListener("click", async () => {
   const args = $("#comfy-args").value.trim();
   const port = comfyPort();
   try {
-    status.textContent = "starting ComfyUI…";
-    status.className = "status";
+    setStatus(status, t("comfy.starting"), "");
     const msg = await invoke("start_comfyui", {
       dir: dir || null,
       port,
       args: args || null,
     });
-    status.textContent = msg + " — waiting for server…";
+    setStatus(status, t("comfy.waiting", { msg }), "");
     // Poll until the port accepts connections, then embed once (avoids
     // hammering the iframe while ComfyUI is still booting).
     let waited = 0;
@@ -488,14 +510,12 @@ $("#comfy-start").addEventListener("click", async () => {
       waited += 1500;
       if (waited < 90000) setTimeout(poll, 1500);
       else {
-        status.textContent = "server did not come up — check args/folder";
-        status.className = "status err";
+        setStatus(status, t("comfy.noServer"), "err");
       }
     };
     setTimeout(poll, 1500);
   } catch (err) {
-    status.textContent = String(err);
-    status.className = "status err";
+    setStatus(status, String(err), "err");
   }
 });
 
@@ -508,25 +528,19 @@ $("#comfy-stop").addEventListener("click", async () => {
     frame.src = "about:blank";
     $("#comfy-placeholder").classList.remove("hidden");
     comfyEmbedded = false;
-    status.textContent = "stopped";
-    status.className = "status";
+    setStatus(status, t("comfy.stopped"), "");
   } catch (err) {
-    status.textContent = String(err);
-    status.className = "status err";
+    setStatus(status, String(err), "err");
   }
 });
 
-$("#comfy-open").addEventListener("click", async () => {
-  const status = $("#comfy-status");
-  try {
-    await invoke("open_url", { url: $("#comfy-url").value.trim() });
-    status.textContent = "opened in browser";
-    status.className = "status ok";
-  } catch (err) {
-    status.textContent = String(err);
-    status.className = "status err";
-  }
-});
+$("#comfy-open").addEventListener("click", () =>
+  runWithStatus(
+    "#comfy-status",
+    { running: t("comfy.connecting"), done: { text: t("comfy.openedBrowser"), kind: "ok" } },
+    () => invoke("open_url", { url: $("#comfy-url").value.trim() })
+  )
+);
 
 // ---- psd studio ----
 // First production-flow entry point. Composes an ApiTask from a provider
@@ -542,7 +556,7 @@ async function loadStudioProfiles() {
   try {
     const items = await invoke("get_profiles");
     studioProfiles = {};
-    const options = ['<option value="">— none (use provider below) —</option>'];
+    const options = [`<option value="">${esc(t("studio.optionNone"))}</option>`];
     items.forEach((p) => {
       studioProfiles[p.profile_ref] = p;
       options.push(`<option value="${esc(p.profile_ref)}">${esc(p.profile_ref)}</option>`);
@@ -585,8 +599,8 @@ function applyStudioProfile() {
     }
   }
   summary.textContent =
-    `provider: ${profile.provider ?? "-"} · model: ${profile.model ?? "-"} · ` +
-    `creds: ${profile.credentials_ref ?? "-"}`;
+    `${t("field.provider")}: ${profile.provider ?? "-"} · ${t("field.model")}: ${profile.model ?? "-"} · ` +
+    `${t("field.creds")}: ${profile.credentials_ref ?? "-"}`;
 }
 
 function studioBuildTask() {
@@ -624,11 +638,9 @@ function studioPreview() {
   const status = $("#studio-status");
   try {
     $("#studio-task").textContent = pretty(studioBuildTask());
-    status.textContent = "task ready";
-    status.className = "status ok";
+    setStatus(status, t("studio.taskReady"), "ok");
   } catch (err) {
-    status.textContent = "params: " + err;
-    status.className = "status err";
+    setStatus(status, t("field.params") + ": " + err, "err");
   }
 }
 
@@ -642,7 +654,7 @@ function renderStudioOutputs(result) {
   target.innerHTML = files
     .map(
       (f, i) =>
-        `<div class="card"><div class="label">output ${i + 1}</div><div class="value">${esc(f.path)}</div><div class="row"><button data-studio-open="${i}">Open</button></div></div>`
+        `<div class="card"><div class="label">${esc(t("studio.outputN", { n: i + 1 }))}</div><div class="value">${esc(f.path)}</div><div class="row"><button data-studio-open="${i}">${esc(t("studio.open"))}</button></div></div>`
     )
     .join("");
   target.dataset.files = JSON.stringify(files.map((f) => f.path));
@@ -657,23 +669,19 @@ $("#studio-run").addEventListener("click", async () => {
   try {
     task = studioBuildTask();
   } catch (err) {
-    status.textContent = "params: " + err;
-    status.className = "status err";
+    setStatus(status, t("field.params") + ": " + err, "err");
     return;
   }
   $("#studio-task").textContent = pretty(task);
-  status.textContent = "generating…";
-  status.className = "status";
+  setStatus(status, t("studio.generating"), "");
   try {
     const result = await invoke("run_task_json", { taskJson: JSON.stringify(task) });
     $("#studio-result").textContent = pretty(result);
     renderStudioOutputs(result);
-    status.textContent = result.status;
-    status.className = "status " + (result.status === "failed" ? "err" : "ok");
+    setStatus(status, result.status, result.status === "failed" ? "err" : "ok");
   } catch (err) {
     $("#studio-result").textContent = String(err);
-    status.textContent = "error";
-    status.className = "status err";
+    setStatus(status, t("common.error"), "err");
   }
 });
 
@@ -685,7 +693,7 @@ $("#studio-outputs").addEventListener("click", async (e) => {
   if (!path) return;
   try {
     await invoke("open_path", { path });
-    toast("opened output", "ok");
+    toast(t("studio.openedOutput"), "ok");
   } catch (err) {
     toast(String(err), "err");
   }
@@ -714,11 +722,11 @@ $("#studio-template-from-psd").addEventListener("click", async () => {
     const info = await invoke("get_runtime_info");
     const outputs = await invoke("list_psd_outputs", { dir: info.output_dir.path });
     if (!outputs.length) {
-      toast("no PSD files in output dir", "err");
+      toast(t("studio.noPsdInOutput"), "err");
       return;
     }
     $("#studio-template").value = outputs[0].psd_path;
-    toast(`picked ${outputs[0].name}.psd (${outputs.length} found)`, "ok");
+    toast(t("studio.pickedPsd", { name: outputs[0].name, count: outputs.length }), "ok");
   } catch (err) {
     toast(String(err), "err");
   }

@@ -6,6 +6,7 @@
 
 use std::fs;
 use std::path::{Path, PathBuf};
+use std::sync::OnceLock;
 
 use serde::{Deserialize, Serialize};
 
@@ -13,22 +14,72 @@ use crate::contracts::{QualityReport, RepaintReport, VisualContext};
 use crate::modified_ms;
 use crate::studio::studio_reject_unsafe_basename;
 
-/// Resolve the project directory that hosts the vendored `python/bridge`
-/// helpers: the caller-provided path, else the process working directory (the
-/// repo root in dev / the install dir when packaged). Requires `main.py` at the
-/// root so a misconfigured folder fails fast with a clear message.
-pub(crate) fn resolve_project_dir(dir: &Option<String>) -> Result<PathBuf, String> {
-    let base = match dir {
-        Some(d) if !d.trim().is_empty() => PathBuf::from(d.trim()),
-        _ => std::env::current_dir().map_err(|err| err.to_string())?,
-    };
-    if !base.join("main.py").is_file() {
-        return Err(format!(
-            "main.py not found in {} (set the project folder)",
+/// The Tauri resource directory captured at startup (see `set_resource_dir`).
+/// When the installer bundles the `main.py` + `python/bridge` +
+/// `custom_nodes/hgripe_psd_nodes` + `third_party` subtree under
+/// `bundle.resources`, this directory *is* a self-contained project root, so the
+/// PSD nodes keep working in a packaged build without the user pointing at a
+/// separate source checkout.
+static RESOURCE_DIR: OnceLock<Option<PathBuf>> = OnceLock::new();
+
+/// Record the bundled resource directory. Called once from the Tauri `setup`
+/// hook; ignored if the resolver could not determine a resource path.
+pub(crate) fn set_resource_dir(dir: Option<PathBuf>) {
+    let _ = RESOURCE_DIR.set(dir);
+}
+
+fn resource_dir() -> Option<PathBuf> {
+    RESOURCE_DIR.get().cloned().flatten()
+}
+
+/// Accept `base` as the project root only if it actually hosts `main.py`,
+/// otherwise fail fast with an actionable message.
+fn require_project_root(base: PathBuf) -> Result<PathBuf, String> {
+    if base.join("main.py").is_file() {
+        Ok(base)
+    } else {
+        Err(format!(
+            "main.py not found in {} (set the project folder or HGRIPE_PROJECT_DIR)",
             base.display()
-        ));
+        ))
     }
-    Ok(base)
+}
+
+/// Resolve the project directory that hosts the vendored `python/bridge`
+/// helpers. Resolution order, first match wins:
+///   1. the caller-provided path (the folder picked in the UI),
+///   2. the `HGRIPE_PROJECT_DIR` environment variable (a packaging launcher can
+///      point at the extracted project root without any UI),
+///   3. the process working directory when it holds `main.py` (the repo root in
+///      dev),
+///   4. the bundled Tauri resource directory (a packaged install).
+///
+/// Every branch requires `main.py` so a misconfigured folder fails fast.
+pub(crate) fn resolve_project_dir(dir: &Option<String>) -> Result<PathBuf, String> {
+    if let Some(d) = dir.as_deref().map(str::trim).filter(|d| !d.is_empty()) {
+        return require_project_root(PathBuf::from(d));
+    }
+    if let Some(env_dir) = std::env::var_os("HGRIPE_PROJECT_DIR")
+        .map(PathBuf::from)
+        .filter(|p| !p.as_os_str().is_empty())
+    {
+        return require_project_root(env_dir);
+    }
+    if let Ok(cwd) = std::env::current_dir() {
+        if cwd.join("main.py").is_file() {
+            return Ok(cwd);
+        }
+    }
+    if let Some(res) = resource_dir() {
+        if res.join("main.py").is_file() {
+            return Ok(res);
+        }
+    }
+    Err(
+        "main.py not found in the working directory or bundled resources \
+         (set the project folder or HGRIPE_PROJECT_DIR)"
+            .to_string(),
+    )
 }
 
 /// Pick a Python interpreter: prefer the portable `python_embeded` shipped in
@@ -44,6 +95,18 @@ pub(crate) fn project_python(dir: &Path) -> PathBuf {
         }
     }
     PathBuf::from(if cfg!(windows) { "python" } else { "python3" })
+}
+
+/// Validate a user-supplied `output_name` before handing it to a Python CLI
+/// that joins it onto the output directory (`directory / f"{stem}.png"`). An
+/// empty name is allowed (the CLI picks its own `<image>_<suffix>` default); a
+/// non-empty name must be a plain basename so an untrusted workflow cannot use
+/// `..` or a path separator to redirect the write outside the chosen folder.
+fn reject_unsafe_output_name(name: &str) -> Result<(), String> {
+    if name.trim().is_empty() {
+        return Ok(());
+    }
+    studio_reject_unsafe_basename(name)
 }
 
 #[derive(Serialize)]
@@ -502,6 +565,7 @@ pub(crate) fn match_light_color(
             script.display()
         ));
     }
+    reject_unsafe_output_name(output_name.as_deref().unwrap_or(""))?;
 
     let mut cmd = std::process::Command::new(&python);
     cmd.arg(&script)
@@ -640,6 +704,7 @@ pub(crate) fn refine_mask_edge(
             script.display()
         ));
     }
+    reject_unsafe_output_name(output_name.as_deref().unwrap_or(""))?;
 
     let mut cmd = std::process::Command::new(&python);
     cmd.arg(&script)
@@ -781,6 +846,7 @@ pub(crate) fn enhance_image(
             script.display()
         ));
     }
+    reject_unsafe_output_name(output_name.as_deref().unwrap_or(""))?;
 
     let mut cmd = std::process::Command::new(&python);
     cmd.arg(&script)
@@ -906,6 +972,7 @@ pub(crate) fn detect_quality_issues(
             script.display()
         ));
     }
+    reject_unsafe_output_name(output_name.as_deref().unwrap_or(""))?;
 
     let mut cmd = std::process::Command::new(&python);
     cmd.arg(&script)
@@ -1061,6 +1128,7 @@ pub(crate) fn prepare_repaint_regions(
     let dir = resolve_project_dir(&dir)?;
     let python = project_python(&dir);
     let script = detail_repaint_script(&dir)?;
+    reject_unsafe_output_name(output_name.as_deref().unwrap_or(""))?;
 
     let mut cmd = std::process::Command::new(&python);
     cmd.arg(&script)
@@ -1126,6 +1194,7 @@ pub(crate) fn composite_repaint(
     let dir = resolve_project_dir(&dir)?;
     let python = project_python(&dir);
     let script = detail_repaint_script(&dir)?;
+    reject_unsafe_output_name(output_name.as_deref().unwrap_or(""))?;
 
     let mut cmd = std::process::Command::new(&python);
     cmd.arg(&script)
@@ -1159,4 +1228,78 @@ pub(crate) fn composite_repaint(
             stdout.trim()
         )
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{reject_unsafe_output_name, require_project_root, resolve_project_dir};
+    use std::fs;
+    use std::path::PathBuf;
+
+    fn unique_tmp_dir(tag: &str) -> PathBuf {
+        let nanos = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_nanos();
+        let dir = std::env::temp_dir().join(format!("hgripe_psd_{tag}_{nanos}"));
+        fs::create_dir_all(&dir).unwrap();
+        dir
+    }
+
+    #[test]
+    fn require_project_root_accepts_folder_with_main_py() {
+        let dir = unique_tmp_dir("root_ok");
+        fs::write(dir.join("main.py"), b"# stub\n").unwrap();
+        assert_eq!(require_project_root(dir.clone()).unwrap(), dir);
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn require_project_root_rejects_folder_without_main_py() {
+        let dir = unique_tmp_dir("root_missing");
+        let err = require_project_root(dir.clone()).unwrap_err();
+        assert!(err.contains("main.py not found"));
+        assert!(err.contains("HGRIPE_PROJECT_DIR"));
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn resolve_project_dir_uses_explicit_folder_when_valid() {
+        let dir = unique_tmp_dir("explicit");
+        fs::write(dir.join("main.py"), b"# stub\n").unwrap();
+        let resolved = resolve_project_dir(&Some(dir.to_string_lossy().to_string())).unwrap();
+        assert_eq!(resolved, dir);
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn resolve_project_dir_errors_on_explicit_folder_without_main_py() {
+        let dir = unique_tmp_dir("explicit_bad");
+        let err = resolve_project_dir(&Some(dir.to_string_lossy().to_string())).unwrap_err();
+        assert!(err.contains("main.py not found"));
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn output_name_allows_empty_so_cli_picks_default() {
+        assert!(reject_unsafe_output_name("").is_ok());
+        assert!(reject_unsafe_output_name("   ").is_ok());
+    }
+
+    #[test]
+    fn output_name_allows_plain_basenames() {
+        assert!(reject_unsafe_output_name("matched").is_ok());
+        assert!(reject_unsafe_output_name("  result  ").is_ok());
+        assert!(reject_unsafe_output_name("my.output").is_ok());
+    }
+
+    #[test]
+    fn output_name_rejects_traversal_and_separators() {
+        assert!(reject_unsafe_output_name(".").is_err());
+        assert!(reject_unsafe_output_name("..").is_err());
+        assert!(reject_unsafe_output_name("../evil").is_err());
+        assert!(reject_unsafe_output_name("..\\evil").is_err());
+        assert!(reject_unsafe_output_name("sub/dir").is_err());
+        assert!(reject_unsafe_output_name("/etc/passwd").is_err());
+    }
 }

@@ -11,9 +11,10 @@ import {
   type NodePositionChange,
 } from "@xyflow/react";
 
-import { FlowCanvas } from "./editor/FlowCanvas";
+import { FlowCanvas, type EdgeStyle } from "./editor/FlowCanvas";
 import { Inspector } from "./editor/Inspector";
 import { Palette } from "./editor/Palette";
+import { ContextMenu, type MenuItem } from "./editor/ContextMenu";
 import { NodeEditingContext } from "./editor/editingContext";
 import { useHistory } from "./editor/useHistory";
 import { buildPaste, clipFromSelection, type Clip } from "./editor/clipboard";
@@ -68,8 +69,9 @@ function Studio() {
   const [running, setRunning] = useState(false);
   const [snapToGrid, setSnapToGrid] = useState(false);
   const [helperLines, setHelperLines] = useState<{ horizontal?: number; vertical?: number }>({});
-  const [edgeType, setEdgeType] = useState<"default" | "smoothstep">("default");
+  const [edgeType, setEdgeType] = useState<EdgeStyle>("default");
   const [showMinimap, setShowMinimap] = useState(true);
+  const [menu, setMenu] = useState<{ x: number; y: number; nodeId: string | null } | null>(null);
   const { fitView } = useReactFlow();
   const [saved, setSaved] = useState(restoredOnMount.current);
   const [message, setMessage] = useState<string>(
@@ -320,11 +322,60 @@ function Studio() {
 
   // Switch the rendering style of all edges (and future ones).
   const changeEdgeType = useCallback(
-    (t: "default" | "smoothstep") => {
+    (t: EdgeStyle) => {
       setEdgeType(t);
       setEdges((es) => es.map((e) => ({ ...e, type: t })));
     },
     [setEdges],
+  );
+
+  // Delete a single node (freeing group members if it is a group frame) and
+  // drop any edges touching it.
+  const deleteNode = useCallback(
+    (id: string) => {
+      takeSnapshot();
+      const isGroup = nodes.some((n) => n.id === id && isGroupNode(n));
+      setNodes((ns) => {
+        const remaining = ns.filter((n) => n.id !== id);
+        return isGroup ? detachChildren(remaining, new Set([id])) : remaining;
+      });
+      setEdges((es) => es.filter((e) => e.source !== id && e.target !== id));
+      setSelectedId((cur) => (cur === id ? null : cur));
+    },
+    [nodes, setNodes, setEdges, takeSnapshot],
+  );
+
+  // Remove every edge connected to a node, leaving the node in place.
+  const disconnectNode = useCallback(
+    (id: string) => {
+      const touching = edges.some((e) => e.source === id || e.target === id);
+      if (!touching) return;
+      takeSnapshot();
+      setEdges((es) => es.filter((e) => e.source !== id && e.target !== id));
+    },
+    [edges, setEdges, takeSnapshot],
+  );
+
+  // Duplicate a single node (fresh id, offset position, no edges).
+  const duplicateNode = useCallback(
+    (id: string) => {
+      const node = nodes.find((n) => n.id === id);
+      if (!node) return;
+      takeSnapshot();
+      const pasted = buildPaste({ nodes: [node], edges: [] }, { x: 40, y: 40 }, newNodeId);
+      setNodes((ns) => orderNodes(ns.map((n): Node => ({ ...n, selected: false })).concat(pasted.nodes)));
+      setSelectedId(pasted.nodes[0]?.id ?? null);
+    },
+    [nodes, setNodes, takeSnapshot, newNodeId],
+  );
+
+  const openNodeMenu = useCallback(
+    (nodeId: string, at: { x: number; y: number }) => setMenu({ ...at, nodeId }),
+    [],
+  );
+  const openPaneMenu = useCallback(
+    (at: { x: number; y: number }) => setMenu({ ...at, nodeId: null }),
+    [],
   );
 
   // Tidy layout: arrange nodes on a grid by DAG depth. Grouped nodes (and group
@@ -352,6 +403,25 @@ function Studio() {
     // Re-center after React Flow applies the new positions.
     setTimeout(() => fitView({ padding: 0.2, duration: 300 }), 0);
   }, [nodes, edges, setNodes, takeSnapshot, fitView]);
+
+  // Right-click menu items, depending on whether a node or empty pane was hit.
+  const menuItems = useMemo<MenuItem[]>(() => {
+    if (!menu) return [];
+    if (menu.nodeId) {
+      const id = menu.nodeId;
+      const connected = edges.some((e) => e.source === id || e.target === id);
+      return [
+        { label: "复制", onClick: () => duplicateNode(id) },
+        { label: "断开全部连线", onClick: () => disconnectNode(id), disabled: !connected },
+        { label: "删除", onClick: () => deleteNode(id) },
+      ];
+    }
+    return [
+      { label: "整理布局", onClick: tidyLayout },
+      { label: "适应视图", onClick: () => fitView({ padding: 0.2, duration: 300 }) },
+      { label: "粘贴", onClick: pasteClipboard, disabled: !clipboard.current },
+    ];
+  }, [menu, edges, duplicateNode, disconnectNode, deleteNode, tidyLayout, fitView, pasteClipboard]);
 
   const save = useCallback(() => {
     const json = serializeGraph(toWorkflowGraph(nodes, edges));
@@ -483,12 +553,10 @@ function Studio() {
         </button>
         <label className="snap-toggle" title="edge rendering style">
           Edges
-          <select
-            value={edgeType}
-            onChange={(e) => changeEdgeType(e.target.value as "default" | "smoothstep")}
-          >
+          <select value={edgeType} onChange={(e) => changeEdgeType(e.target.value as EdgeStyle)}>
             <option value="default">curved</option>
             <option value="smoothstep">orthogonal</option>
+            <option value="smart">avoid</option>
           </select>
         </label>
         <label className="snap-toggle" title="toggle the minimap">
@@ -539,11 +607,16 @@ function Studio() {
               helperLines={helperLines}
               edgeType={edgeType}
               showMinimap={showMinimap}
+              onNodeContextMenu={openNodeMenu}
+              onPaneContextMenu={openPaneMenu}
             />
           </div>
           <Inspector node={selectedNode} onParamChange={onParamChange} />
         </div>
       </NodeEditingContext.Provider>
+      {menu && (
+        <ContextMenu x={menu.x} y={menu.y} items={menuItems} onClose={() => setMenu(null)} />
+      )}
     </div>
   );
 }

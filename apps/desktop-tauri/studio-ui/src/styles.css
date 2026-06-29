@@ -337,4 +337,34 @@ button:disabled { opacity: 0.6; cursor: default; }
 }
 .inline-field textarea { min-height: 44px; resize: vertical; }
 .inline-field .slider-row input[type="range"] { width: auto; }
+
+/* right-click context menu */
+.context-menu {
+  position: fixed;
+  z-index: 1000;
+  margin: 0;
+  padding: 4px;
+  list-style: none;
+  min-width: 140px;
+  background: #1a1d26;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.45);
+}
+.context-menu li { margin: 0; }
+.context-menu button {
+  display: block;
+  width: 100%;
+  text-align: left;
+  background: transparent;
+  border: none;
+  color: var(--text);
+  font: inherit;
+  font-size: 12px;
+  padding: 6px 10px;
+  border-radius: 5px;
+  cursor: pointer;
+}
+.context-menu button:hover:not(:disabled) { background: #2a2f3d; }
+.context-menu button:disabled { color: var(--muted); cursor: default; }
 .inline-field .path { margin-top: 1px; }

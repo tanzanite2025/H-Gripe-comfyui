@@ -21,13 +21,10 @@ use hgripe_api::{
     ProviderProfileSummary, ProviderProfilesValidation, RuntimePaths,
 };
 use serde::Serialize;
-use tauri::Manager;
 
-mod comfy;
 mod psd;
 mod studio;
 
-use comfy::{kill_comfy_child, ComfyServer};
 use studio::StudioRunCancels;
 
 pub(crate) fn broker() -> ApiBroker {
@@ -471,7 +468,6 @@ fn open_external(url: &str) -> Result<(), String> {
 fn main() {
     tauri::Builder::default()
         .plugin(tauri_plugin_dialog::init())
-        .manage(ComfyServer::default())
         .manage(StudioRunCancels::default())
         .invoke_handler(tauri::generate_handler![
             get_runtime_info,
@@ -516,20 +512,9 @@ fn main() {
             generate_thumbnail,
             read_text_file,
             open_path,
-            comfy::comfyui_reachable,
-            comfy::comfyui_status,
-            comfy::start_comfyui,
-            comfy::stop_comfyui,
             psd::compose_psd,
             psd::inspect_psd
         ])
-        .build(tauri::generate_context!())
-        .expect("error while running H-Gripe Desktop")
-        .run(|app_handle, event| {
-            // Best-effort cleanup: when the shell exits, terminate any ComfyUI
-            // we launched so it doesn't linger as an orphaned process.
-            if let tauri::RunEvent::Exit = event {
-                kill_comfy_child(&app_handle.state::<ComfyServer>());
-            }
-        });
+        .run(tauri::generate_context!())
+        .expect("error while running H-Gripe Desktop");
 }

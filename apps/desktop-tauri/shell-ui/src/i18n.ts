@@ -28,7 +28,6 @@ const messages: Record<string, Message> = {
   "tab.history": { en: "History", zh: "历史" },
   "tab.psd": { en: "PSD", zh: "PSD" },
   "tab.nodeEditor": { en: "Node Editor", zh: "节点编辑器" },
-  "tab.comfy": { en: "Advanced Canvas", zh: "高级画布" },
 
   "lang.toggle": { en: "中文", zh: "EN" },
   "lang.toggleTitle": { en: "switch to Chinese", zh: "切换到英文" },
@@ -168,30 +167,6 @@ const messages: Record<string, Message> = {
     zh: '先用 <code>npm --prefix apps/desktop-tauri/studio-ui ci &amp;&amp; npm --prefix apps/desktop-tauri/studio-ui run build</code> 构建一次，再重新打开此标签页。（Tauri CLI 会自动构建；单独的 <code>cargo run</code> 不会。）',
   },
 
-  "comfy.intro": {
-    en: "<strong>Advanced Canvas</strong> embeds the full ComfyUI node editor for complex workflows, legacy graphs, and mature plugins. For routine work, prefer the H-Gripe production panels (Dashboard, Run Task, PSD).",
-    zh: "<strong>高级画布</strong>内嵌完整的 ComfyUI 节点编辑器，用于复杂工作流、旧版图和成熟插件。日常工作请优先使用 H-Gripe 生产面板（仪表盘、运行任务、PSD）。",
-  },
-  "comfy.start": { en: "Start ComfyUI", zh: "启动 ComfyUI" },
-  "comfy.stop": { en: "Stop", zh: "停止" },
-  "comfy.reload": { en: "Reload", zh: "重新加载" },
-  "comfy.openBrowser": { en: "Open in browser", zh: "在浏览器中打开" },
-  "comfy.dirPh": { en: "ComfyUI folder (blank = app working dir)", zh: "ComfyUI 文件夹（留空 = 应用工作目录）" },
-  "comfy.argsPh": { en: "extra args (e.g. --cpu --listen)", zh: "额外参数（例如 --cpu --listen）" },
-  "comfy.embedding": { en: "Embedding the running ComfyUI web UI.", zh: "正在内嵌运行中的 ComfyUI 网页界面。" },
-  "comfy.embedHint": {
-    en: "Click <strong>Start ComfyUI</strong> to launch a local server (it embeds automatically when ready), or point the URL at an already-running instance and click <strong>Reload</strong>. The full node editor loads here inside the app.",
-    zh: "点击<strong>启动 ComfyUI</strong> 启动一个本地服务器（就绪后自动内嵌），或把 URL 指向一个已在运行的实例并点击<strong>重新加载</strong>。完整的节点编辑器会在应用内部加载于此。",
-  },
-  "comfy.enterUrl": { en: "enter a ComfyUI URL", zh: "请输入 ComfyUI 的 URL" },
-  "comfy.onlyLocal": { en: "only local ComfyUI is allowed (127.0.0.1 / localhost)", zh: "仅允许本地 ComfyUI（127.0.0.1 / localhost）" },
-  "comfy.connecting": { en: "connecting…", zh: "连接中…" },
-  "comfy.connected": { en: "connected", zh: "已连接" },
-  "comfy.starting": { en: "starting ComfyUI…", zh: "正在启动 ComfyUI…" },
-  "comfy.waiting": { en: "{msg} — waiting for server…", zh: "{msg} — 等待服务器…" },
-  "comfy.noServer": { en: "server did not come up — check args/folder", zh: "服务器未能启动——请检查参数/文件夹" },
-  "comfy.stopped": { en: "stopped", zh: "已停止" },
-  "comfy.openedBrowser": { en: "opened in browser", zh: "已在浏览器中打开" },
 };
 
 let lang: Lang = loadLang();

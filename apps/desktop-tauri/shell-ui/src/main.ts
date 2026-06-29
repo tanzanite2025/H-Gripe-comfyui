@@ -12,7 +12,6 @@ import { initConfig, loadConfig } from "./config";
 import { initRun } from "./run";
 import { initHistory } from "./history";
 import { initPsd } from "./psd";
-import { initComfy, ensureComfyEmbedded } from "./comfy";
 import { ensureNodeEditorEmbedded } from "./nodeEditor";
 import { initStudio, ensureStudioProfiles, loadStudioProfiles } from "./studio";
 
@@ -30,7 +29,6 @@ $$<HTMLElement>("#tabs button").forEach((btn) => {
     btn.classList.add("active");
     const tab = btn.dataset.tab;
     if (tab) el(`#${tab}`).classList.add("active");
-    if (tab === "comfyui") ensureComfyEmbedded();
     if (tab === "studio") ensureStudioProfiles();
     if (tab === "node-editor") ensureNodeEditorEmbedded();
   });
@@ -42,7 +40,6 @@ initConfig();
 initRun();
 initHistory();
 initPsd();
-initComfy();
 initStudio();
 
 // ---- init ----

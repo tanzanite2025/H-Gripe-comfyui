@@ -3,23 +3,21 @@
 Phase 2 desktop shell for H-Gripe. It wraps the `hgripe-api` crate in a
 [Tauri](https://tauri.app) window and exposes the API-first workflow.
 
-## Positioning: shell + production panels + Advanced Canvas
+## Positioning: shell + production panels + Node Editor
 
-The desktop app is intentionally **three layers**, and ComfyUI is *not* the
-product's main surface — it is embedded as an advanced/escape-hatch canvas:
+The desktop app is intentionally **two layers** — H-Gripe's own panels plus its
+in-house node editor. (Earlier builds embedded ComfyUI as an "Advanced Canvas"
+escape hatch; that has been removed — H-Gripe's own node graph is now the only
+canvas.)
 
 ```
 H-Gripe Desktop
   ├─ Shell        Dashboard · Credentials · Profiles · History · Outputs
   ├─ Production   PSD Studio · API Image · Batch Job (H-Gripe's own panels)
-  └─ Advanced Canvas  embedded ComfyUI node editor (advanced workflows only)
+  └─ Node Editor  H-Gripe's own visual workflow canvas (studio-ui, React Flow)
 ```
 
-Day-to-day production should go through H-Gripe's own panels. The embedded
-ComfyUI (the **Advanced Canvas** tab, opened last in the nav and not by
-default) is for complex node debugging, legacy workflows, and mature plugins —
-it is a high-level canvas, not the final main UI. The app opens on
-**Dashboard**, not on ComfyUI.
+The app opens on **Dashboard**.
 
 ## Tabs
 
@@ -37,13 +35,9 @@ it is a high-level canvas, not the final main UI. The app opens on
 - **PSD** – browse PSD exports (preview / metadata / smart-object markers).
 - **Node Editor** – H-Gripe's own visual workflow canvas (the `studio-ui`
   React Flow sub-app), embedded as an iframe. This is the in-house production
-  node graph (renderer-agnostic graph model + typed ports + DAG runtime); the
-  **Advanced Canvas** below stays as the ComfyUI escape hatch. See
+  node graph (renderer-agnostic graph model + typed ports + DAG runtime). See
   [`studio-ui/`](studio-ui/) for the sub-app. The build is served at
   `dist/studio/` and loaded lazily on first open.
-- **Advanced Canvas** – start/stop a local ComfyUI server and embed its full
-  web UI in an `<iframe>` inside the app (it also offers an "Open in browser"
-  escape hatch). This replaces the earlier "open in the system browser" flow.
 
 The shell frontend is a dependency-free Vite + TypeScript app in
 [`shell-ui/`](shell-ui/) (no runtime dependencies, no React) that builds to the
@@ -69,17 +63,15 @@ editor can call backend commands (e.g. `run_task_json`, `generate_thumbnail`).
 > allowing what the shell actually needs: `style-src 'unsafe-inline'` (React /
 > React Flow inject styles), `img-src data: blob:` (thumbnails are read back as
 > data URLs), `connect-src ipc: http://ipc.localhost` (Tauri IPC), and
-> `frame-src` for the embedded **Node Editor** (same origin) and **Advanced
-> Canvas** ComfyUI iframe on loopback (`http://127.0.0.1:*`/`http://localhost:*`,
-> so a user-chosen port still embeds). All dynamic data spliced into the shell's
-> `innerHTML` is HTML-escaped (`esc()` in `shell-ui/src/dom.ts`). The bundle is
-> loaded as an external module script (`script-src 'self'`, no inline scripts).
+> `frame-src 'self'` for the embedded **Node Editor** (same origin). All dynamic
+> data spliced into the shell's `innerHTML` is HTML-escaped (`esc()` in
+> `shell-ui/src/dom.ts`). The bundle is loaded as an external module script
+> (`script-src 'self'`, no inline scripts).
 >
 > **Still to validate before release:** confirm with a **release build** that
-> both iframes load and IPC works under this CSP (the dev box used to author it
-> has no Rust toolchain, so this was not run locally). If a future feature needs
-> a remote origin (web fonts, a hosted asset), widen the matching directive
-> rather than reverting to `null`.
+> the Node Editor iframe loads and IPC works under this CSP. If a future feature
+> needs a remote origin (web fonts, a hosted asset), widen the matching
+> directive rather than reverting to `null`.
 
 ## Prerequisites (Windows)
 

@@ -174,9 +174,4 @@ export const commands = {
     invoke<string>("read_text_file", { path, maxBytes }),
   openPath: (path: string) => invoke<void>("open_path", { path }),
   openUrl: (url: string) => invoke<void>("open_url", { url }),
-
-  startComfyui: (dir: string | null, port: number, args: string | null) =>
-    invoke<string>("start_comfyui", { dir, port, args }),
-  comfyuiReachable: (port: number) => invoke<boolean>("comfyui_reachable", { port }),
-  stopComfyui: () => invoke<void>("stop_comfyui"),
 };

@@ -1,6 +1,7 @@
 import { memo, useEffect, useRef, useState } from "react";
-import { Handle, Position, type NodeProps } from "@xyflow/react";
+import { Handle, Position, useStore, type NodeProps } from "@xyflow/react";
 import { nodeSpec } from "../graph/nodeSpecs";
+import { isLodActive } from "./lod";
 import type { NodeStatus } from "../runtime/dag";
 import { generateThumbnail } from "../bridge/tauri";
 import { ParamField } from "./ParamField";
@@ -85,13 +86,16 @@ function HgripeNodeImpl({ id, data, selected }: NodeProps) {
   const spec = nodeSpec(d.kind);
   const status = d.status ?? "idle";
   const editing = useNodeEditing();
+  // Collapse to a title-only card when zoomed far out. A boolean selector means
+  // nodes only re-render when crossing the threshold, not on every zoom tick.
+  const lod = useStore((s) => isLodActive(s.transform[2]));
   // Params flagged `inline` are edited directly on the card; the rest live in
   // the Inspector. `imageSource`/`psdTemplate` paths get a basename caption so
   // the card stays readable even with a long absolute path.
   const inlineParams = spec.params.filter((p) => p.inline);
 
   return (
-    <div className={`node ${selected ? "selected" : ""} status-${status}`}>
+    <div className={`node ${selected ? "selected" : ""} status-${status} ${lod ? "lod" : ""}`}>
       <div className="node-header">
         <span className="node-title">{spec.title}</span>
         <span className={`badge badge-${status}`} title={fmtDuration(d.durationMs)}>
@@ -101,13 +105,13 @@ function HgripeNodeImpl({ id, data, selected }: NodeProps) {
           ) : null}
         </span>
       </div>
-      {status === "failed" && d.error ? (
+      {!lod && status === "failed" && d.error ? (
         <div className="node-error nodrag" title={d.error}>
           {d.error}
         </div>
       ) : null}
 
-      <div className="node-body">
+      {!lod && <div className="node-body">
         {inlineParams.map((p) => (
           <label key={p.key} className="inline-field">
             <span>{p.label}</span>
@@ -129,7 +133,7 @@ function HgripeNodeImpl({ id, data, selected }: NodeProps) {
           ) : (
             <div className="node-thumb placeholder">no image</div>
           ))}
-      </div>
+      </div>}
 
       {spec.inputs.map((p, i) => (
         <Handle

@@ -32,7 +32,7 @@ import type { HgripeNodeData } from "./editor/HgripeNode";
 import { fromWorkflowGraph, toWorkflowGraph } from "./editor/adapter";
 import { ProjectPanel, baseName } from "./editor/ProjectPanel";
 import { NodeSearchBox } from "./editor/NodeSearchBox";
-import { validatePsdChain } from "./editor/psdcheck";
+import { psdExportTargets, psdTemplatePaths, validatePsdChain } from "./editor/psdcheck";
 import { RunLog } from "./editor/RunLogPanel";
 import {
   appendLog,
@@ -67,6 +67,7 @@ import {
   createStudioRunId,
   deleteStudioWorkflow,
   duplicateStudioWorkflow,
+  inspectPsd,
   isTauri,
   listStudioWorkflows,
   pickProjectFolder,
@@ -596,8 +597,41 @@ function Studio() {
   // the run log before executing, so users do not have to wait for a mid-run
   // failure to find them.
   const warnPsdChain = useCallback(
-    (graph: WorkflowGraph) => {
+    async (graph: WorkflowGraph) => {
       for (const w of validatePsdChain(graph)) pushLog("warn", `⚠ ${w.node}: ${w.message}`);
+      // Beyond the syntactic checks above, confirm against the real files on
+      // disk. This needs the Python/psd-tools backend, so it is desktop-only;
+      // browser preview keeps just the path-shape check.
+      if (!isTauri()) return;
+      for (const tpl of psdTemplatePaths(graph)) {
+        try {
+          const info = await inspectPsd(tpl.path);
+          if (info && !info.exists) {
+            pushLog("warn", `⚠ ${tpl.node}: PSD Template: file not found on disk (${tpl.path})`);
+          }
+        } catch (err) {
+          pushLog("warn", `⚠ ${tpl.node}: PSD Template: could not inspect (${String(err)})`);
+        }
+      }
+      for (const tgt of psdExportTargets(graph)) {
+        if (!tgt.placeholder || !tgt.templatePath) continue;
+        try {
+          const info = await inspectPsd(tgt.templatePath, [tgt.placeholder]);
+          if (info && info.exists && info.missing.includes(tgt.placeholder)) {
+            const available = info.layers
+              .map((l) => l.name)
+              .filter(Boolean)
+              .slice(0, 12)
+              .join(", ");
+            pushLog(
+              "warn",
+              `⚠ ${tgt.node}: PSD Export: placeholder layer "${tgt.placeholder}" not found in PSD${available ? ` (available: ${available})` : ""}`,
+            );
+          }
+        } catch (err) {
+          pushLog("warn", `⚠ ${tgt.node}: PSD Export: could not inspect template (${String(err)})`);
+        }
+      }
     },
     [pushLog],
   );
@@ -614,7 +648,7 @@ function Studio() {
     pushLog("info", `▶ run started (${backend})`);
     try {
       const graph = toWorkflowGraph(nodes, edges);
-      warnPsdChain(graph);
+      await warnPsdChain(graph);
       if (useRustBackend) {
         const runId = beginRustRun();
         try {
@@ -684,7 +718,7 @@ function Studio() {
     pushLog("info", `▶ batch started: ${batchCount} run(s) (${backend})`);
     try {
       const graph = toWorkflowGraph(nodes, edges);
-      warnPsdChain(graph);
+      await warnPsdChain(graph);
       const collected: string[] = [];
       for (let i = 0; i < batchCount; i++) {
         setMessage(

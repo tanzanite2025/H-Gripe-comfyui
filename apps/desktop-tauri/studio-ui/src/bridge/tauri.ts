@@ -461,3 +461,46 @@ export async function composePsd(req: ComposePsdRequest): Promise<ComposePsdResu
     savePreview: req.savePreview ?? null,
   })) as ComposePsdResult;
 }
+
+// --- PSD inspection ---------------------------------------------------------
+// Wraps the Rust `inspect_psd` command, which shells out to the torch-free
+// `inspect_psd_cli.py` helper to read a PSD template's layers via psd-tools.
+// Used to validate a real PSD on disk before a run: that the template path
+// points at a file, and that a configured placeholder layer name truly exists.
+
+// Fields are snake_case to match the Rust `PsdLayerInfo` serialization.
+export interface PsdLayer {
+  name: string;
+  /** "group" | "smartobject" | "pixel". */
+  kind: string;
+}
+
+// Fields are snake_case to match the Rust `InspectPsdResult` serialization.
+export interface InspectPsdResult {
+  status: string;
+  /** `false` when the template path does not point at a file on disk. */
+  exists: boolean;
+  width: number;
+  height: number;
+  layers: PsdLayer[];
+  /** Subset of the requested `names` that were not found in the PSD. */
+  missing: string[];
+}
+
+/**
+ * Inspect a PSD template's layers via the backend (`inspect_psd`). Reading a
+ * `.psd` from disk requires the Python/psd-tools pipeline, which only exists in
+ * the desktop build, so outside Tauri this resolves to `null` and callers fall
+ * back to the syntactic path check.
+ */
+export async function inspectPsd(
+  template: string,
+  names?: string[],
+): Promise<InspectPsdResult | null> {
+  const invoke = tauriInvoke();
+  if (!invoke) return null;
+  return (await invoke("inspect_psd", {
+    template,
+    names: names ?? null,
+  })) as InspectPsdResult;
+}

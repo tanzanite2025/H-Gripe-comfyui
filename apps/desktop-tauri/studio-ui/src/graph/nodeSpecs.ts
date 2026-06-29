@@ -788,6 +788,57 @@ export const NODE_SPECS: Record<string, NodeSpec> = {
       },
     ],
   },
+  detailWatchdog: {
+    kind: "detailWatchdog",
+    title: "Detail Watchdog",
+    description:
+      "Scan a candidate image for local breakdowns (global/region blur, alpha-rim halos, colour mismatch vs the connected background, below-target resolution) and emit a QualityReport so the workflow can decide whether to re-run or hand-fix. Detect-only in Phase 1 (no automatic repaint): 'fixed_image' is the unchanged input. CPU-only (no ML) — semantic targets needing a GPU/VLM (hands/text/logo) are reported skipped. Connect a VisualContext and/or placeholder bounds for the resolution and colour checks.",
+    category: "control",
+    inputs: [
+      port("image", "image", "image"),
+      port("visual_context", "visual context", "any"),
+      port("target_bounds", "target bounds", "any"),
+    ],
+    outputs: [
+      port("fixed_image", "fixed image", "image"),
+      port("quality_report", "quality report", "any"),
+      port("issue_masks", "issue masks", "image"),
+      port("watchdog_report", "watchdog report", "any"),
+    ],
+    params: [
+      {
+        key: "mode",
+        label: "Mode",
+        control: "select",
+        options: ["strict", "balanced", "lenient"],
+        defaultValue: "balanced",
+        inline: true,
+        hint: "detection sensitivity: strict = flags more, lenient = flags less",
+      },
+      {
+        key: "watch_targets",
+        label: "Watch targets",
+        control: "text",
+        defaultValue: "",
+        hint: "comma list of face,hands,text,logo,product_edges (empty = all); hands/text/logo are skipped in Phase 1",
+      },
+      {
+        key: "output_dir",
+        label: "Output dir",
+        control: "path",
+        defaultValue: "",
+        hint: "leave empty to use the configured output directory",
+      },
+      {
+        key: "output_name",
+        label: "Output name",
+        control: "text",
+        defaultValue: "",
+        hint: "base name for the issue-overlay PNG (empty = <image>_issues)",
+        inline: true,
+      },
+    ],
+  },
   psdExport: {
     kind: "psdExport",
     title: "PSD Export",

@@ -5,6 +5,7 @@
 //! - [`color_match`]: the `matchLightColor` node executor (light/colour match).
 //! - [`edge_refine`]: the `refineMaskEdge` node executor (mask edge refine).
 //! - [`image_enhance`]: the `imageEnhance` node executor (CPU upscale/sharpen).
+//! - [`detail_watchdog`]: the `detailWatchdog` node executor (CPU quality scan).
 //! - [`psd_export`]: the `psdExport` node executor (PSD composition bridge).
 //! - [`persist`]: on-disk autosave, workflow files, recents, and pickers.
 //! - [`history`]: project-scoped snapshot / run-history JSON stores.
@@ -13,6 +14,7 @@
 //! re-exports below, so `main.rs`'s `invoke_handler` registration is unchanged.
 
 mod color_match;
+mod detail_watchdog;
 mod edge_refine;
 mod exec;
 mod graph;

@@ -456,3 +456,67 @@ describe("imageEnhance", () => {
     ).rejects.toThrow(/connected image/);
   });
 });
+
+describe("detailWatchdog", () => {
+  // Outside Tauri, detectQualityIssues returns a mocked DetectQualityResult, so
+  // we assert how the executor resolves targets, derives the report, and
+  // reports skipped (CPU-unsupported) watch targets.
+  it("flags low resolution + colour mismatch and fails on large bounds with a far background", async () => {
+    const out = (await defaultExecutors.detailWatchdog(
+      ctx(
+        "detailWatchdog",
+        { mode: "strict", output_dir: "/out", output_name: "iss" },
+        {
+          image: "/cand.png",
+          visual_context: {
+            background: { mean_color: [20, 20, 20] },
+            placeholder: { bounds: { x: 0, y: 0, width: 2048, height: 2800 } },
+          },
+        },
+      ),
+    )) as Record<string, unknown>;
+    expect(out.fixed_image).toBe("/cand.png");
+    const report = out.quality_report as { status: string; issues: { type: string }[] };
+    expect(report.status).toBe("failed");
+    const types = report.issues.map((i) => i.type).sort();
+    expect(types).toEqual(["color_mismatch", "low_resolution"]);
+    expect(out.issue_masks).toBe("/out/iss.png");
+  });
+
+  it("passes (no issues, no overlay) when in-bounds with a near background", async () => {
+    const out = (await defaultExecutors.detailWatchdog(
+      ctx(
+        "detailWatchdog",
+        { mode: "lenient" },
+        {
+          image: "/cand.png",
+          target_bounds: { x: 0, y: 0, width: 400, height: 500 },
+          visual_context: { background: { mean_color: [182, 172, 158] } },
+        },
+      ),
+    )) as Record<string, unknown>;
+    const report = out.quality_report as { status: string; issues: unknown[] };
+    expect(report.status).toBe("passed");
+    expect(report.issues).toEqual([]);
+    expect(out.issue_masks).toBeNull();
+  });
+
+  it("reports CPU-unsupported watch targets as skipped", async () => {
+    const out = (await defaultExecutors.detailWatchdog(
+      ctx(
+        "detailWatchdog",
+        { mode: "balanced", watch_targets: "face,hands,logo" },
+        { image: "/cand.png" },
+      ),
+    )) as Record<string, unknown>;
+    const wr = out.watchdog_report as { watch_targets: string[]; skipped_targets: string[] };
+    expect(wr.watch_targets).toEqual(["face", "hands", "logo"]);
+    expect(wr.skipped_targets).toEqual(["hands", "logo"]);
+  });
+
+  it("requires a connected image input", async () => {
+    await expect(
+      defaultExecutors.detailWatchdog(ctx("detailWatchdog", {})),
+    ).rejects.toThrow(/connected image/);
+  });
+});

@@ -32,31 +32,13 @@ import type { HgripeNodeData } from "./editor/HgripeNode";
 import { fromWorkflowGraph, toWorkflowGraph } from "./editor/adapter";
 import { ProjectPanel, baseName } from "./editor/ProjectPanel";
 import { Toolbar } from "./editor/Toolbar";
-import { psdExportTargets, psdTemplatePaths, validatePsdChain } from "./editor/psdcheck";
 import { RunLog } from "./editor/RunLogPanel";
-import {
-  appendLog,
-  describeNodeStatus,
-  formatLogText,
-  levelForStatus,
-  type LogLevel,
-  type RunLogEntry,
-} from "./editor/runlog";
 import { SnapshotsPanel, type SnapshotDiffView } from "./editor/SnapshotsPanel";
 import { RunHistoryPanel } from "./editor/RunHistoryPanel";
-import {
-  addRunRecord,
-  loadRunHistory,
-  newRunRecordId,
-  parseRunHistory,
-  saveRunHistory,
-  type RunKind,
-  type RunOutcome,
-  type RunRecord,
-} from "./editor/runhistory";
 import { diffGraphs } from "./editor/snapshotdiff";
 import { useProjectScopedStore } from "./editor/useProjectScopedStore";
 import { useKeyboardShortcuts } from "./editor/useKeyboardShortcuts";
+import { useStudioRunController } from "./editor/useStudioRunController";
 import { LangContext, loadLang, saveLang, type Lang } from "./i18n";
 import {
   addSnapshot,
@@ -73,15 +55,11 @@ import {
 import { clearPersistedGraph, loadPersistedGraph, persistGraph } from "./editor/persist";
 import { defaultParams } from "./graph/nodeSpecs";
 import { deserializeGraph, serializeGraph, type WorkflowGraph } from "./graph/model";
-import { runGraph, topoLevels, validateGraph, type NodeRunInfo, type NodeStatus } from "./runtime/dag";
-import { batchItems, defaultExecutors } from "./runtime/executors";
+import { topoLevels, validateGraph } from "./runtime/dag";
 import {
-  cancelStudioRun,
   clearStudioAutosave,
-  createStudioRunId,
   deleteStudioWorkflow,
   duplicateStudioWorkflow,
-  inspectPsd,
   isTauri,
   listStudioWorkflows,
   pickProjectFolder,
@@ -89,54 +67,15 @@ import {
   pickWorkflowSavePath,
   readStudioAutosave,
   readStudioRecents,
-  readStudioRunHistory,
   readStudioSnapshots,
   readStudioWorkflow,
   renameStudioWorkflow,
-  runStudioGraph,
   writeStudioAutosave,
   writeStudioRecents,
-  writeStudioRunHistory,
   writeStudioSnapshots,
   writeStudioWorkflow,
-  type StudioGraphRunEvent,
-  type StudioGraphRunResult,
   type StudioWorkflowFile,
 } from "./bridge/tauri";
-
-const NODE_STATUSES = new Set<NodeStatus>([
-  "idle",
-  "queued",
-  "running",
-  "succeeded",
-  "failed",
-  "cancelled",
-  "cached",
-  "skipped",
-]);
-
-function toNodeStatus(status: string): NodeStatus {
-  return NODE_STATUSES.has(status as NodeStatus) ? (status as NodeStatus) : "failed";
-}
-
-function studioOutputsToMap(
-  result: StudioGraphRunResult,
-): Map<string, Record<string, unknown>> {
-  return new Map(Object.entries(result.outputs));
-}
-
-function graphWithParamOverrides(
-  graph: WorkflowGraph,
-  nodeId: string,
-  params: Record<string, unknown>,
-): WorkflowGraph {
-  return {
-    ...graph,
-    nodes: graph.nodes.map((node) =>
-      node.id === nodeId ? { ...node, params: { ...node.params, ...params } } : node,
-    ),
-  };
-}
 
 function makeNode(id: string, kind: string, x: number, y: number, params?: Record<string, unknown>): Node {
   const data: HgripeNodeData = { kind, params: { ...defaultParams(kind), ...params }, status: "idle" };
@@ -167,12 +106,6 @@ function Studio() {
   const [nodes, setNodes, onNodesChange] = useNodesState(initial.nodes);
   const [edges, setEdges, onEdgesChange] = useEdgesState(initial.edges);
   const [selectedId, setSelectedId] = useState<string | null>(null);
-  const [running, setRunning] = useState(false);
-  const [currentRunId, setCurrentRunId] = useState<string | null>(null);
-  const [runLog, setRunLog] = useState<RunLogEntry[]>([]);
-  const [showLog, setShowLog] = useState(false);
-  const [runHistory, setRunHistory] = useState<RunRecord[]>(() => loadRunHistory());
-  const [showHistory, setShowHistory] = useState(false);
   const [snapshots, setSnapshots] = useState<Snapshot[]>(() => loadSnapshots());
   const [showSnapshots, setShowSnapshots] = useState(false);
   const [snapshotDiff, setSnapshotDiff] = useState<SnapshotDiffView | null>(null);
@@ -216,15 +149,8 @@ function Studio() {
   // Skips the next dirty-mark when the graph is swapped programmatically
   // (mount restore, open, new) rather than by a user edit.
   const skipDirty = useRef(true);
-  // While a run is in flight this collects that run's log entries so they can
-  // be saved as a RunRecord when it ends; null when no run is active.
-  const runEntriesRef = useRef<RunLogEntry[] | null>(null);
 
   const idSeq = useRef(0);
-  const logSeq = useRef(0);
-  // Node ids that reported "failed" during the in-flight run, in first-seen order.
-  const runFailures = useRef<string[]>([]);
-  const currentRunIdRef = useRef<string | null>(null);
   const fileInput = useRef<HTMLInputElement | null>(null);
   const clipboard = useRef<Clip | null>(null);
   // True while a node drag is in progress, so we snapshot only once per drag.
@@ -402,53 +328,6 @@ function Studio() {
     setMessage(`pasted ${pasted.nodes.length} node${pasted.nodes.length > 1 ? "s" : ""}`);
   }, [setNodes, setEdges, takeSnapshot, newNodeId]);
 
-  const setStatus = useCallback(
-    (id: string, status: NodeStatus) => patchNode(id, { status }),
-    [patchNode],
-  );
-
-  // Append a line to the run log (capped, never mutating the previous array).
-  const pushLog = useCallback((level: LogLevel, message: string, node?: string) => {
-    const entry: RunLogEntry = { id: logSeq.current++, t: Date.now(), level, message, node };
-    setRunLog((log) => appendLog(log, entry));
-    if (runEntriesRef.current) runEntriesRef.current.push(entry);
-  }, []);
-
-  // Finalize the in-flight run into a persisted history record. Promotes a
-  // nominal "succeeded" to "failed" when any node reported a failure.
-  const recordRunHistory = useCallback(
-    (kind: RunKind, startedAt: number, outcome: RunOutcome, backend: string) => {
-      const entries = runEntriesRef.current ?? [];
-      runEntriesRef.current = null;
-      const failedNodes = runFailures.current.length;
-      const finalOutcome: RunOutcome =
-        outcome === "succeeded" && failedNodes > 0 ? "failed" : outcome;
-      const record: RunRecord = {
-        id: newRunRecordId(),
-        kind,
-        startedAt,
-        endedAt: Date.now(),
-        outcome: finalOutcome,
-        backend,
-        failedNodes,
-        entries,
-      };
-      setRunHistory((h) => addRunRecord(h, record));
-    },
-    [],
-  );
-
-  // Download the run log as a plain-text file (browser + desktop webview).
-  const exportLog = useCallback(() => {
-    const blob = new Blob([formatLogText(runLog)], { type: "text/plain" });
-    const url = URL.createObjectURL(blob);
-    const a = document.createElement("a");
-    a.href = url;
-    a.download = "run-log.txt";
-    a.click();
-    URL.revokeObjectURL(url);
-  }, [runLog]);
-
   // Select/focus a node in the editor (e.g. from a run-log line). Programmatic,
   // so it must not flag the file dirty.
   const focusNode = useCallback(
@@ -468,16 +347,6 @@ function Studio() {
     },
     [focusNode, fitView],
   );
-
-  // After a run settles, surface any failed nodes: select/focus the first one
-  // and summarise them in the log. Returns the number of failed nodes.
-  const highlightFailures = useCallback(() => {
-    const failed = runFailures.current;
-    if (failed.length === 0) return 0;
-    focusNode(failed[0]);
-    pushLog("error", `⚠ ${failed.length} node(s) failed: ${failed.join(", ")}`);
-    return failed.length;
-  }, [focusNode, pushLog]);
 
   // Capture the current graph under a given name (no prompt).
   const captureNamed = useCallback(
@@ -505,329 +374,41 @@ function Studio() {
     captureNamed(`Auto · ${new Date().toLocaleTimeString()}`);
   }, [autoSnapshot, nodes.length, captureNamed]);
 
-  // Per-node run telemetry (duration / error) for node-level logs/progress.
-  const recordRun = useCallback(
-    (id: string, info: NodeRunInfo) => {
-      patchNode(id, { durationMs: info.durationMs, error: info.error ?? null });
-      if (info.status === "failed" && !runFailures.current.includes(id)) {
-        runFailures.current.push(id);
-      }
-      pushLog(
-        levelForStatus(info.status),
-        describeNodeStatus(info.status, { durationMs: info.durationMs, error: info.error }),
-        id,
-      );
-    },
-    [patchNode, pushLog],
-  );
-  // Clear the previous run's duration/error before a fresh run.
-  const clearRunInfo = useCallback(
-    () => setNodes((ns) => ns.map((n) => ({ ...n, data: { ...n.data, durationMs: undefined, error: undefined } }))),
-    [setNodes],
-  );
-  const observer = useMemo(() => ({ onStatus: setStatus, onNodeRun: recordRun }), [setStatus, recordRun]);
+  // Snapshots and run history are both project-scoped stores: persisted into
+  // the selected project folder on desktop (so they travel with the project),
+  // else to localStorage.
+  const projectStoreDir = isDesktop ? projectDir : null;
 
-  const applyStudioRunResult = useCallback(
-    (result: StudioGraphRunResult) => {
-      const statuses = new Map(
-        Object.entries(result.statuses).map(([id, status]) => [id, toNodeStatus(status)]),
-      );
-      const runs = new Map(result.node_runs.map((run) => [run.node_id, run]));
-      setNodes((ns) =>
-        ns.map((n) => {
-          const d = n.data as HgripeNodeData;
-          const runInfo = runs.get(n.id);
-          return {
-            ...n,
-            data: {
-              ...d,
-              status: statuses.get(n.id) ?? d.status,
-              durationMs: runInfo ? runInfo.duration_ms ?? undefined : d.durationMs,
-              error: runInfo ? runInfo.error ?? null : d.error,
-            },
-          };
-        }),
-      );
-    },
-    [setNodes],
-  );
-
-  const applyStudioRunEvent = useCallback(
-    (event: StudioGraphRunEvent) => {
-      if (!event.node_id) {
-        if (event.message) pushLog("info", event.message);
-        return;
-      }
-      const status = toNodeStatus(event.status);
-      if (status === "failed" && !runFailures.current.includes(event.node_id)) {
-        runFailures.current.push(event.node_id);
-      }
-      pushLog(
-        levelForStatus(status),
-        describeNodeStatus(status, { durationMs: event.duration_ms, error: event.error }),
-        event.node_id,
-      );
-      setNodes((ns) =>
-        ns.map((n) => {
-          if (n.id !== event.node_id) return n;
-          const d = n.data as HgripeNodeData;
-          const isFreshStatus = status === "queued" || status === "running";
-          return {
-            ...n,
-            data: {
-              ...d,
-              status,
-              durationMs: event.duration_ms ?? (isFreshStatus ? undefined : d.durationMs),
-              error: event.error ?? (isFreshStatus ? undefined : d.error),
-            },
-          };
-        }),
-      );
-    },
-    [setNodes, pushLog],
-  );
-
-  const beginRustRun = useCallback(() => {
-    const runId = createStudioRunId();
-    currentRunIdRef.current = runId;
-    setCurrentRunId(runId);
-    return runId;
-  }, []);
-
-  const endRustRun = useCallback((runId: string) => {
-    if (currentRunIdRef.current !== runId) return;
-    currentRunIdRef.current = null;
-    setCurrentRunId(null);
-  }, []);
-
-  const cancelRun = useCallback(() => {
-    const runId = currentRunIdRef.current;
-    if (!runId) return;
-    setMessage("cancelling…");
-    pushLog("warn", "✋ cancellation requested");
-    void cancelStudioRun(runId).catch((err) => setMessage(`cancel failed: ${String(err)}`));
-  }, [pushLog]);
-
-  // Surface output paths into preview nodes. The thumbnail itself is fetched
-  // lazily by the node when it scrolls into view (see HgripeNode).
-  const applyPreviews = useCallback(
-    (graph: ReturnType<typeof toWorkflowGraph>, result: { outputs: Map<string, Record<string, unknown>> }) => {
-      const paths: string[] = [];
-      const str = (v: unknown): string | null => (typeof v === "string" && v ? v : null);
-      for (const node of graph.nodes) {
-        const out = result.outputs.get(node.id);
-        if (node.kind === "preview") {
-          const imagePath = str(out?.image);
-          patchNode(node.id, { imagePath });
-          if (imagePath) paths.push(imagePath);
-        } else if (node.kind === "psdExport") {
-          // Surface the export triplet onto the card. Browser executors return
-          // camelCase; the Rust backend returns the raw snake_case fields.
-          const psdPath = str(out?.psdPath) ?? str(out?.psd_path);
-          const psdPreviewPath = str(out?.previewPath) ?? str(out?.preview_path);
-          const psdMetadataPath = str(out?.metadataPath) ?? str(out?.metadata_path);
-          patchNode(node.id, {
-            psdPath,
-            psdPreviewPath,
-            psdMetadataPath,
-            placeholderKind: str(out?.placeholderKind) ?? str(out?.placeholder_kind),
-            smartObjectMode: str(out?.smartObjectMode) ?? str(out?.smart_object_mode),
-          });
-          if (psdPreviewPath) paths.push(psdPreviewPath);
-        }
-      }
-      return paths;
-    },
-    [patchNode],
-  );
-
-  // Surface PSD-chain problems (missing template path / unconnected inputs) in
-  // the run log before executing, so users do not have to wait for a mid-run
-  // failure to find them.
-  const warnPsdChain = useCallback(
-    async (graph: WorkflowGraph) => {
-      for (const w of validatePsdChain(graph)) pushLog("warn", `⚠ ${w.node}: ${w.message}`);
-      // Beyond the syntactic checks above, confirm against the real files on
-      // disk. This needs the Python/psd-tools backend, so it is desktop-only;
-      // browser preview keeps just the path-shape check.
-      if (!isTauri()) return;
-      for (const tpl of psdTemplatePaths(graph)) {
-        try {
-          const info = await inspectPsd(tpl.path);
-          if (info && !info.exists) {
-            pushLog("warn", `⚠ ${tpl.node}: PSD Template: file not found on disk (${tpl.path})`);
-          }
-        } catch (err) {
-          pushLog("warn", `⚠ ${tpl.node}: PSD Template: could not inspect (${String(err)})`);
-        }
-      }
-      for (const tgt of psdExportTargets(graph)) {
-        if (!tgt.placeholder || !tgt.templatePath) continue;
-        try {
-          const info = await inspectPsd(tgt.templatePath, [tgt.placeholder]);
-          if (info && info.exists && info.missing.includes(tgt.placeholder)) {
-            const available = info.layers
-              .map((l) => l.name)
-              .filter(Boolean)
-              .slice(0, 12)
-              .join(", ");
-            pushLog(
-              "warn",
-              `⚠ ${tgt.node}: PSD Export: placeholder layer "${tgt.placeholder}" not found in PSD${available ? ` (available: ${available})` : ""}`,
-            );
-          }
-        } catch (err) {
-          pushLog("warn", `⚠ ${tgt.node}: PSD Export: could not inspect template (${String(err)})`);
-        }
-      }
-    },
-    [pushLog],
-  );
-
-  const run = useCallback(async () => {
-    setRunning(true);
-    setShowLog(true);
-    runFailures.current = [];
-    autoSnapshotBeforeRun();
-    const useRustBackend = isTauri();
-    const backend = useRustBackend ? "Rust backend" : "browser preview";
-    setMessage(useRustBackend ? "running Rust backend…" : "running browser preview…");
-    clearRunInfo();
-    const startedAt = Date.now();
-    runEntriesRef.current = [];
-    let outcome: RunOutcome = "succeeded";
-    pushLog("info", `▶ run started (${backend})`);
-    try {
-      const graph = toWorkflowGraph(nodes, edges);
-      await warnPsdChain(graph);
-      if (useRustBackend) {
-        const runId = beginRustRun();
-        try {
-          const result = await runStudioGraph(graph, applyStudioRunEvent, runId);
-          applyStudioRunResult(result);
-          applyPreviews(graph, { outputs: studioOutputsToMap(result) });
-          setMessage("done (Rust backend)");
-        } finally {
-          endRustRun(runId);
-        }
-      } else {
-        const result = await runGraph(graph, defaultExecutors, observer);
-        applyPreviews(graph, result);
-        setMessage("done (browser preview)");
-      }
-      pushLog("success", `✔ run finished (${backend})`);
-    } catch (err) {
-      const message = String(err);
-      const cancelled = message.toLowerCase().includes("cancel");
-      outcome = cancelled ? "cancelled" : "failed";
-      setMessage(cancelled ? "cancelled" : `error: ${message}`);
-      pushLog(cancelled ? "warn" : "error", cancelled ? "run cancelled" : `run failed: ${message}`);
-    } finally {
-      setRunning(false);
-      highlightFailures();
-      recordRunHistory("run", startedAt, outcome, backend);
-    }
-  }, [
-    nodes,
-    edges,
-    observer,
-    clearRunInfo,
-    applyPreviews,
-    applyStudioRunResult,
-    applyStudioRunEvent,
-    beginRustRun,
-    endRustRun,
-    pushLog,
-    autoSnapshotBeforeRun,
-    highlightFailures,
-    warnPsdChain,
-    recordRunHistory,
-  ]);
-
-  // Batch fan-out: run the graph once per item of the (first) batch node,
-  // sweeping its `index`. In Tauri, the graph is copied with an index override
-  // and sent to Rust; in browser preview, runGraph uses paramOverrides.
-  const batchNode = useMemo(
-    () => nodes.find((n) => (n.data as HgripeNodeData).kind === "batch") ?? null,
-    [nodes],
-  );
-  const batchCount = useMemo(
-    () => (batchNode ? batchItems((batchNode.data as HgripeNodeData).params.items).length : 0),
-    [batchNode],
-  );
-
-  const runBatch = useCallback(async () => {
-    if (!batchNode || batchCount === 0) {
-      setMessage("batch: no items");
-      return;
-    }
-    setRunning(true);
-    setShowLog(true);
-    runFailures.current = [];
-    autoSnapshotBeforeRun();
-    clearRunInfo();
-    const useRustBackend = isTauri();
-    const backend = useRustBackend ? "Rust backend" : "browser preview";
-    const rustRunId = useRustBackend ? beginRustRun() : null;
-    const startedAt = Date.now();
-    runEntriesRef.current = [];
-    let outcome: RunOutcome = "succeeded";
-    pushLog("info", `▶ batch started: ${batchCount} run(s) (${backend})`);
-    try {
-      const graph = toWorkflowGraph(nodes, edges);
-      await warnPsdChain(graph);
-      const collected: string[] = [];
-      for (let i = 0; i < batchCount; i++) {
-        setMessage(
-          `batch ${i + 1}/${batchCount}${useRustBackend ? " (Rust backend)" : " (browser preview)"}…`,
-        );
-        pushLog("info", `— batch item ${i + 1}/${batchCount}`);
-        if (useRustBackend) {
-          const graphForRun = graphWithParamOverrides(graph, batchNode.id, { index: i });
-          const result = await runStudioGraph(graphForRun, applyStudioRunEvent, rustRunId ?? undefined);
-          applyStudioRunResult(result);
-          collected.push(...applyPreviews(graphForRun, { outputs: studioOutputsToMap(result) }));
-        } else {
-          const overrides = new Map([[batchNode.id, { index: i }]]);
-          const result = await runGraph(graph, defaultExecutors, observer, overrides);
-          collected.push(...applyPreviews(graph, result));
-        }
-      }
-      setMessage(
-        `batch done: ${batchCount} run(s), ${collected.length} output(s)${
-          useRustBackend ? " via Rust backend" : ""
-        }`,
-      );
-      pushLog("success", `✔ batch finished: ${batchCount} run(s), ${collected.length} output(s)`);
-    } catch (err) {
-      const message = String(err);
-      const cancelled = message.toLowerCase().includes("cancel");
-      outcome = cancelled ? "cancelled" : "failed";
-      setMessage(cancelled ? "batch cancelled" : `batch error: ${message}`);
-      pushLog(cancelled ? "warn" : "error", cancelled ? "batch cancelled" : `batch failed: ${message}`);
-    } finally {
-      if (rustRunId) endRustRun(rustRunId);
-      setRunning(false);
-      highlightFailures();
-      recordRunHistory("batch", startedAt, outcome, backend);
-    }
-  }, [
-    batchNode,
+  // The run lifecycle, run log, and run history live in their own controller.
+  // The editor reaches it through these callbacks and consumes the returned
+  // view state (panel toggles, counts, run actions).
+  const {
+    running,
+    canCancel,
+    runLog,
+    showLog,
+    setShowLog,
+    clearLog,
+    exportLog,
+    runHistory,
+    showHistory,
+    setShowHistory,
+    clearHistory,
+    run,
+    runBatch,
+    cancelRun,
+    hasBatch,
     batchCount,
+  } = useStudioRunController({
     nodes,
     edges,
-    observer,
-    clearRunInfo,
-    applyPreviews,
-    applyStudioRunResult,
-    applyStudioRunEvent,
-    beginRustRun,
-    endRustRun,
-    pushLog,
+    setNodes,
+    patchNode,
+    focusNode,
+    setMessage,
     autoSnapshotBeforeRun,
-    highlightFailures,
-    warnPsdChain,
-  ]);
+    projectStoreDir,
+  });
 
   // Switch the rendering style of all edges (and future ones).
   const changeEdgeType = useCallback(
@@ -968,10 +549,10 @@ function Studio() {
     [fileDirty, currentFile],
   );
 
-  // Snapshots and run history are both project-scoped stores: persisted into
-  // the selected project folder on desktop (so they travel with the project),
-  // else to localStorage. The shared hook owns the load/persist effects.
-  const projectStoreDir = isDesktop ? projectDir : null;
+  // Snapshots are a project-scoped store: persisted into the selected project
+  // folder on desktop (so they travel with the project), else to localStorage.
+  // The shared hook owns the load/persist effects. (Run history follows the
+  // same pattern, owned by useStudioRunController.)
   useProjectScopedStore({
     dir: projectStoreDir,
     state: snapshots,
@@ -981,17 +562,6 @@ function Studio() {
     write: writeStudioSnapshots,
     saveLocal: saveSnapshots,
     label: "snapshots",
-    onError: setMessage,
-  });
-  useProjectScopedStore({
-    dir: projectStoreDir,
-    state: runHistory,
-    setState: setRunHistory,
-    parse: parseRunHistory,
-    read: readStudioRunHistory,
-    write: writeStudioRunHistory,
-    saveLocal: saveRunHistory,
-    label: "run history",
     onError: setMessage,
   });
 
@@ -1415,10 +985,10 @@ function Studio() {
         showMinimap={showMinimap}
         setShowMinimap={setShowMinimap}
         running={running}
-        currentRunId={currentRunId}
+        canCancel={canCancel}
         onRun={run}
         onCancelRun={cancelRun}
-        hasBatch={!!batchNode}
+        hasBatch={hasBatch}
         batchCount={batchCount}
         onRunBatch={runBatch}
       />
@@ -1460,10 +1030,7 @@ function Studio() {
           {showHistory && (
             <RunHistoryPanel
               history={runHistory}
-              onClear={() => {
-                if (runHistory.length === 0 || window.confirm("Clear all run history?"))
-                  setRunHistory([]);
-              }}
+              onClear={clearHistory}
               onClose={() => setShowHistory(false)}
               onSelectNode={focusNode}
             />
@@ -1492,7 +1059,7 @@ function Studio() {
             {showLog && (
               <RunLog
                 entries={runLog}
-                onClear={() => setRunLog([])}
+                onClear={clearLog}
                 onClose={() => setShowLog(false)}
                 onExport={exportLog}
                 onSelectNode={focusNode}

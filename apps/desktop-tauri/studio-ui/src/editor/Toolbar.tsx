@@ -63,7 +63,7 @@ export interface ToolbarProps {
 
   // Run
   running: boolean;
-  currentRunId: string | null;
+  canCancel: boolean;
   onRun: () => void;
   onCancelRun: () => void;
   hasBatch: boolean;
@@ -118,7 +118,7 @@ export function Toolbar({
   showMinimap,
   setShowMinimap,
   running,
-  currentRunId,
+  canCancel,
   onRun,
   onCancelRun,
   hasBatch,
@@ -215,7 +215,7 @@ export function Toolbar({
       <button className="primary" onClick={onRun} disabled={running || issues.length > 0} title={t("btn.runTitle")}>
         {running ? t("btn.running") : t("btn.run")}
       </button>
-      {running && currentRunId && (
+      {canCancel && (
         <button onClick={onCancelRun} title={t("btn.cancelTitle")}>
           {t("btn.cancel")}
         </button>

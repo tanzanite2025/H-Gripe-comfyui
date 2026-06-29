@@ -1252,6 +1252,24 @@ fn studio_normalize_workflow_name(name: &str) -> Result<String, String> {
     })
 }
 
+/// Reject a user-supplied base file name that could escape the directory it is
+/// later joined onto (path separators, or a `.`/`..` component). Used for
+/// export targets where a downstream helper does `directory / name`, so an
+/// untrusted workflow cannot redirect the write outside the chosen folder.
+fn studio_reject_unsafe_basename(name: &str) -> Result<(), String> {
+    let trimmed = name.trim();
+    if trimmed.is_empty() {
+        return Err("filename is empty".to_string());
+    }
+    if trimmed.contains('/') || trimmed.contains('\\') {
+        return Err("filename must not contain path separators".to_string());
+    }
+    if trimmed == "." || trimmed == ".." {
+        return Err("filename is not a valid name".to_string());
+    }
+    Ok(())
+}
+
 /// Find an unused `"{stem} copy[.N].json"` path next to a source workflow.
 fn studio_unique_copy_path(parent: &Path, stem: &str) -> Result<PathBuf, String> {
     let first = parent.join(format!("{stem} copy.json"));
@@ -1947,6 +1965,12 @@ fn compose_psd(
         ));
     }
 
+    // The helper joins `filename` onto `output_dir` (`directory / f"{base}.psd"`),
+    // so a name with path separators or `..` could write outside the chosen
+    // folder. Validate it here before handing the value to the CLI.
+    let filename = filename.as_deref().unwrap_or("final");
+    studio_reject_unsafe_basename(filename)?;
+
     let mut cmd = std::process::Command::new(&python);
     cmd.arg(&script)
         .arg("--template")
@@ -1956,7 +1980,7 @@ fn compose_psd(
         .arg("--output-dir")
         .arg(&output_dir)
         .arg("--filename")
-        .arg(filename.as_deref().unwrap_or("final"))
+        .arg(filename)
         .arg("--placeholder")
         .arg(placeholder.as_deref().unwrap_or("{}"))
         .arg("--fit-mode")
@@ -2134,4 +2158,28 @@ fn main() {
         ])
         .run(tauri::generate_context!())
         .expect("error while running H-Gripe Desktop");
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn reject_unsafe_basename_accepts_plain_names() {
+        assert!(studio_reject_unsafe_basename("final").is_ok());
+        assert!(studio_reject_unsafe_basename("  result  ").is_ok());
+        assert!(studio_reject_unsafe_basename("my.output").is_ok());
+    }
+
+    #[test]
+    fn reject_unsafe_basename_rejects_traversal_and_separators() {
+        assert!(studio_reject_unsafe_basename("").is_err());
+        assert!(studio_reject_unsafe_basename("   ").is_err());
+        assert!(studio_reject_unsafe_basename(".").is_err());
+        assert!(studio_reject_unsafe_basename("..").is_err());
+        assert!(studio_reject_unsafe_basename("../evil").is_err());
+        assert!(studio_reject_unsafe_basename("..\\evil").is_err());
+        assert!(studio_reject_unsafe_basename("sub/dir").is_err());
+        assert!(studio_reject_unsafe_basename("/etc/passwd").is_err());
+    }
 }

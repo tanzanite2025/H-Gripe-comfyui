@@ -1,0 +1,60 @@
+name: CI
+
+on: [push, pull_request]
+
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  studio-ui:
+    name: studio-ui (test + build)
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: apps/desktop-tauri/studio-ui
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: 'npm'
+          cache-dependency-path: apps/desktop-tauri/studio-ui/package-lock.json
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Test
+        run: npm test
+
+      - name: Build (tsc + vite)
+        run: npm run build
+
+  tauri-rust:
+    name: tauri (cargo test)
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: 'npm'
+          cache-dependency-path: apps/desktop-tauri/studio-ui/package-lock.json
+
+      # The Tauri build script embeds the frontend at compile time, so the
+      # studio-ui bundle (apps/desktop-tauri/dist) must exist before cargo test.
+      - name: Build frontend
+        working-directory: apps/desktop-tauri
+        run: npm --prefix studio-ui ci && npm --prefix studio-ui run build
+
+      - uses: dtolnay/rust-toolchain@stable
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: apps/desktop-tauri/src-tauri
+
+      - name: cargo test
+        working-directory: apps/desktop-tauri/src-tauri
+        run: cargo test

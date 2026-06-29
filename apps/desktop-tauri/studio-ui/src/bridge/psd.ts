@@ -67,6 +67,8 @@ export interface ComposePsdRequest {
   template: string;
   /** Path to the generated image to place into the placeholder. */
   image: string;
+  /** Optional matte (e.g. Mask Edge Refine's `refined_mask`) applied as the image's alpha. */
+  mask?: string;
   /** Directory the exported files are written to. */
   outputDir: string;
   /** Base name for the exported triplet (default `final`). */
@@ -114,6 +116,7 @@ export async function composePsd(req: ComposePsdRequest): Promise<ComposePsdResu
   return (await invoke("compose_psd", {
     template: req.template,
     image: req.image,
+    mask: req.mask ?? null,
     outputDir: req.outputDir,
     filename: req.filename ?? null,
     placeholder: req.placeholder ?? null,

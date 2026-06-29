@@ -1,0 +1,17 @@
+{
+  "name": "hgripe-shell-ui",
+  "private": true,
+  "version": "0.0.0",
+  "type": "module",
+  "description": "H-Gripe Desktop shell UI (Dashboard / Credentials / Profiles / Run / History / PSD / Advanced Canvas). Dependency-free TypeScript built with Vite into the Tauri frontendDist (../dist).",
+  "scripts": {
+    "dev": "vite",
+    "build": "tsc -b && vite build",
+    "preview": "vite preview",
+    "typecheck": "tsc -b --noEmit"
+  },
+  "devDependencies": {
+    "typescript": "5.6.3",
+    "vite": "5.4.21"
+  }
+}

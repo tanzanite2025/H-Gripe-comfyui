@@ -5,5 +5,11 @@ src-tauri/target/
 # Node (frontend tooling, if added later)
 node_modules/
 
+# Generated shell build (shell-ui -> served as frontendDist ../dist). The
+# desktop shell is now a Vite + TypeScript app under shell-ui/; its build output
+# (index.html + assets) is produced by the Tauri before* hooks, not committed.
+dist/index.html
+dist/assets/
+
 # Generated node-editor build (studio-ui -> served at dist/studio)
 dist/studio/

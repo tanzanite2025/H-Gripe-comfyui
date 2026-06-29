@@ -290,3 +290,42 @@ describe("psdContextAnalyze source", () => {
     ).rejects.toThrow(/PSD template/);
   });
 });
+
+describe("matchLightColor", () => {
+  // Outside Tauri, matchLightColor returns a mocked ColorMatchResult, so we can
+  // assert how the executor flattens it onto the node's output ports.
+  it("matches a connected image and exposes the flat output ports", async () => {
+    const out = (await defaultExecutors.matchLightColor(
+      ctx(
+        "matchLightColor",
+        { mode: "color_transfer", strength: 0.7, output_dir: "/out", output_name: "hero" },
+        { image: "/subject.png", background: "/bg.png" },
+      ),
+    )) as Record<string, unknown>;
+    expect(out.matched_image).toBe("/out/hero.png");
+    expect(typeof out.prompt_suffix).toBe("string");
+    const report = out.match_report as { applied: boolean; mode: string; strength: number };
+    expect(report.applied).toBe(true);
+    expect(report.mode).toBe("color_transfer");
+    expect(report.strength).toBe(0.7);
+  });
+
+  it("prefers the upstream visual_context prompt suffix", async () => {
+    const out = (await defaultExecutors.matchLightColor(
+      ctx(
+        "matchLightColor",
+        { mode: "prompt_only" },
+        { image: "/subject.png", visual_context: { prompt_suffix: "studio rim light, 6000k" } },
+      ),
+    )) as Record<string, unknown>;
+    expect(out.prompt_suffix).toBe("studio rim light, 6000k");
+    // prompt_only does not touch pixels.
+    expect((out.match_report as { applied: boolean }).applied).toBe(false);
+  });
+
+  it("requires a connected image input", async () => {
+    await expect(
+      defaultExecutors.matchLightColor(ctx("matchLightColor", {})),
+    ).rejects.toThrow(/connected image/);
+  });
+});

@@ -395,3 +395,159 @@ pub(crate) fn analyze_psd_context(
         )
     })
 }
+
+/// Mean colour / colour temperature / contrast of the corrected region, before
+/// or after matching. Mirrors the Python bridge's `_appearance`.
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub(crate) struct ColorAppearance {
+    #[serde(default)]
+    pub(crate) mean_color: [u8; 3],
+    #[serde(default)]
+    pub(crate) color_temperature: u32,
+    #[serde(default)]
+    pub(crate) contrast: f64,
+}
+
+/// What `match_light_color` did: the mode/parameters, before/after appearance,
+/// and (for the transfer modes) the Lab statistics it matched against. Fields
+/// are `snake_case` to match the `color_match_cli.py` JSON.
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub(crate) struct MatchReport {
+    #[serde(default)]
+    pub(crate) mode: String,
+    #[serde(default)]
+    pub(crate) strength: f64,
+    #[serde(default)]
+    pub(crate) shadow_strength: f64,
+    #[serde(default)]
+    pub(crate) highlight_strength: f64,
+    #[serde(default)]
+    pub(crate) protect_saturation: bool,
+    #[serde(default)]
+    pub(crate) protect_brand_color: bool,
+    /// `false` for `prompt_only`, zero strength, or no background reference.
+    #[serde(default)]
+    pub(crate) applied: bool,
+    #[serde(default)]
+    pub(crate) before: ColorAppearance,
+    #[serde(default)]
+    pub(crate) after: ColorAppearance,
+    /// Lab mean/std used by the transfer (absent for `histogram_match`).
+    #[serde(default)]
+    pub(crate) src_mean_lab: Option<Vec<f64>>,
+    #[serde(default)]
+    pub(crate) dst_mean_lab: Option<Vec<f64>>,
+    #[serde(default)]
+    pub(crate) src_std_lab: Option<Vec<f64>>,
+    #[serde(default)]
+    pub(crate) dst_std_lab: Option<Vec<f64>>,
+    /// Set when the subject was passed through unchanged for a notable reason.
+    #[serde(default)]
+    pub(crate) note: Option<String>,
+    /// `[width, height]` of the written image.
+    #[serde(default)]
+    pub(crate) output_size: Option<[i64; 2]>,
+}
+
+/// Result of the **Light & Color Match** node: the written matched image, a
+/// prompt suffix (for prompt-side alignment), and the [`MatchReport`].
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub(crate) struct ColorMatchResult {
+    #[serde(default)]
+    pub(crate) matched_image: String,
+    #[serde(default)]
+    pub(crate) prompt_suffix: String,
+    #[serde(default)]
+    pub(crate) match_report: MatchReport,
+}
+
+/// Match a generated subject image's light & colour toward a PSD background so
+/// the composite stops looking pasted-on. This is the **Light & Color Match**
+/// node's backend (the second PSD production node): it consumes the upstream
+/// image, the background preview, and optionally the [`VisualContext`] from PSD
+/// Context Analyze.
+///
+/// Like the other PSD commands it shells out to `python/bridge/color_match_cli.py`
+/// using the project's bundled Python (Pillow + numpy, no OpenCV in Phase 1).
+/// `mode` is `prompt_only | color_transfer | histogram_match | hybrid`; the
+/// correction is weighted toward shadows/highlights and (when
+/// `protect_brand_color`) spares high-chroma pixels. `context` is the
+/// serialized `VisualContext` JSON used for the prompt suffix.
+#[tauri::command]
+#[allow(clippy::too_many_arguments)]
+pub(crate) fn match_light_color(
+    dir: Option<String>,
+    image: String,
+    background: Option<String>,
+    mask: Option<String>,
+    context: Option<String>,
+    mode: Option<String>,
+    strength: Option<f64>,
+    shadow_strength: Option<f64>,
+    highlight_strength: Option<f64>,
+    protect_saturation: Option<bool>,
+    protect_brand_color: Option<bool>,
+    output_dir: Option<String>,
+    output_name: Option<String>,
+) -> Result<ColorMatchResult, String> {
+    let dir = resolve_project_dir(&dir)?;
+    let python = project_python(&dir);
+    let script = dir.join("python").join("bridge").join("color_match_cli.py");
+    if !script.is_file() {
+        return Err(format!(
+            "color_match_cli.py not found at {}",
+            script.display()
+        ));
+    }
+
+    let mut cmd = std::process::Command::new(&python);
+    cmd.arg(&script)
+        .arg("--image")
+        .arg(&image)
+        .arg("--background")
+        .arg(background.as_deref().unwrap_or(""))
+        .arg("--mask")
+        .arg(mask.as_deref().unwrap_or(""))
+        .arg("--context")
+        .arg(context.as_deref().unwrap_or(""))
+        .arg("--mode")
+        .arg(mode.as_deref().unwrap_or("color_transfer"))
+        .arg("--strength")
+        .arg(strength.unwrap_or(0.6).to_string())
+        .arg("--shadow-strength")
+        .arg(shadow_strength.unwrap_or(0.0).to_string())
+        .arg("--highlight-strength")
+        .arg(highlight_strength.unwrap_or(0.0).to_string())
+        .arg("--output-dir")
+        .arg(output_dir.as_deref().unwrap_or(""))
+        .arg("--output-name")
+        .arg(output_name.as_deref().unwrap_or(""))
+        .current_dir(&dir);
+    if protect_saturation.unwrap_or(false) {
+        cmd.arg("--protect-saturation");
+    }
+    if protect_brand_color.unwrap_or(false) {
+        cmd.arg("--protect-brand-color");
+    }
+    #[cfg(windows)]
+    {
+        use std::os::windows::process::CommandExt;
+        // CREATE_NO_WINDOW: don't pop a console window for the child.
+        cmd.creation_flags(0x0800_0000);
+    }
+
+    let output = cmd
+        .output()
+        .map_err(|err| format!("failed to launch {}: {err}", python.display()))?;
+    if !output.status.success() {
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        return Err(format!("match_light_color failed: {}", stderr.trim()));
+    }
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    serde_json::from_str::<ColorMatchResult>(stdout.trim()).map_err(|err| {
+        format!(
+            "could not parse match_light_color output: {err} (raw: {})",
+            stdout.trim()
+        )
+    })
+}

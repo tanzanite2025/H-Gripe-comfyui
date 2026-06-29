@@ -2,6 +2,7 @@
 //! - [`graph`]: the workflow graph schema + shared value-coercion helpers.
 //! - [`exec`]: the topological execution engine, run events, and cancellation.
 //! - [`psd_analyze`]: the `psdContextAnalyze` node executor (PSD context bridge).
+//! - [`color_match`]: the `matchLightColor` node executor (light/colour match).
 //! - [`psd_export`]: the `psdExport` node executor (PSD composition bridge).
 //! - [`persist`]: on-disk autosave, workflow files, recents, and pickers.
 //! - [`history`]: project-scoped snapshot / run-history JSON stores.
@@ -9,6 +10,7 @@
 //! The Tauri commands keep their original `crate::studio::*` paths via the
 //! re-exports below, so `main.rs`'s `invoke_handler` registration is unchanged.
 
+mod color_match;
 mod exec;
 mod graph;
 mod history;

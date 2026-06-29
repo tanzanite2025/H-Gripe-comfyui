@@ -1,5 +1,0 @@
-# psd-tools is vendored under third_party/psd_tools (see third_party/psd_tools/VENDOR.md).
-# Only its runtime dependencies are installed here; Pillow and numpy come from the
-# upstream ComfyUI requirements.
-attrs>=23.0.0
-typing-extensions>=4.0

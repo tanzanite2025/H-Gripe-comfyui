@@ -53,11 +53,21 @@ in [`studio-ui/`](studio-ui/) whose build output is served at `dist/studio/`
 embedded editor can call backend commands (e.g. `run_task_json`,
 `generate_thumbnail`).
 
-> **Security TODO (before release):** `tauri.conf.json` currently sets
-> `app.security.csp` to `null`, which disables CSP for development. Before
-> shipping, tighten it to an explicit policy that still allows the embedded
-> ComfyUI iframe (e.g. `frame-src` for the local ComfyUI origin) and Tauri's
-> IPC, then validate the embed still loads with a release build.
+> **Security (CSP):** `tauri.conf.json` now sets an explicit
+> `app.security.csp` instead of `null`. It keeps `default-src 'self'` while
+> allowing what the shell actually needs: `style-src 'unsafe-inline'` (React /
+> React Flow inject styles), `img-src data: blob:` (thumbnails are read back as
+> data URLs), `connect-src ipc: http://ipc.localhost` (Tauri IPC), and
+> `frame-src` for the embedded **Node Editor** (same origin) and **Advanced
+> Canvas** ComfyUI iframe on loopback (`http://127.0.0.1:*`/`http://localhost:*`,
+> so a user-chosen port still embeds). All dynamic data spliced into the shell's
+> `innerHTML` is HTML-escaped (`esc()` in `dist/app.js`).
+>
+> **Still to validate before release:** confirm with a **release build** that
+> both iframes load and IPC works under this CSP (the dev box used to author it
+> has no Rust toolchain, so this was not run locally). If a future feature needs
+> a remote origin (web fonts, a hosted asset), widen the matching directive
+> rather than reverting to `null`.
 
 ## Prerequisites (Windows)
 

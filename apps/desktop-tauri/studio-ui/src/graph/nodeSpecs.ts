@@ -27,6 +27,12 @@ export interface ParamSpec {
   hint?: string;
   /** Render this param directly on the node card (not just the inspector). */
   inline?: boolean;
+  /**
+   * Only show this param in the inspector when a sibling param's current value
+   * is one of `in`. Lets a node hide irrelevant controls (e.g. show API fields
+   * only when `mode === "api"`).
+   */
+  visibleWhen?: { param: string; in: string[] };
   /** For `path` controls: native file-picker extension filter. */
   pickerFilterName?: string;
   pickerExtensions?: string[];
@@ -99,6 +105,7 @@ export const NODE_SPECS: Record<string, NodeSpec> = {
         options: ["cleanup", "photographic", "anime", "cinematic", "detailed"],
         defaultValue: "cleanup",
         hint: "used by `local` mode: dedupe + append booster tags",
+        visibleWhen: { param: "mode", in: ["local"] },
       },
       {
         key: "provider",
@@ -106,6 +113,7 @@ export const NODE_SPECS: Record<string, NodeSpec> = {
         control: "text",
         defaultValue: "openai_compatible",
         hint: "used by `api` mode (set automatically when you pick a profile)",
+        visibleWhen: { param: "mode", in: ["api"] },
       },
       {
         key: "model",
@@ -113,6 +121,7 @@ export const NODE_SPECS: Record<string, NodeSpec> = {
         control: "text",
         defaultValue: "",
         hint: "used by `api` mode",
+        visibleWhen: { param: "mode", in: ["api"] },
       },
       {
         key: "instruction",
@@ -121,6 +130,7 @@ export const NODE_SPECS: Record<string, NodeSpec> = {
         defaultValue:
           "Rewrite the text below into a single high-quality English image-generation prompt. Keep the original intent, add useful visual detail, and output only the prompt.",
         hint: "used by `api` mode (sent as the system prompt)",
+        visibleWhen: { param: "mode", in: ["api"] },
       },
       {
         key: "credentials_ref",
@@ -128,6 +138,7 @@ export const NODE_SPECS: Record<string, NodeSpec> = {
         control: "text",
         defaultValue: "",
         hint: "used by `api` mode (set automatically when you pick a profile)",
+        visibleWhen: { param: "mode", in: ["api"] },
       },
     ],
   },

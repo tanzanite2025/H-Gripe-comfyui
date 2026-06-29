@@ -8,7 +8,8 @@ use std::path::Path;
 use serde::{Deserialize, Serialize};
 
 use crate::comfy::{comfy_python, resolve_comfy_dir};
-use crate::{modified_ms, studio_reject_unsafe_basename};
+use crate::modified_ms;
+use crate::studio::studio_reject_unsafe_basename;
 
 #[derive(Serialize)]
 pub(crate) struct PsdOutputFile {

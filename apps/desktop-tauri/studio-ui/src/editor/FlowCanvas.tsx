@@ -18,6 +18,7 @@ import "@xyflow/react/dist/style.css";
 
 import { HgripeNode } from "./HgripeNode";
 import { GroupNode } from "./GroupNode";
+import { HelperLines } from "./HelperLines";
 import { DND_NODE_KIND } from "./Palette";
 import { nodeSpec } from "../graph/nodeSpecs";
 import { arePortsCompatible } from "../graph/model";
@@ -37,7 +38,13 @@ interface FlowCanvasProps {
   onBeforeConnect?: () => void;
   /** Called after a node finishes dragging, so the host can (re)assign groups. */
   onNodeDragStop?: (node: Node) => void;
+  /** Snap node positions to a grid while dragging. */
+  snapToGrid?: boolean;
+  /** Alignment guide lines (flow-space coords) to draw, if any. */
+  helperLines?: { horizontal?: number; vertical?: number };
 }
+
+const SNAP_GRID: [number, number] = [16, 16];
 
 export function FlowCanvas({
   nodes,
@@ -49,6 +56,8 @@ export function FlowCanvas({
   onAddNode,
   onBeforeConnect,
   onNodeDragStop,
+  snapToGrid = false,
+  helperLines,
 }: FlowCanvasProps) {
   // Declared once so React does not re-create the map each render.
   const nodeTypes = useMemo(() => ({ hgripe: HgripeNode, group: GroupNode }), []);
@@ -113,6 +122,8 @@ export function FlowCanvas({
       onEdgesChange={onEdgesChange}
       onConnect={onConnect}
       onNodeDragStop={(_, node) => onNodeDragStop?.(node)}
+      snapToGrid={snapToGrid}
+      snapGrid={SNAP_GRID}
       isValidConnection={isValidConnection}
       onSelectionChange={({ nodes: sel }) => onSelect(sel[0]?.id ?? null)}
       onDragOver={onDragOver}
@@ -124,6 +135,7 @@ export function FlowCanvas({
       <Background />
       <MiniMap pannable zoomable />
       <Controls />
+      <HelperLines horizontal={helperLines?.horizontal} vertical={helperLines?.vertical} />
     </ReactFlow>
   );
 }

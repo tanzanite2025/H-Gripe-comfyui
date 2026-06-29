@@ -46,12 +46,23 @@ export function Inspector({ node, onParamChange }: InspectorProps) {
 
   const spec = nodeSpec(data.kind);
 
+  // A param can declare `visibleWhen` to hide itself unless a sibling param has
+  // one of the listed values (e.g. show API fields only when mode === "api").
+  const isVisible = (p: (typeof spec.params)[number]) =>
+    !p.visibleWhen || p.visibleWhen.in.includes(String(data.params[p.visibleWhen.param] ?? ""));
+
+  // The profile picker only makes sense where API credentials are used: always
+  // for `generate`, and for `promptOptimize` only in its `api` mode.
+  const showProfilePicker =
+    spec.kind === "generate" ||
+    (spec.kind === "promptOptimize" && String(data.params.mode ?? "") === "api");
+
   return (
     <aside className="inspector">
       <h2>{spec.title}</h2>
       <p className="muted">{spec.description}</p>
 
-      {(spec.kind === "generate" || spec.kind === "promptOptimize") && (
+      {showProfilePicker && (
         <ProfilePicker
           onApply={(profile) => {
             if (profile.provider) onParamChange(node.id, "provider", profile.provider);
@@ -61,7 +72,7 @@ export function Inspector({ node, onParamChange }: InspectorProps) {
         />
       )}
 
-      {spec.params.map((p) => {
+      {spec.params.filter(isVisible).map((p) => {
         const raw = data.params[p.key];
         const onChange = (v: unknown) => onParamChange(node.id, p.key, v);
         return (

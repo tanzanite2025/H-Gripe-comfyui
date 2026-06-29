@@ -91,3 +91,32 @@ pub(super) fn execute_studio_image_enhance(
         ("enhance_report", report),
     ]))
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn node() -> StudioGraphNode {
+        StudioGraphNode {
+            id: "n1".to_string(),
+            kind: "imageEnhance".to_string(),
+            params: BTreeMap::new(),
+        }
+    }
+
+    #[test]
+    fn rejects_missing_image_input() {
+        // No connected `image` input: must fail fast before shelling out to the
+        // python bridge, with a clear message.
+        let err = execute_studio_image_enhance(&node(), &BTreeMap::new()).unwrap_err();
+        assert!(err.contains("connected image input"), "{err}");
+    }
+
+    #[test]
+    fn blank_image_input_is_rejected() {
+        let mut inputs = BTreeMap::new();
+        inputs.insert("image".to_string(), json!("   "));
+        let err = execute_studio_image_enhance(&node(), &inputs).unwrap_err();
+        assert!(err.contains("connected image input"), "{err}");
+    }
+}

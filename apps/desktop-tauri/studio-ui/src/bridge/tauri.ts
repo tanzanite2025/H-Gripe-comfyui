@@ -235,6 +235,27 @@ export async function listStudioWorkflows(dir: string): Promise<StudioWorkflowFi
   return (await invoke("list_studio_workflows", { dir })) as StudioWorkflowFile[];
 }
 
+/** Rename a workflow file within its folder; resolves to the new path. */
+export async function renameStudioWorkflow(path: string, newName: string): Promise<string> {
+  const invoke = tauriInvoke();
+  if (!invoke) throw new Error("workflow files require the desktop backend");
+  return (await invoke("rename_studio_workflow", { path, newName })) as string;
+}
+
+/** Delete a workflow file from disk. */
+export async function deleteStudioWorkflow(path: string): Promise<void> {
+  const invoke = tauriInvoke();
+  if (!invoke) throw new Error("workflow files require the desktop backend");
+  await invoke("delete_studio_workflow", { path });
+}
+
+/** Duplicate a workflow file; resolves to the new copy's path. */
+export async function duplicateStudioWorkflow(path: string): Promise<string> {
+  const invoke = tauriInvoke();
+  if (!invoke) throw new Error("workflow files require the desktop backend");
+  return (await invoke("duplicate_studio_workflow", { path })) as string;
+}
+
 // Fields are snake_case to match the Rust `StudioRecents` serialization.
 export interface StudioRecents {
   project_dir?: string | null;

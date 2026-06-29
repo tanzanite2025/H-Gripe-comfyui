@@ -30,6 +30,11 @@ export interface ProjectPanelProps {
   onRefresh: () => void;
   onOpenFile: (path: string) => void;
   onNew: () => void;
+  /** Create a new empty workflow saved directly into the project folder. */
+  onNewInFolder: () => void;
+  onRenameFile: (path: string) => void;
+  onDuplicateFile: (path: string) => void;
+  onDeleteFile: (path: string) => void;
 }
 
 /**
@@ -47,6 +52,10 @@ export function ProjectPanel({
   onRefresh,
   onOpenFile,
   onNew,
+  onNewInFolder,
+  onRenameFile,
+  onDuplicateFile,
+  onDeleteFile,
 }: ProjectPanelProps) {
   return (
     <aside className="project-panel">
@@ -78,20 +87,58 @@ export function ProjectPanel({
           <div className="project-path" title={projectDir}>
             {projectDir}
           </div>
+          <button
+            className="project-newfile"
+            onClick={onNewInFolder}
+            disabled={busy}
+            title="create a new workflow file in this folder"
+          >
+            + New file…
+          </button>
           <div className="project-list">
             {files.length === 0 ? (
               <p className="project-empty">{busy ? "scanning…" : "no workflows here yet"}</p>
             ) : (
               files.map((f) => (
-                <button
+                <div
                   key={f.path}
-                  className={`project-item${f.path === currentFile ? " active" : ""}`}
-                  onClick={() => onOpenFile(f.path)}
-                  title={`${f.path}\n${formatModified(f.modified_ms)}`}
+                  className={`project-row${f.path === currentFile ? " active" : ""}`}
                 >
-                  <span className="project-item-name">{f.name}</span>
-                  <span className="project-item-meta">{formatModified(f.modified_ms)}</span>
-                </button>
+                  <button
+                    className="project-item"
+                    onClick={() => onOpenFile(f.path)}
+                    title={`${f.path}\n${formatModified(f.modified_ms)}`}
+                  >
+                    <span className="project-item-name">{f.name}</span>
+                    <span className="project-item-meta">{formatModified(f.modified_ms)}</span>
+                  </button>
+                  <div className="project-actions">
+                    <button
+                      onClick={() => onRenameFile(f.path)}
+                      disabled={busy}
+                      title="rename"
+                      aria-label={`rename ${f.name}`}
+                    >
+                      ✎
+                    </button>
+                    <button
+                      onClick={() => onDuplicateFile(f.path)}
+                      disabled={busy}
+                      title="duplicate"
+                      aria-label={`duplicate ${f.name}`}
+                    >
+                      ⧉
+                    </button>
+                    <button
+                      onClick={() => onDeleteFile(f.path)}
+                      disabled={busy}
+                      title="delete"
+                      aria-label={`delete ${f.name}`}
+                    >
+                      ✕
+                    </button>
+                  </div>
+                </div>
               ))
             )}
           </div>

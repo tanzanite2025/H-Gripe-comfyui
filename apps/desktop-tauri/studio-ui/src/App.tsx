@@ -40,6 +40,8 @@ import {
   cancelStudioRun,
   clearStudioAutosave,
   createStudioRunId,
+  deleteStudioWorkflow,
+  duplicateStudioWorkflow,
   isTauri,
   listStudioWorkflows,
   pickProjectFolder,
@@ -48,6 +50,7 @@ import {
   readStudioAutosave,
   readStudioRecents,
   readStudioWorkflow,
+  renameStudioWorkflow,
   runStudioGraph,
   writeStudioAutosave,
   writeStudioRecents,
@@ -785,6 +788,82 @@ function Studio() {
     }
   }, [projectDir, refreshProjectFiles]);
 
+  // Create a new, empty workflow saved straight into the active project folder.
+  const handleNewInFolder = useCallback(async () => {
+    if (!projectDir) return;
+    if (!confirmDiscard("New file")) return;
+    const input = window.prompt("New workflow file name", "workflow.json");
+    if (!input) return;
+    const trimmed = input.trim();
+    if (!trimmed) return;
+    const fileName = /\.json$/i.test(trimmed) ? trimmed : `${trimmed}.json`;
+    const sep = projectDir.includes("\\") ? "\\" : "/";
+    const target = `${projectDir.replace(/[\\/]$/, "")}${sep}${fileName}`;
+    try {
+      await writeStudioWorkflow(target, toWorkflowGraph([], []));
+      skipDirty.current = true;
+      setNodes([]);
+      setEdges([]);
+      setSelectedId(null);
+      setCurrentFile(target);
+      setFileDirty(false);
+      rememberFile(target);
+      void refreshProjectFiles(projectDir);
+      setMessage(`created ${fileName}`);
+    } catch (err) {
+      setMessage(`create failed: ${String(err)}`);
+    }
+  }, [projectDir, confirmDiscard, setNodes, setEdges, rememberFile, refreshProjectFiles]);
+
+  const handleRenameFile = useCallback(
+    async (path: string) => {
+      const current = baseName(path);
+      const input = window.prompt("Rename workflow", current);
+      if (!input) return;
+      const next = input.trim();
+      if (!next || next === current) return;
+      try {
+        const newPath = await renameStudioWorkflow(path, next);
+        setCurrentFile((cur) => (cur === path ? newPath : cur));
+        setRecentFiles((prev) => prev.map((p) => (p === path ? newPath : p)));
+        if (projectDir) void refreshProjectFiles(projectDir);
+        setMessage(`renamed to ${baseName(newPath)}`);
+      } catch (err) {
+        setMessage(`rename failed: ${String(err)}`);
+      }
+    },
+    [projectDir, refreshProjectFiles],
+  );
+
+  const handleDuplicateFile = useCallback(
+    async (path: string) => {
+      try {
+        const newPath = await duplicateStudioWorkflow(path);
+        if (projectDir) void refreshProjectFiles(projectDir);
+        setMessage(`duplicated to ${baseName(newPath)}`);
+      } catch (err) {
+        setMessage(`duplicate failed: ${String(err)}`);
+      }
+    },
+    [projectDir, refreshProjectFiles],
+  );
+
+  const handleDeleteFile = useCallback(
+    async (path: string) => {
+      if (!window.confirm(`Delete ${baseName(path)}? This cannot be undone.`)) return;
+      try {
+        await deleteStudioWorkflow(path);
+        setCurrentFile((cur) => (cur === path ? null : cur));
+        setRecentFiles((prev) => prev.filter((p) => p !== path));
+        if (projectDir) void refreshProjectFiles(projectDir);
+        setMessage(`deleted ${baseName(path)}`);
+      } catch (err) {
+        setMessage(`delete failed: ${String(err)}`);
+      }
+    },
+    [projectDir, refreshProjectFiles],
+  );
+
   const newWorkflow = useCallback(() => {
     if (!confirmDiscard("New")) return;
     takeSnapshot();
@@ -1060,6 +1139,10 @@ function Studio() {
               onRefresh={() => projectDir && void refreshProjectFiles(projectDir)}
               onOpenFile={(path) => void openFromPath(path)}
               onNew={newWorkflow}
+              onNewInFolder={() => void handleNewInFolder()}
+              onRenameFile={(path) => void handleRenameFile(path)}
+              onDuplicateFile={(path) => void handleDuplicateFile(path)}
+              onDeleteFile={(path) => void handleDeleteFile(path)}
             />
           )}
           <Palette onAdd={addNode} />

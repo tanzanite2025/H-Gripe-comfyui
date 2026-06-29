@@ -16,9 +16,10 @@ import {
 } from "@xyflow/react";
 import "@xyflow/react/dist/style.css";
 
-import { HgripeNode } from "./HgripeNode";
+import { HgripeNode, type HgripeNodeData } from "./HgripeNode";
 import { GroupNode } from "./GroupNode";
 import { HelperLines } from "./HelperLines";
+import { miniMapColor } from "./minimap";
 import { DND_NODE_KIND } from "./Palette";
 import { nodeSpec } from "../graph/nodeSpecs";
 import { arePortsCompatible } from "../graph/model";
@@ -42,6 +43,10 @@ interface FlowCanvasProps {
   snapToGrid?: boolean;
   /** Alignment guide lines (flow-space coords) to draw, if any. */
   helperLines?: { horizontal?: number; vertical?: number };
+  /** Edge rendering style applied to existing + new edges. */
+  edgeType?: "default" | "smoothstep";
+  /** Whether to render the minimap. */
+  showMinimap?: boolean;
 }
 
 const SNAP_GRID: [number, number] = [16, 16];
@@ -58,6 +63,8 @@ export function FlowCanvas({
   onNodeDragStop,
   snapToGrid = false,
   helperLines,
+  edgeType = "default",
+  showMinimap = true,
 }: FlowCanvasProps) {
   // Declared once so React does not re-create the map each render.
   const nodeTypes = useMemo(() => ({ hgripe: HgripeNode, group: GroupNode }), []);
@@ -97,6 +104,16 @@ export function FlowCanvas({
     [setEdges, onBeforeConnect],
   );
 
+  // Minimap fill: run status (progress/failures) over a per-category fallback;
+  // group frames get a neutral tone since they are not catalogue nodes.
+  const miniColor = useCallback((n: Node) => {
+    if (n.type === "group") return "#3a3d47";
+    const data = n.data as HgripeNodeData;
+    return miniMapColor(data.status, nodeSpec(data.kind).category);
+  }, []);
+
+  const defaultEdgeOptions = useMemo(() => ({ type: edgeType }), [edgeType]);
+
   const onDragOver = useCallback((e: React.DragEvent) => {
     e.preventDefault();
     e.dataTransfer.dropEffect = "move";
@@ -121,6 +138,7 @@ export function FlowCanvas({
       onNodesChange={onNodesChange}
       onEdgesChange={onEdgesChange}
       onConnect={onConnect}
+      defaultEdgeOptions={defaultEdgeOptions}
       onNodeDragStop={(_, node) => onNodeDragStop?.(node)}
       snapToGrid={snapToGrid}
       snapGrid={SNAP_GRID}
@@ -133,7 +151,7 @@ export function FlowCanvas({
       fitView
     >
       <Background />
-      <MiniMap pannable zoomable />
+      {showMinimap && <MiniMap pannable zoomable nodeColor={miniColor} nodeStrokeWidth={3} />}
       <Controls />
       <HelperLines horizontal={helperLines?.horizontal} vertical={helperLines?.vertical} />
     </ReactFlow>

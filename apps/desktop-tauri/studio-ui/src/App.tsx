@@ -3,6 +3,7 @@ import {
   ReactFlowProvider,
   useEdgesState,
   useNodesState,
+  useReactFlow,
   type Edge,
   type Node,
   type OnNodesChange,
@@ -25,12 +26,13 @@ import {
   reparentNode,
 } from "./editor/grouping";
 import { getHelperLines } from "./editor/helperLines";
+import { layeredPositions } from "./editor/layout";
 import type { HgripeNodeData } from "./editor/HgripeNode";
 import { fromWorkflowGraph, toWorkflowGraph } from "./editor/adapter";
 import { clearPersistedGraph, loadPersistedGraph, persistGraph } from "./editor/persist";
 import { defaultParams } from "./graph/nodeSpecs";
 import { deserializeGraph, serializeGraph } from "./graph/model";
-import { runGraph, validateGraph, type NodeRunInfo, type NodeStatus } from "./runtime/dag";
+import { runGraph, topoLevels, validateGraph, type NodeRunInfo, type NodeStatus } from "./runtime/dag";
 import { batchItems, defaultExecutors } from "./runtime/executors";
 import { isTauri } from "./bridge/tauri";
 
@@ -66,6 +68,9 @@ function Studio() {
   const [running, setRunning] = useState(false);
   const [snapToGrid, setSnapToGrid] = useState(false);
   const [helperLines, setHelperLines] = useState<{ horizontal?: number; vertical?: number }>({});
+  const [edgeType, setEdgeType] = useState<"default" | "smoothstep">("default");
+  const [showMinimap, setShowMinimap] = useState(true);
+  const { fitView } = useReactFlow();
   const [saved, setSaved] = useState(restoredOnMount.current);
   const [message, setMessage] = useState<string>(
     isTauri()
@@ -313,6 +318,41 @@ function Studio() {
     }
   }, [batchNode, batchCount, nodes, edges, observer, clearRunInfo, applyPreviews]);
 
+  // Switch the rendering style of all edges (and future ones).
+  const changeEdgeType = useCallback(
+    (t: "default" | "smoothstep") => {
+      setEdgeType(t);
+      setEdges((es) => es.map((e) => ({ ...e, type: t })));
+    },
+    [setEdges],
+  );
+
+  // Tidy layout: arrange nodes on a grid by DAG depth. Grouped nodes (and group
+  // frames) keep their positions so containers are not torn apart.
+  const tidyLayout = useCallback(() => {
+    const graph = toWorkflowGraph(nodes, edges);
+    let levels: string[][];
+    try {
+      levels = topoLevels(graph);
+    } catch {
+      setMessage("无法整理：图中存在环");
+      return;
+    }
+    const movable = new Set(
+      nodes.filter((n) => !isGroupNode(n) && !n.parentId).map((n) => n.id),
+    );
+    const positions = layeredPositions(levels.map((level) => level.filter((id) => movable.has(id))));
+    if (positions.size === 0) {
+      setMessage("没有可整理的节点");
+      return;
+    }
+    takeSnapshot();
+    setNodes((ns) => ns.map((n) => (positions.has(n.id) ? { ...n, position: positions.get(n.id)! } : n)));
+    setMessage("已整理布局");
+    // Re-center after React Flow applies the new positions.
+    setTimeout(() => fitView({ padding: 0.2, duration: 300 }), 0);
+  }, [nodes, edges, setNodes, takeSnapshot, fitView]);
+
   const save = useCallback(() => {
     const json = serializeGraph(toWorkflowGraph(nodes, edges));
     const blob = new Blob([json], { type: "application/json" });
@@ -438,6 +478,23 @@ function Studio() {
           <input type="checkbox" checked={snapToGrid} onChange={(e) => setSnapToGrid(e.target.checked)} />
           Snap
         </label>
+        <button onClick={tidyLayout} title="arrange nodes on a grid by DAG depth">
+          Tidy
+        </button>
+        <label className="snap-toggle" title="edge rendering style">
+          Edges
+          <select
+            value={edgeType}
+            onChange={(e) => changeEdgeType(e.target.value as "default" | "smoothstep")}
+          >
+            <option value="default">curved</option>
+            <option value="smoothstep">orthogonal</option>
+          </select>
+        </label>
+        <label className="snap-toggle" title="toggle the minimap">
+          <input type="checkbox" checked={showMinimap} onChange={(e) => setShowMinimap(e.target.checked)} />
+          Map
+        </label>
         <button className="primary" onClick={run} disabled={running || issues.length > 0}>
           {running ? "Running…" : "Run"}
         </button>
@@ -480,6 +537,8 @@ function Studio() {
               onNodeDragStop={handleNodeDragStop}
               snapToGrid={snapToGrid}
               helperLines={helperLines}
+              edgeType={edgeType}
+              showMinimap={showMinimap}
             />
           </div>
           <Inspector node={selectedNode} onParamChange={onParamChange} />

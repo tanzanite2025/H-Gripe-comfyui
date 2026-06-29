@@ -1230,6 +1230,98 @@ fn write_studio_recents(recents: StudioRecents) -> Result<(), String> {
         .map_err(|err| format!("failed to write {}: {err}", path.display()))
 }
 
+/// Normalize a user-supplied workflow file name: reject empties and path
+/// separators, and ensure a `.json` extension.
+fn studio_normalize_workflow_name(name: &str) -> Result<String, String> {
+    let trimmed = name.trim();
+    if trimmed.is_empty() {
+        return Err("name is empty".to_string());
+    }
+    if trimmed.contains('/') || trimmed.contains('\\') {
+        return Err("name must not contain path separators".to_string());
+    }
+    let has_json = Path::new(trimmed)
+        .extension()
+        .and_then(|ext| ext.to_str())
+        .map(|ext| ext.eq_ignore_ascii_case("json"))
+        .unwrap_or(false);
+    Ok(if has_json {
+        trimmed.to_string()
+    } else {
+        format!("{trimmed}.json")
+    })
+}
+
+/// Find an unused `"{stem} copy[.N].json"` path next to a source workflow.
+fn studio_unique_copy_path(parent: &Path, stem: &str) -> Result<PathBuf, String> {
+    let first = parent.join(format!("{stem} copy.json"));
+    if !first.exists() {
+        return Ok(first);
+    }
+    for n in 2..1000 {
+        let candidate = parent.join(format!("{stem} copy {n}.json"));
+        if !candidate.exists() {
+            return Ok(candidate);
+        }
+    }
+    Err("too many copies of this workflow".to_string())
+}
+
+/// Rename a workflow file within its folder; returns the new path.
+#[tauri::command]
+fn rename_studio_workflow(path: String, new_name: String) -> Result<String, String> {
+    let from = Path::new(path.trim());
+    if !studio_is_workflow_file(from) {
+        return Err(format!("not a workflow file: {}", from.display()));
+    }
+    let parent = from
+        .parent()
+        .filter(|p| !p.as_os_str().is_empty())
+        .ok_or_else(|| "file has no parent directory".to_string())?;
+    let file_name = studio_normalize_workflow_name(&new_name)?;
+    let to = parent.join(&file_name);
+    if to == from {
+        return Ok(from.to_string_lossy().to_string());
+    }
+    if to.exists() {
+        return Err(format!("{file_name} already exists"));
+    }
+    fs::rename(from, &to)
+        .map_err(|err| format!("failed to rename {}: {err}", from.display()))?;
+    Ok(to.to_string_lossy().to_string())
+}
+
+/// Delete a workflow file from disk.
+#[tauri::command]
+fn delete_studio_workflow(path: String) -> Result<(), String> {
+    let target = Path::new(path.trim());
+    if !studio_is_workflow_file(target) {
+        return Err(format!("not a workflow file: {}", target.display()));
+    }
+    fs::remove_file(target)
+        .map_err(|err| format!("failed to delete {}: {err}", target.display()))
+}
+
+/// Copy a workflow file to a fresh `"… copy.json"` sibling; returns its path.
+#[tauri::command]
+fn duplicate_studio_workflow(path: String) -> Result<String, String> {
+    let from = Path::new(path.trim());
+    if !studio_is_workflow_file(from) {
+        return Err(format!("not a workflow file: {}", from.display()));
+    }
+    let parent = from
+        .parent()
+        .filter(|p| !p.as_os_str().is_empty())
+        .ok_or_else(|| "file has no parent directory".to_string())?;
+    let stem = from
+        .file_stem()
+        .and_then(|s| s.to_str())
+        .unwrap_or("workflow");
+    let to = studio_unique_copy_path(parent, stem)?;
+    fs::copy(from, &to).map_err(|err| format!("failed to copy {}: {err}", from.display()))?;
+    Ok(to.to_string_lossy().to_string())
+}
+
 #[tauri::command]
 fn cancel_studio_run(
     app: tauri::AppHandle,
@@ -1873,6 +1965,9 @@ fn main() {
             read_studio_workflow,
             write_studio_workflow,
             list_studio_workflows,
+            rename_studio_workflow,
+            delete_studio_workflow,
+            duplicate_studio_workflow,
             read_studio_recents,
             write_studio_recents,
             cancel_studio_run,

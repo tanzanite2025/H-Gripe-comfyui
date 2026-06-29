@@ -65,7 +65,8 @@ effects goes through Tauri/Rust:
 - Explicit workflow save/open and the project folder browser use native
   commands: `pick_workflow_save_path`, `pick_workflow_open_path`,
   `pick_project_folder`, `read_studio_workflow`, `write_studio_workflow`,
-  `list_studio_workflows`, and `read_studio_recents` / `write_studio_recents`
+  `list_studio_workflows`, `rename_studio_workflow`, `delete_studio_workflow`,
+  `duplicate_studio_workflow`, and `read_studio_recents` / `write_studio_recents`
   (which persist the active folder + recent files next to the autosave).
 - Credentials, provider profiles, output directories, history, cache indexes,
   local GPU service startup, and video export should live behind Rust commands.
@@ -122,7 +123,10 @@ video assembly/export.
   **Save As…** when the workflow is untitled); the toolbar shows the current
   file name with a `*` when there are unsaved edits. The **Project** panel
   (left rail) picks a project folder (`pick_project_folder`), lists its workflow
-  files newest-first (`list_studio_workflows`), and reopens recent files. The
+  files newest-first (`list_studio_workflows`), and reopens recent files. Each
+  file row supports rename / duplicate / delete (`rename_studio_workflow`,
+  `duplicate_studio_workflow`, `delete_studio_workflow`), and **+ New file…**
+  creates an empty workflow directly in the folder. The
   active folder + recent files persist between sessions
   (`read_studio_recents` / `write_studio_recents`). In a plain browser there is
   no filesystem, so Save/Save As download `workflow.json` and Open uses the file

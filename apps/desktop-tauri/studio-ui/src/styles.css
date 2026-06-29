@@ -344,6 +344,14 @@ button:disabled { opacity: 0.6; cursor: default; }
 .project-item.active { border-color: var(--accent); background: rgba(91, 140, 255, 0.14); }
 .project-item-name { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; max-width: 100%; }
 .project-item-meta { font-size: 10px; color: var(--muted); }
+.project-newfile { font-size: 11px; padding: 3px 8px; align-self: flex-start; }
+.project-row { display: flex; align-items: stretch; gap: 2px; }
+.project-row .project-item { flex: 1; min-width: 0; }
+.project-row.active .project-item { border-color: var(--accent); background: rgba(91, 140, 255, 0.14); }
+.project-actions { display: flex; align-items: center; gap: 1px; opacity: 0; }
+.project-row:hover .project-actions,
+.project-row.active .project-actions { opacity: 1; }
+.project-actions button { font-size: 11px; padding: 2px 5px; line-height: 1; }
 .project-recent { margin-top: 4px; display: flex; flex-direction: column; gap: 2px; }
 .project-recent h3 {
   margin: 4px 0 2px;

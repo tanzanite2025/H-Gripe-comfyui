@@ -466,12 +466,34 @@ button:disabled { opacity: 0.6; cursor: default; }
   color: var(--muted);
 }
 .palette-item {
-  display: block;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 6px;
   width: 100%;
   text-align: left;
   margin-bottom: 4px;
   cursor: grab;
 }
+.palette-item-title {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.palette-badge {
+  flex: none;
+  font-size: 9px;
+  line-height: 1;
+  padding: 2px 4px;
+  border-radius: 4px;
+  text-transform: uppercase;
+  letter-spacing: 0.03em;
+  color: var(--muted);
+  border: 1px solid var(--border);
+}
+.palette-badge-local { color: var(--t-image); }
+.palette-badge-api { color: var(--t-latent); }
+.palette-badge-hybrid { color: var(--t-any); }
 .palette-hint { font-size: 11px; margin-top: 8px; }
 .snap-toggle {
   display: inline-flex;

@@ -38,6 +38,16 @@ export interface ParamSpec {
   pickerExtensions?: string[];
 }
 
+/**
+ * Where a node runs — the routing/grouping discriminator.
+ * - `graph`  pure in-process node (no backend call).
+ * - `local`  always a `python/bridge` CLI; must not touch the network.
+ * - `api`    always a provider call (needs a profile + credentials_ref).
+ * - `hybrid` user picks per-node via a `mode` param (e.g. `promptOptimize`).
+ * See docs/card-executor-split-and-psd-chain-hardening.md.
+ */
+export type Executor = "graph" | "local" | "api" | "hybrid";
+
 export interface NodeSpec {
   kind: string;
   title: string;
@@ -45,6 +55,8 @@ export interface NodeSpec {
   description: string;
   /** Palette grouping. */
   category: "input" | "generate" | "control" | "output" | "utility";
+  /** Where the node runs; drives palette local/API grouping + broker routing. */
+  executor: Executor;
   inputs: PortSpec[];
   outputs: PortSpec[];
   params: ParamSpec[];
@@ -57,6 +69,7 @@ function port(id: string, label: string, type: PortDataType): PortSpec {
 export const NODE_SPECS: Record<string, NodeSpec> = {
   prompt: {
     kind: "prompt",
+    executor: "graph",
     title: "Prompt",
     description: "A text prompt fed into generation nodes.",
     category: "input",
@@ -74,6 +87,7 @@ export const NODE_SPECS: Record<string, NodeSpec> = {
   },
   promptOptimize: {
     kind: "promptOptimize",
+    executor: "hybrid",
     title: "Prompt Optimize",
     description:
       "Initial text node. Enter a prompt, then optionally optimize it — `local` applies model-free cleanup/booster presets, `api` rewrites it through an LLM provider profile (local server or cloud). Outputs the (optimized) prompt text.",
@@ -174,6 +188,7 @@ export const NODE_SPECS: Record<string, NodeSpec> = {
   },
   batch: {
     kind: "batch",
+    executor: "graph",
     title: "Batch",
     description:
       "Sweeps a list of text items (one per line). A normal Run emits the first item; use \"Run ×N\" to fan out one run per item.",
@@ -193,6 +208,7 @@ export const NODE_SPECS: Record<string, NodeSpec> = {
   },
   imageSource: {
     kind: "imageSource",
+    executor: "graph",
     title: "Image Source",
     description: "An image file on disk, used as a reference / input image.",
     category: "input",
@@ -213,6 +229,7 @@ export const NODE_SPECS: Record<string, NodeSpec> = {
   },
   psdTemplate: {
     kind: "psdTemplate",
+    executor: "graph",
     title: "PSD Template",
     description: "A .psd template path carried through to export.",
     category: "input",
@@ -233,6 +250,7 @@ export const NODE_SPECS: Record<string, NodeSpec> = {
   },
   number: {
     kind: "number",
+    executor: "graph",
     title: "Number",
     description: "A numeric value (seed, count, …) fed into other nodes.",
     category: "input",
@@ -244,6 +262,7 @@ export const NODE_SPECS: Record<string, NodeSpec> = {
   },
   generate: {
     kind: "generate",
+    executor: "api",
     title: "Generate",
     description:
       "Run an image generation operation through the H-Gripe broker.",
@@ -294,6 +313,7 @@ export const NODE_SPECS: Record<string, NodeSpec> = {
   },
   compare: {
     kind: "compare",
+    executor: "graph",
     title: "Compare",
     description:
       "Compares two values and emits 1 (true) or 0 (false). Numeric when both sides parse as numbers, else string comparison. Wire `result` into an If's `cond`.",
@@ -313,6 +333,7 @@ export const NODE_SPECS: Record<string, NodeSpec> = {
   },
   logic: {
     kind: "logic",
+    executor: "graph",
     title: "Logic",
     description:
       "Boolean logic on the truthiness of its inputs, emitting 1 (true) or 0 (false). `not` uses only `a`. Wire `result` into an If's `cond`.",
@@ -332,6 +353,7 @@ export const NODE_SPECS: Record<string, NodeSpec> = {
   },
   if: {
     kind: "if",
+    executor: "graph",
     title: "If",
     description:
       "Conditional gate: forwards `value` to the `true` or `false` output based on a condition. The branch that is not taken is pruned (its downstream nodes are skipped).",
@@ -352,6 +374,7 @@ export const NODE_SPECS: Record<string, NodeSpec> = {
   },
   switch: {
     kind: "switch",
+    executor: "graph",
     title: "Switch",
     description:
       "Multi-way router: forwards `value` to the output matching `index` (0/1/2), else to `default`. Unselected branches are pruned (skipped).",
@@ -377,6 +400,7 @@ export const NODE_SPECS: Record<string, NodeSpec> = {
   },
   reroute: {
     kind: "reroute",
+    executor: "graph",
     title: "Reroute",
     description:
       "Pass-through relay: forwards its input unchanged. Use it to tidy long edges and route wires around the canvas.",
@@ -387,6 +411,7 @@ export const NODE_SPECS: Record<string, NodeSpec> = {
   },
   preview: {
     kind: "preview",
+    executor: "graph",
     title: "Preview",
     description:
       "Display a thumbnail of an image. The original path is preserved for export.",
@@ -397,6 +422,7 @@ export const NODE_SPECS: Record<string, NodeSpec> = {
   },
   save: {
     kind: "save",
+    executor: "graph",
     title: "Export",
     description:
       "Sink node: collects the resulting image path (and optional PSD template) for export.",
@@ -412,6 +438,7 @@ export const NODE_SPECS: Record<string, NodeSpec> = {
   },
   psdContextAnalyze: {
     kind: "psdContextAnalyze",
+    executor: "local",
     title: "PSD Context Analyze",
     description:
       "Read a PSD template into a structured visual context: background colour & lighting heuristics, placeholder geometry + safe area, a placeholder mask & background preview, and a prompt suffix for downstream generation.",
@@ -468,6 +495,7 @@ export const NODE_SPECS: Record<string, NodeSpec> = {
   },
   matchLightColor: {
     kind: "matchLightColor",
+    executor: "local",
     title: "Light & Color Match",
     description:
       "Nudge a generated subject's light & colour toward the PSD background so the composite stops looking pasted-on: Reinhard Lab transfer / histogram match weighted toward shadows & highlights, sparing brand colours. Emits the matched image, a match report, and a prompt suffix.",
@@ -560,6 +588,7 @@ export const NODE_SPECS: Record<string, NodeSpec> = {
   },
   refineMaskEdge: {
     kind: "refineMaskEdge",
+    executor: "local",
     title: "Mask Edge Refine",
     description:
       "Clean a cut-out subject's matte so it drops into a PSD placeholder without white halos or fringing: erode/dilate morphology, guided-filter edge snapping, feather, and edge colour decontamination. Emits the refined image, refined mask, and an edge report. Presets hide the detail; pick 'custom' to expose every parameter.",
@@ -667,6 +696,7 @@ export const NODE_SPECS: Record<string, NodeSpec> = {
   },
   imageEnhance: {
     kind: "imageEnhance",
+    executor: "local",
     title: "Image Enhance",
     description:
       "Upscale (Lanczos) and sharpen (unsharp mask) a low-resolution subject so it fills a PSD placeholder crisply at print DPI. Connect placeholder bounds to auto-size, or set explicit target pixels. CPU-only in Phase 1 (no GPU super-resolution). Emits the enhanced image, the applied scale factor, and an enhance report. Presets hide the detail; pick 'custom' to expose denoise/texture/scale.",
@@ -790,6 +820,7 @@ export const NODE_SPECS: Record<string, NodeSpec> = {
   },
   detailWatchdog: {
     kind: "detailWatchdog",
+    executor: "local",
     title: "Detail Watchdog",
     description:
       "Scan a candidate image for local breakdowns (global/region blur, alpha-rim halos, colour mismatch vs the connected background, below-target resolution) and emit a QualityReport so the workflow can decide whether to re-run or hand-fix. Detect-only in Phase 1 (no automatic repaint): 'fixed_image' is the unchanged input. CPU-only (no ML) — semantic targets needing a GPU/VLM (hands/text/logo) are reported skipped. Connect a VisualContext and/or placeholder bounds for the resolution and colour checks.",
@@ -841,6 +872,7 @@ export const NODE_SPECS: Record<string, NodeSpec> = {
   },
   detailRepaint: {
     kind: "detailRepaint",
+    executor: "api",
     title: "Detail Repaint",
     description:
       "Localized repaint of the issue regions a Detail Watchdog flagged. Crops each repaintable issue (suggested_action in 'Repaint actions') with padding, writes an inpaint mask, sends each crop through the broker's image.edit operation (same provider/credentials path as Generate), then pastes the results back with a feathered seam. Outputs the fixed image and a RepaintReport. With no edit-capable provider configured (empty / 'mock') every region is left unrepainted and the image passes through unchanged.",
@@ -942,6 +974,7 @@ export const NODE_SPECS: Record<string, NodeSpec> = {
   },
   psdExport: {
     kind: "psdExport",
+    executor: "local",
     title: "PSD Export",
     description:
       "Write the generated image into a PSD template's placeholder (true smart-object replacement when possible) and export final.psd + preview.png + metadata.json. Accepts an optional refined mask (applied as the image's alpha) and a production metadata object merged into the exported metadata.",

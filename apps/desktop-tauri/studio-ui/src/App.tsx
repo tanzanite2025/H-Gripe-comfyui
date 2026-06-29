@@ -7,6 +7,7 @@ import {
   type Node,
   type OnNodesChange,
   type OnEdgesChange,
+  type NodePositionChange,
 } from "@xyflow/react";
 
 import { FlowCanvas } from "./editor/FlowCanvas";
@@ -23,6 +24,7 @@ import {
   orderNodes,
   reparentNode,
 } from "./editor/grouping";
+import { getHelperLines } from "./editor/helperLines";
 import type { HgripeNodeData } from "./editor/HgripeNode";
 import { fromWorkflowGraph, toWorkflowGraph } from "./editor/adapter";
 import { clearPersistedGraph, loadPersistedGraph, persistGraph } from "./editor/persist";
@@ -62,6 +64,8 @@ function Studio() {
   const [edges, setEdges, onEdgesChange] = useEdgesState(initial.edges);
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const [running, setRunning] = useState(false);
+  const [snapToGrid, setSnapToGrid] = useState(false);
+  const [helperLines, setHelperLines] = useState<{ horizontal?: number; vertical?: number }>({});
   const [saved, setSaved] = useState(restoredOnMount.current);
   const [message, setMessage] = useState<string>(
     isTauri()
@@ -179,6 +183,18 @@ function Studio() {
       if (changes.some((c) => c.type === "position" && c.dragging === false)) {
         dragging.current = false;
       }
+      // Alignment guides: while dragging a single node, snap its edges to other
+      // nodes' edges and surface the guide lines. Grid snapping (if enabled) is
+      // applied by React Flow separately and composes with this.
+      let lines: { horizontal?: number; vertical?: number } = {};
+      if (changes.length === 1 && changes[0].type === "position" && changes[0].dragging && changes[0].position) {
+        const change = changes[0] as NodePositionChange;
+        const helper = getHelperLines(change, nodes);
+        if (helper.snapPosition.x !== undefined) change.position!.x = helper.snapPosition.x;
+        if (helper.snapPosition.y !== undefined) change.position!.y = helper.snapPosition.y;
+        lines = { horizontal: helper.horizontal, vertical: helper.vertical };
+      }
+      setHelperLines(lines);
       onNodesChange(changes);
     },
     [onNodesChange, takeSnapshot, nodes, setNodes],
@@ -403,6 +419,10 @@ function Studio() {
         <button onClick={() => fileInput.current?.click()}>Load</button>
         <button onClick={resetSample}>Reset</button>
         <button onClick={clear}>Clear</button>
+        <label className="snap-toggle" title="snap node positions to a 16px grid while dragging">
+          <input type="checkbox" checked={snapToGrid} onChange={(e) => setSnapToGrid(e.target.checked)} />
+          Snap
+        </label>
         <button className="primary" onClick={run} disabled={running || issues.length > 0}>
           {running ? "Running…" : "Run"}
         </button>
@@ -443,6 +463,8 @@ function Studio() {
               onAddNode={addNode}
               onBeforeConnect={takeSnapshot}
               onNodeDragStop={handleNodeDragStop}
+              snapToGrid={snapToGrid}
+              helperLines={helperLines}
             />
           </div>
           <Inspector node={selectedNode} onParamChange={onParamChange} />

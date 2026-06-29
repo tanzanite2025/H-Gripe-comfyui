@@ -15,6 +15,7 @@ use serde_json::{json, Value};
 use tauri::Emitter;
 
 use super::color_match::execute_studio_match_light_color;
+use super::detail_watchdog::execute_studio_detail_watchdog;
 use super::edge_refine::execute_studio_refine_mask_edge;
 use super::graph::{
     studio_non_empty, studio_output_map, studio_truthy, studio_value_to_number,
@@ -684,6 +685,7 @@ async fn execute_studio_node(
         "matchLightColor" => execute_studio_match_light_color(node, &inputs),
         "refineMaskEdge" => execute_studio_refine_mask_edge(node, &inputs),
         "imageEnhance" => execute_studio_image_enhance(node, &inputs),
+        "detailWatchdog" => execute_studio_detail_watchdog(node, &inputs),
         "psdExport" => execute_studio_psd_export(node, &inputs),
         other => Err(format!("unsupported Studio node kind: {other}")),
     }

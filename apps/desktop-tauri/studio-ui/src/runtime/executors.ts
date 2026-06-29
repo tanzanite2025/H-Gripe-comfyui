@@ -6,7 +6,7 @@
 // sinks. This wires the renderer-agnostic DAG runtime to real backend
 // capability.
 
-import { analyzePsdContext, composePsd, enhanceImage, getOutputDir, matchLightColor, refineMaskEdge, runTaskJson } from "../bridge/tauri";
+import { analyzePsdContext, composePsd, detectQualityIssues, enhanceImage, getOutputDir, matchLightColor, refineMaskEdge, runTaskJson } from "../bridge/tauri";
 import type { Bounds, VisualContext } from "../types/production";
 import type { ExecutorRegistry } from "./dag";
 import {
@@ -369,6 +369,33 @@ export const defaultExecutors: ExecutorRegistry = {
       enhanced_image: result.enhanced_image,
       scale_factor: result.scale_factor,
       enhance_report: result.enhance_report,
+    };
+  },
+
+  // Scans the upstream candidate image for local breakdowns (blur, alpha-rim
+  // halos, colour mismatch, below-target resolution) and emits a QualityReport
+  // via the backend `detect_quality_issues` command. Phase 1 is detect-only:
+  // `fixed_image` is the unchanged input. Exposes the image passthrough, the
+  // quality report, an optional issue overlay, and watchdog diagnostics.
+  detailWatchdog: async (ctx) => {
+    const image = (ctx.inputs.image as string | undefined) ?? null;
+    if (!image) throw new Error("Detail Watchdog needs a connected image input");
+
+    const outputDir = String(ctx.params.output_dir ?? "").trim() || (await getOutputDir());
+    const result = await detectQualityIssues({
+      image,
+      visualContext: (ctx.inputs.visual_context as VisualContext | undefined) || undefined,
+      targetBounds: (ctx.inputs.target_bounds as Bounds | undefined) || undefined,
+      watchTargets: String(ctx.params.watch_targets ?? "").trim() || undefined,
+      mode: String(ctx.params.mode ?? "balanced") || undefined,
+      outputDir: outputDir || undefined,
+      outputName: String(ctx.params.output_name ?? "").trim() || undefined,
+    });
+    return {
+      fixed_image: result.fixed_image,
+      quality_report: result.quality_report,
+      issue_masks: result.issue_masks,
+      watchdog_report: result.watchdog_report,
     };
   },
 

@@ -9,7 +9,7 @@ use std::path::{Path, PathBuf};
 
 use serde::{Deserialize, Serialize};
 
-use crate::contracts::VisualContext;
+use crate::contracts::{QualityReport, VisualContext};
 use crate::modified_ms;
 use crate::studio::studio_reject_unsafe_basename;
 
@@ -830,6 +830,118 @@ pub(crate) fn enhance_image(
     serde_json::from_str::<EnhanceImageResult>(stdout.trim()).map_err(|err| {
         format!(
             "could not parse enhance_image output: {err} (raw: {})",
+            stdout.trim()
+        )
+    })
+}
+
+/// Diagnostic summary of a Detail Watchdog run: the resolved mode, which watch
+/// targets ran, which were skipped (CPU Phase 1 cannot do hands/text/logo), and
+/// the measured global sharpness. Fields are `snake_case` to match the
+/// `detail_watchdog_cli.py` JSON.
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub(crate) struct WatchdogReport {
+    #[serde(default)]
+    pub(crate) mode: String,
+    #[serde(default)]
+    pub(crate) watch_targets: Vec<String>,
+    #[serde(default)]
+    pub(crate) skipped_targets: Vec<String>,
+    /// `[width, height]` of the analysed image.
+    #[serde(default)]
+    pub(crate) image_size: Option<[i64; 2]>,
+    /// `[width, height]` of the connected placeholder target, when available.
+    #[serde(default)]
+    pub(crate) target_size: Option<[i64; 2]>,
+    /// Laplacian-variance sharpness of the whole image (higher = sharper).
+    #[serde(default)]
+    pub(crate) global_sharpness: f64,
+}
+
+/// Result of the **Detail Watchdog** node: the (unchanged, Phase 1) candidate
+/// image, the shared [`QualityReport`], an optional issue-overlay PNG, and the
+/// [`WatchdogReport`] diagnostics.
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub(crate) struct DetectQualityResult {
+    #[serde(default)]
+    pub(crate) fixed_image: String,
+    #[serde(default)]
+    pub(crate) quality_report: QualityReport,
+    #[serde(default)]
+    pub(crate) issue_masks: Option<String>,
+    #[serde(default)]
+    pub(crate) watchdog_report: WatchdogReport,
+}
+
+/// Scan a candidate image for local quality breakdowns (blur, halos, colour
+/// mismatch, missing resolution) and emit a [`QualityReport`]. This is the
+/// **Detail Watchdog** node's backend (the fifth PSD production node).
+///
+/// Phase 1 is **detect + report only** (no automatic repaint) and shells out to
+/// `python/bridge/detail_watchdog_cli.py` using the project's bundled Python
+/// (Pillow + numpy; no OpenCV, no ML). `mode` is `strict | balanced | lenient`;
+/// `watch_targets` is a comma list of `face,hands,text,logo,product_edges`
+/// (hands/text/logo need the later GPU/VLM backend and are reported as skipped).
+#[tauri::command]
+#[allow(clippy::too_many_arguments)]
+pub(crate) fn detect_quality_issues(
+    dir: Option<String>,
+    image: String,
+    visual_context: Option<String>,
+    target_bounds: Option<String>,
+    watch_targets: Option<String>,
+    mode: Option<String>,
+    output_dir: Option<String>,
+    output_name: Option<String>,
+) -> Result<DetectQualityResult, String> {
+    let dir = resolve_project_dir(&dir)?;
+    let python = project_python(&dir);
+    let script = dir
+        .join("python")
+        .join("bridge")
+        .join("detail_watchdog_cli.py");
+    if !script.is_file() {
+        return Err(format!(
+            "detail_watchdog_cli.py not found at {}",
+            script.display()
+        ));
+    }
+
+    let mut cmd = std::process::Command::new(&python);
+    cmd.arg(&script)
+        .arg("--image")
+        .arg(&image)
+        .arg("--mode")
+        .arg(mode.as_deref().unwrap_or("balanced"))
+        .arg("--watch-targets")
+        .arg(watch_targets.as_deref().unwrap_or(""))
+        .arg("--visual-context")
+        .arg(visual_context.as_deref().unwrap_or(""))
+        .arg("--target-bounds")
+        .arg(target_bounds.as_deref().unwrap_or(""))
+        .arg("--output-dir")
+        .arg(output_dir.as_deref().unwrap_or(""))
+        .arg("--output-name")
+        .arg(output_name.as_deref().unwrap_or(""))
+        .current_dir(&dir);
+    #[cfg(windows)]
+    {
+        use std::os::windows::process::CommandExt;
+        // CREATE_NO_WINDOW: don't pop a console window for the child.
+        cmd.creation_flags(0x0800_0000);
+    }
+
+    let output = cmd
+        .output()
+        .map_err(|err| format!("failed to launch {}: {err}", python.display()))?;
+    if !output.status.success() {
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        return Err(format!("detect_quality_issues failed: {}", stderr.trim()));
+    }
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    serde_json::from_str::<DetectQualityResult>(stdout.trim()).map_err(|err| {
+        format!(
+            "could not parse detect_quality_issues output: {err} (raw: {})",
             stdout.trim()
         )
     })

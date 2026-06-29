@@ -92,6 +92,16 @@ button:disabled { opacity: 0.6; cursor: default; }
   text-overflow: ellipsis;
   white-space: nowrap;
 }
+.run-log-node-link {
+  background: none;
+  border: none;
+  padding: 0;
+  margin: 0;
+  font: inherit;
+  cursor: pointer;
+  text-align: left;
+}
+.run-log-node-link:hover { text-decoration: underline; }
 .run-log-msg { flex: 1; min-width: 0; }
 .run-log-line.level-success .run-log-msg { color: var(--ok); }
 .run-log-line.level-error .run-log-msg { color: var(--err); }

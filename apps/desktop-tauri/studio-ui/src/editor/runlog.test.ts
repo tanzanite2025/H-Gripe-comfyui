@@ -3,6 +3,7 @@ import { describe, expect, it } from "vitest";
 import {
   appendLog,
   describeNodeStatus,
+  formatLogText,
   formatTime,
   levelForStatus,
   RUN_LOG_CAP,
@@ -61,5 +62,16 @@ describe("formatTime", () => {
   it("zero-pads to HH:MM:SS", () => {
     const d = new Date(2020, 0, 1, 3, 5, 9).getTime();
     expect(formatTime(d)).toBe("03:05:09");
+  });
+});
+
+describe("formatLogText", () => {
+  it("renders one line per entry with level and optional node", () => {
+    const t = new Date(2020, 0, 1, 1, 2, 3).getTime();
+    const text = formatLogText([
+      { id: 0, t, level: "info", message: "run started" },
+      { id: 1, t, level: "error", node: "n1", message: "failed: boom" },
+    ]);
+    expect(text).toBe("01:02:03 [info] run started\n01:02:03 [error] n1 failed: boom");
   });
 });

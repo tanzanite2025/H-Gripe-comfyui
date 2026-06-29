@@ -80,3 +80,10 @@ export function formatTime(t: number): string {
   const pad = (n: number) => String(n).padStart(2, "0");
   return `${pad(d.getHours())}:${pad(d.getMinutes())}:${pad(d.getSeconds())}`;
 }
+
+/** Render the log as plain text, one entry per line, for export/clipboard. */
+export function formatLogText(entries: RunLogEntry[]): string {
+  return entries
+    .map((e) => `${formatTime(e.t)} [${e.level}]${e.node ? ` ${e.node}` : ""} ${e.message}`)
+    .join("\n");
+}

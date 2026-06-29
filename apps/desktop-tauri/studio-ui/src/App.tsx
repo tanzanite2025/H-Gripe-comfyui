@@ -35,6 +35,7 @@ import { RunLog } from "./editor/RunLogPanel";
 import {
   appendLog,
   describeNodeStatus,
+  formatLogText,
   levelForStatus,
   type LogLevel,
   type RunLogEntry,
@@ -368,6 +369,28 @@ function Studio() {
   const pushLog = useCallback((level: LogLevel, message: string, node?: string) => {
     setRunLog((log) => appendLog(log, { id: logSeq.current++, t: Date.now(), level, message, node }));
   }, []);
+
+  // Download the run log as a plain-text file (browser + desktop webview).
+  const exportLog = useCallback(() => {
+    const blob = new Blob([formatLogText(runLog)], { type: "text/plain" });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement("a");
+    a.href = url;
+    a.download = "run-log.txt";
+    a.click();
+    URL.revokeObjectURL(url);
+  }, [runLog]);
+
+  // Select/focus a node in the editor (e.g. from a run-log line). Programmatic,
+  // so it must not flag the file dirty.
+  const focusNode = useCallback(
+    (nodeId: string) => {
+      skipDirty.current = true;
+      setNodes((ns) => ns.map((n) => ({ ...n, selected: n.id === nodeId })));
+      setSelectedId(nodeId);
+    },
+    [setNodes],
+  );
 
   // Per-node run telemetry (duration / error) for node-level logs/progress.
   const recordRun = useCallback(
@@ -1346,6 +1369,8 @@ function Studio() {
                 entries={runLog}
                 onClear={() => setRunLog([])}
                 onClose={() => setShowLog(false)}
+                onExport={exportLog}
+                onSelectNode={focusNode}
               />
             )}
           </div>

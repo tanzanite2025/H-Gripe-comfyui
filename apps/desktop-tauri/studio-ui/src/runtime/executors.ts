@@ -8,6 +8,7 @@
 
 import { composePsd, getOutputDir, runTaskJson } from "../bridge/tauri";
 import type { ExecutorRegistry } from "./dag";
+import { optimizePromptLocally, type LocalPreset } from "./promptOptimize";
 
 // Params that are not forwarded into the broker task's `params` map; they are
 // top-level task fields instead.
@@ -23,6 +24,53 @@ export function batchItems(items: unknown): string[] {
 
 export const defaultExecutors: ExecutorRegistry = {
   prompt: async (ctx) => ({ text: String(ctx.params.text ?? "") }),
+
+  // Initial text node with optional prompt optimisation. A connected `text`
+  // input overrides the param. `off` passes through, `local` applies the
+  // model-free preset transform, `api` rewrites via an LLM provider profile.
+  promptOptimize: async (ctx) => {
+    const raw =
+      "text" in ctx.inputs
+        ? String(ctx.inputs.text ?? "")
+        : String(ctx.params.text ?? "");
+    const mode = String(ctx.params.mode ?? "off");
+
+    if (mode === "local") {
+      const preset = String(ctx.params.preset ?? "cleanup") as LocalPreset;
+      return { text: optimizePromptLocally(raw, preset) };
+    }
+
+    if (mode === "api") {
+      if (!raw.trim()) return { text: raw };
+      const params: Record<string, unknown> = {};
+      const model = String(ctx.params.model ?? "").trim();
+      if (model) params.model = model;
+      const instruction = String(ctx.params.instruction ?? "").trim();
+      if (instruction) params.system_prompt = instruction;
+
+      const task = {
+        id: `studio-${ctx.nodeId}-${Date.now()}`,
+        provider: String(ctx.params.provider ?? "openai_compatible") || "openai_compatible",
+        operation: "text.generate",
+        inputs: { prompt: raw },
+        params,
+        credentials_ref: String(ctx.params.credentials_ref ?? "") || null,
+        output_type: "text",
+        cache_policy: { enabled: false, ttl_seconds: null, key: null },
+        retry_policy: { max_attempts: 1, backoff_ms: 200, timeout_ms: 60000 },
+      };
+
+      const result = await runTaskJson(task);
+      if (result.status === "failed") {
+        throw new Error(result.error?.message ?? "prompt optimization failed");
+      }
+      const optimized = (result.output_json as { text?: unknown } | null)?.text;
+      const text = typeof optimized === "string" ? optimized.trim() : "";
+      return { text: text || raw, result };
+    }
+
+    return { text: raw };
+  },
 
   // Emits a single item from the list. A normal run emits index 0; batch
   // fan-out sweeps `index` via runGraph's paramOverrides.

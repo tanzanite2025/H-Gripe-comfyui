@@ -162,6 +162,60 @@ describe("generate", () => {
   });
 });
 
+describe("promptOptimize", () => {
+  it("off mode passes the param text through unchanged", async () => {
+    expect(
+      await defaultExecutors.promptOptimize(ctx("promptOptimize", { text: "a fox", mode: "off" })),
+    ).toEqual({ text: "a fox" });
+  });
+
+  it("a connected text input overrides the param", async () => {
+    expect(
+      await defaultExecutors.promptOptimize(
+        ctx("promptOptimize", { text: "param", mode: "off" }, { text: "wired" }),
+      ),
+    ).toEqual({ text: "wired" });
+  });
+
+  it("local mode applies the rule-based preset transform", async () => {
+    expect(
+      await defaultExecutors.promptOptimize(
+        ctx("promptOptimize", { text: "a cat, a cat", mode: "local", preset: "detailed" }),
+      ),
+    ).toEqual({
+      text: "a cat, highly detailed, intricate, ultra quality, masterpiece",
+    });
+  });
+
+  it("api mode builds a text.generate task and falls back to raw when no text is returned", async () => {
+    const out = await defaultExecutors.promptOptimize(
+      ctx("promptOptimize", {
+        text: "a fox",
+        mode: "api",
+        provider: "openai_compatible",
+        model: "gpt-4o-mini",
+        instruction: "make it better",
+        credentials_ref: "key-1",
+      }),
+    );
+    // Outside Tauri, runTaskJson echoes the task in output_json.task with no
+    // `text`, so the executor falls back to the raw prompt.
+    expect((out as { text: string }).text).toBe("a fox");
+    const task = (out.result as { output_json: { task: Record<string, unknown> } }).output_json.task;
+    expect(task.operation).toBe("text.generate");
+    expect(task.provider).toBe("openai_compatible");
+    expect(task.credentials_ref).toBe("key-1");
+    expect(task.inputs).toEqual({ prompt: "a fox" });
+    expect(task.params).toEqual({ model: "gpt-4o-mini", system_prompt: "make it better" });
+  });
+
+  it("api mode short-circuits empty input without calling the broker", async () => {
+    expect(
+      await defaultExecutors.promptOptimize(ctx("promptOptimize", { text: "   ", mode: "api" })),
+    ).toEqual({ text: "   " });
+  });
+});
+
 describe("save sink", () => {
   it("collects the incoming image/template and filename", async () => {
     const out = await defaultExecutors.save(

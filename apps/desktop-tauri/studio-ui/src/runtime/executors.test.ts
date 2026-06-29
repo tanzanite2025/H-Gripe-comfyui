@@ -397,3 +397,62 @@ describe("refineMaskEdge", () => {
     ).rejects.toThrow(/connected image/);
   });
 });
+
+describe("imageEnhance", () => {
+  // Outside Tauri, enhanceImage returns a mocked EnhanceImageResult, so we can
+  // assert how the executor resolves the target size and flattens the report.
+  it("derives the scale from connected placeholder bounds", async () => {
+    const out = (await defaultExecutors.imageEnhance(
+      ctx(
+        "imageEnhance",
+        { mode: "print_ready", output_dir: "/out", output_name: "hero" },
+        { image: "/subject.png", target_bounds: { x: 0, y: 0, width: 2048, height: 2800 } },
+      ),
+    )) as Record<string, unknown>;
+    expect(out.enhanced_image).toBe("/out/hero.png");
+    // Mock source is 512x700; covering 2048x2800 needs a 4x upscale.
+    expect(out.scale_factor).toBe(4);
+    const report = out.enhance_report as {
+      mode: string;
+      target_size: [number, number] | null;
+      clamped: boolean;
+    };
+    expect(report.mode).toBe("print_ready");
+    expect(report.target_size).toEqual([2048, 2800]);
+    expect(report.clamped).toBe(false);
+  });
+
+  it("falls back to the preset scale with no target and honours preserve_text_logo", async () => {
+    const out = (await defaultExecutors.imageEnhance(
+      ctx(
+        "imageEnhance",
+        { mode: "texture_rebuild", output_dir: "/out", output_name: "hero", preserve_text_logo: true },
+        { image: "/subject.png" },
+      ),
+    )) as Record<string, unknown>;
+    expect(out.scale_factor).toBe(2);
+    const report = out.enhance_report as { target_size: unknown; texture_strength: number };
+    expect(report.target_size).toBeNull();
+    // texture_rebuild's 0.7 texture is capped to 0.4 when text/logo is protected.
+    expect(report.texture_strength).toBe(0.4);
+  });
+
+  it("clamps the scale to honour max_pixels", async () => {
+    const out = (await defaultExecutors.imageEnhance(
+      ctx(
+        "imageEnhance",
+        { mode: "conservative", target_width: 5120, target_height: 7000, max_pixels: 1_000_000, output_dir: "/out" },
+        { image: "/subject.png" },
+      ),
+    )) as Record<string, unknown>;
+    const report = out.enhance_report as { clamped: boolean; output_size: [number, number] };
+    expect(report.clamped).toBe(true);
+    expect(report.output_size[0] * report.output_size[1]).toBeLessThanOrEqual(1_000_000);
+  });
+
+  it("requires a connected image input", async () => {
+    await expect(
+      defaultExecutors.imageEnhance(ctx("imageEnhance", {})),
+    ).rejects.toThrow(/connected image/);
+  });
+});

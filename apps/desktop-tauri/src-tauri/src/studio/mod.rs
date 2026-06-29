@@ -4,6 +4,7 @@
 //! - [`psd_analyze`]: the `psdContextAnalyze` node executor (PSD context bridge).
 //! - [`color_match`]: the `matchLightColor` node executor (light/colour match).
 //! - [`edge_refine`]: the `refineMaskEdge` node executor (mask edge refine).
+//! - [`image_enhance`]: the `imageEnhance` node executor (CPU upscale/sharpen).
 //! - [`psd_export`]: the `psdExport` node executor (PSD composition bridge).
 //! - [`persist`]: on-disk autosave, workflow files, recents, and pickers.
 //! - [`history`]: project-scoped snapshot / run-history JSON stores.
@@ -16,6 +17,7 @@ mod edge_refine;
 mod exec;
 mod graph;
 mod history;
+mod image_enhance;
 mod persist;
 mod psd_analyze;
 mod psd_export;

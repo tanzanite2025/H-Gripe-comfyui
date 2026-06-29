@@ -6,8 +6,8 @@
 // sinks. This wires the renderer-agnostic DAG runtime to real backend
 // capability.
 
-import { analyzePsdContext, composePsd, getOutputDir, matchLightColor, refineMaskEdge, runTaskJson } from "../bridge/tauri";
-import type { VisualContext } from "../types/production";
+import { analyzePsdContext, composePsd, enhanceImage, getOutputDir, matchLightColor, refineMaskEdge, runTaskJson } from "../bridge/tauri";
+import type { Bounds, VisualContext } from "../types/production";
 import type { ExecutorRegistry } from "./dag";
 import {
   optimizePromptLocally,
@@ -338,6 +338,37 @@ export const defaultExecutors: ExecutorRegistry = {
       refined_image: result.refined_image,
       refined_mask: result.refined_mask,
       edge_report: result.edge_report,
+    };
+  },
+
+  // Upscales (Lanczos) and sharpens (unsharp mask) the upstream subject to a
+  // PSD placeholder's pixel target so it stays crisp at print DPI, via the
+  // backend `enhance_image` command (CPU-only in Phase 1). Exposes the enhanced
+  // image, the applied scale factor, and an enhance report.
+  imageEnhance: async (ctx) => {
+    const image = (ctx.inputs.image as string | undefined) ?? null;
+    if (!image) throw new Error("Image Enhance needs a connected image input");
+
+    const outputDir = String(ctx.params.output_dir ?? "").trim() || (await getOutputDir());
+    const result = await enhanceImage({
+      image,
+      targetBounds: (ctx.inputs.target_bounds as Bounds | undefined) || undefined,
+      mode: String(ctx.params.mode ?? "conservative") || undefined,
+      targetWidth: Number(ctx.params.target_width ?? 0),
+      targetHeight: Number(ctx.params.target_height ?? 0),
+      targetDpi: Number(ctx.params.target_dpi ?? 300),
+      maxPixels: Number(ctx.params.max_pixels ?? 48_000_000),
+      scale: Number(ctx.params.scale ?? 2),
+      denoiseStrength: Number(ctx.params.denoise_strength ?? 0.3),
+      textureStrength: Number(ctx.params.texture_strength ?? 0.25),
+      preserveTextLogo: Boolean(ctx.params.preserve_text_logo ?? true),
+      outputDir: outputDir || undefined,
+      outputName: String(ctx.params.output_name ?? "").trim() || undefined,
+    });
+    return {
+      enhanced_image: result.enhanced_image,
+      scale_factor: result.scale_factor,
+      enhance_report: result.enhance_report,
     };
   },
 

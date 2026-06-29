@@ -6,7 +6,6 @@
 use std::collections::{BTreeMap, HashMap, HashSet, VecDeque};
 use std::fs;
 use std::path::{Path, PathBuf};
-use std::process::Child;
 use std::sync::Mutex;
 use std::time::{Instant, SystemTime, UNIX_EPOCH};
 
@@ -28,6 +27,12 @@ use hgripe_api::{
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 use tauri::{Emitter, Manager};
+
+mod comfy;
+mod psd;
+
+use comfy::{kill_comfy_child, ComfyServer};
+use psd::compose_psd;
 
 const STUDIO_GRAPH_RUN_EVENT: &str = "studio:graph-run";
 
@@ -53,6 +58,16 @@ fn config_path(kind: &str) -> Result<PathBuf, String> {
         "profiles" => Ok(provider_profiles_path(None)),
         other => Err(format!("unknown config kind: {other}")),
     }
+}
+
+/// File modification time in milliseconds since the Unix epoch, if available.
+pub(crate) fn modified_ms(metadata: &fs::Metadata) -> Option<u64> {
+    metadata
+        .modified()
+        .ok()?
+        .duration_since(std::time::UNIX_EPOCH)
+        .ok()
+        .map(|d| d.as_millis() as u64)
 }
 
 #[derive(Serialize)]
@@ -1256,7 +1271,7 @@ fn studio_normalize_workflow_name(name: &str) -> Result<String, String> {
 /// later joined onto (path separators, or a `.`/`..` component). Used for
 /// export targets where a downstream helper does `directory / name`, so an
 /// untrusted workflow cannot redirect the write outside the chosen folder.
-fn studio_reject_unsafe_basename(name: &str) -> Result<(), String> {
+pub(crate) fn studio_reject_unsafe_basename(name: &str) -> Result<(), String> {
     let trimmed = name.trim();
     if trimmed.is_empty() {
         return Err("filename is empty".to_string());
@@ -1468,109 +1483,6 @@ fn pick_file(
         builder = builder.add_filter(filter_name.unwrap_or_else(|| "Files".to_string()), &refs);
     }
     builder.blocking_pick_file().map(|path| path.to_string())
-}
-
-#[derive(Serialize)]
-struct PsdOutputFile {
-    /// Base name shared by the triplet (e.g. `final` for `final.psd`).
-    name: String,
-    psd_path: String,
-    preview_path: Option<String>,
-    metadata_path: Option<String>,
-    /// PSD file modification time in milliseconds since the Unix epoch.
-    modified_ms: Option<u64>,
-    size_bytes: u64,
-    /// True when the export's metadata records a true smart-object content
-    /// replacement (`smart_object_mode == "replace_content"`).
-    smart_object: bool,
-}
-
-/// Cheap check for whether a `_metadata.json` records a smart-object content
-/// replacement, without pulling in a JSON parser.
-fn metadata_has_smart_object(metadata_path: &Option<String>) -> bool {
-    let Some(path) = metadata_path else {
-        return false;
-    };
-    match fs::read_to_string(path) {
-        Ok(text) => text.contains("\"smart_object_mode\"") && text.contains("\"replace_content\""),
-        Err(_) => false,
-    }
-}
-
-fn modified_ms(metadata: &fs::Metadata) -> Option<u64> {
-    metadata
-        .modified()
-        .ok()?
-        .duration_since(std::time::UNIX_EPOCH)
-        .ok()
-        .map(|d| d.as_millis() as u64)
-}
-
-/// Scan a directory (non-recursively) for PSD exports produced by the PSD
-/// nodes and group each `<base>.psd` with its `<base>_preview.png` and
-/// `<base>_metadata.json` siblings when present.
-#[tauri::command]
-fn list_psd_outputs(dir: String) -> Result<Vec<PsdOutputFile>, String> {
-    let dir = dir.trim();
-    if dir.is_empty() {
-        return Err("output directory is empty".to_string());
-    }
-    let path = Path::new(dir);
-    if !path.is_dir() {
-        return Err(format!("not a directory: {dir}"));
-    }
-
-    let mut outputs = Vec::new();
-    for entry in
-        fs::read_dir(path).map_err(|err| format!("failed to read {}: {err}", path.display()))?
-    {
-        let entry = match entry {
-            Ok(entry) => entry,
-            Err(_) => continue,
-        };
-        let psd_path = entry.path();
-        let is_psd = psd_path
-            .extension()
-            .and_then(|ext| ext.to_str())
-            .map(|ext| ext.eq_ignore_ascii_case("psd"))
-            .unwrap_or(false);
-        if !is_psd {
-            continue;
-        }
-        let base = match psd_path.file_stem().and_then(|s| s.to_str()) {
-            Some(stem) => stem.to_string(),
-            None => continue,
-        };
-
-        let sibling = |suffix: &str| {
-            let candidate = path.join(format!("{base}{suffix}"));
-            candidate
-                .is_file()
-                .then(|| candidate.to_string_lossy().to_string())
-        };
-        let preview_path = sibling("_preview.png");
-        let metadata_path = sibling("_metadata.json");
-        let smart_object = metadata_has_smart_object(&metadata_path);
-
-        let metadata = entry.metadata().ok();
-        outputs.push(PsdOutputFile {
-            name: base,
-            psd_path: psd_path.to_string_lossy().to_string(),
-            preview_path,
-            metadata_path,
-            modified_ms: metadata.as_ref().and_then(modified_ms),
-            size_bytes: metadata.as_ref().map(|m| m.len()).unwrap_or(0),
-            smart_object,
-        });
-    }
-
-    // Newest first, falling back to name for stable ordering.
-    outputs.sort_by(|a, b| {
-        b.modified_ms
-            .cmp(&a.modified_ms)
-            .then_with(|| a.name.cmp(&b.name))
-    });
-    Ok(outputs)
 }
 
 fn base64_encode(bytes: &[u8]) -> String {
@@ -1797,317 +1709,6 @@ fn open_external(url: &str) -> Result<(), String> {
         .map_err(|err| err.to_string())
 }
 
-/// Holds the locally spawned ComfyUI server process, if any, so the desktop
-/// shell can act as a launcher (start / stop) for the embedded UI.
-#[derive(Default)]
-struct ComfyServer(Mutex<Option<Child>>);
-
-/// Resolve the ComfyUI project directory: the caller-provided path, else the
-/// process working directory (the repo root in dev / the install dir packaged).
-fn resolve_comfy_dir(dir: &Option<String>) -> Result<PathBuf, String> {
-    let base = match dir {
-        Some(d) if !d.trim().is_empty() => PathBuf::from(d.trim()),
-        _ => std::env::current_dir().map_err(|err| err.to_string())?,
-    };
-    if !base.join("main.py").is_file() {
-        return Err(format!(
-            "ComfyUI main.py not found in {} (set the ComfyUI folder)",
-            base.display()
-        ));
-    }
-    Ok(base)
-}
-
-/// Pick a Python interpreter: prefer the bundled `python_embeded` shipped with
-/// the ComfyUI Windows distribution, otherwise fall back to PATH `python`.
-fn comfy_python(dir: &Path) -> PathBuf {
-    for candidate in [
-        dir.join("python_embeded").join("python.exe"),
-        dir.join("python_embeded").join("python"),
-    ] {
-        if candidate.is_file() {
-            return candidate;
-        }
-    }
-    PathBuf::from(if cfg!(windows) { "python" } else { "python3" })
-}
-
-#[tauri::command]
-fn comfyui_reachable(port: Option<u16>) -> bool {
-    let port = port.unwrap_or(8188);
-    std::net::TcpStream::connect_timeout(
-        &std::net::SocketAddr::from(([127, 0, 0, 1], port)),
-        std::time::Duration::from_millis(400),
-    )
-    .is_ok()
-}
-
-#[tauri::command]
-fn comfyui_status(state: tauri::State<'_, ComfyServer>) -> bool {
-    let mut guard = state.0.lock().unwrap();
-    match guard.as_mut() {
-        Some(child) => match child.try_wait() {
-            Ok(Some(_)) => {
-                // Process has exited; clear the slot.
-                *guard = None;
-                false
-            }
-            Ok(None) => true,
-            Err(_) => false,
-        },
-        None => false,
-    }
-}
-
-#[tauri::command]
-fn start_comfyui(
-    state: tauri::State<'_, ComfyServer>,
-    dir: Option<String>,
-    port: Option<u16>,
-    args: Option<String>,
-) -> Result<String, String> {
-    let mut guard = state.0.lock().unwrap();
-    if let Some(child) = guard.as_mut() {
-        if matches!(child.try_wait(), Ok(None)) {
-            return Err("ComfyUI is already running".to_string());
-        }
-    }
-    let dir = resolve_comfy_dir(&dir)?;
-    let python = comfy_python(&dir);
-    let port = port.unwrap_or(8188);
-
-    // Bootstrap that injects the project dir onto sys.path at runtime before
-    // running main.py as __main__. This works even with the restrictive
-    // `._pth` of embeddable Python builds (which ignore PYTHONPATH and do not
-    // auto-add the script directory), as well as normal/standalone Python.
-    // Extra CLI args (e.g. `--cpu`, `--listen`, `--lowvram`) are passed through
-    // HG_COMFY_ARGS and split on whitespace.
-    let bootstrap = "import os, sys, runpy; d = os.environ['HG_COMFY_DIR']; \
-sys.argv = ['main.py', '--port', os.environ['HG_COMFY_PORT']] + os.environ.get('HG_COMFY_ARGS', '').split(); \
-sys.path.insert(0, d); \
-runpy.run_path(os.path.join(d, 'main.py'), run_name='__main__')";
-    let mut cmd = std::process::Command::new(&python);
-    cmd.arg("-c")
-        .arg(bootstrap)
-        .current_dir(&dir)
-        .env("HG_COMFY_DIR", &dir)
-        .env("HG_COMFY_PORT", port.to_string())
-        .env("HG_COMFY_ARGS", args.unwrap_or_default());
-    #[cfg(windows)]
-    {
-        use std::os::windows::process::CommandExt;
-        // CREATE_NO_WINDOW: don't pop a console window for the child.
-        cmd.creation_flags(0x0800_0000);
-    }
-
-    let child = cmd
-        .spawn()
-        .map_err(|err| format!("failed to launch {}: {err}", python.display()))?;
-    *guard = Some(child);
-    Ok(format!("started ComfyUI on port {port}"))
-}
-
-/// Terminate the locally spawned ComfyUI process, if one is tracked. Shared by
-/// the `stop_comfyui` command and the app-exit cleanup so the launched server
-/// never outlives the desktop shell as an orphan.
-fn kill_comfy_child(state: &ComfyServer) {
-    let mut guard = state.0.lock().unwrap();
-    if let Some(mut child) = guard.take() {
-        let _ = child.kill();
-        let _ = child.wait();
-    }
-}
-
-#[tauri::command]
-fn stop_comfyui(state: tauri::State<'_, ComfyServer>) -> Result<(), String> {
-    kill_comfy_child(&state);
-    Ok(())
-}
-
-/// Result of a `compose_psd` run, mirroring the JSON printed by the
-/// `compose_psd_cli.py` helper.
-#[derive(Serialize, Deserialize)]
-struct ComposePsdResult {
-    status: String,
-    psd_path: String,
-    /// Empty string when preview generation was disabled.
-    preview_path: String,
-    metadata_path: String,
-    placeholder_kind: Option<String>,
-    smart_object_mode: String,
-}
-
-/// Compose a generated image into a PSD template's placeholder (true
-/// smart-object content replacement when applicable) and export
-/// `<filename>.psd` + `<filename>_preview.png` + `<filename>_metadata.json`.
-///
-/// This shells out to `python/bridge/compose_psd_cli.py` using the same Python
-/// interpreter resolution as ComfyUI (`python_embeded` when present), so it
-/// reuses the proven, vendored psd-tools pipeline without requiring a running
-/// ComfyUI server. `dir` is the ComfyUI/project root (defaults to the process
-/// working dir); the rest map 1:1 onto the CLI flags.
-#[tauri::command]
-#[allow(clippy::too_many_arguments)]
-fn compose_psd(
-    dir: Option<String>,
-    template: String,
-    image: String,
-    output_dir: String,
-    filename: Option<String>,
-    placeholder: Option<String>,
-    fit_mode: Option<String>,
-    z_order: Option<String>,
-    smart_object_mode: Option<String>,
-    hide_placeholder: Option<String>,
-    metadata: Option<String>,
-    save_preview: Option<bool>,
-) -> Result<ComposePsdResult, String> {
-    let dir = resolve_comfy_dir(&dir)?;
-    let python = comfy_python(&dir);
-    let script = dir.join("python").join("bridge").join("compose_psd_cli.py");
-    if !script.is_file() {
-        return Err(format!(
-            "compose_psd_cli.py not found at {}",
-            script.display()
-        ));
-    }
-
-    // The helper joins `filename` onto `output_dir` (`directory / f"{base}.psd"`),
-    // so a name with path separators or `..` could write outside the chosen
-    // folder. Validate it here before handing the value to the CLI.
-    let filename = filename.as_deref().unwrap_or("final");
-    studio_reject_unsafe_basename(filename)?;
-
-    let mut cmd = std::process::Command::new(&python);
-    cmd.arg(&script)
-        .arg("--template")
-        .arg(&template)
-        .arg("--image")
-        .arg(&image)
-        .arg("--output-dir")
-        .arg(&output_dir)
-        .arg("--filename")
-        .arg(filename)
-        .arg("--placeholder")
-        .arg(placeholder.as_deref().unwrap_or("{}"))
-        .arg("--fit-mode")
-        .arg(fit_mode.as_deref().unwrap_or("contain"))
-        .arg("--z-order")
-        .arg(z_order.as_deref().unwrap_or("above_background"))
-        .arg("--smart-object-mode")
-        .arg(smart_object_mode.as_deref().unwrap_or("disable"))
-        .arg("--hide-placeholder")
-        .arg(hide_placeholder.as_deref().unwrap_or("enable"))
-        .arg("--metadata")
-        .arg(metadata.as_deref().unwrap_or("{}"))
-        .arg("--save-preview")
-        .arg(if save_preview.unwrap_or(true) {
-            "enable"
-        } else {
-            "disable"
-        })
-        .current_dir(&dir);
-    #[cfg(windows)]
-    {
-        use std::os::windows::process::CommandExt;
-        // CREATE_NO_WINDOW: don't pop a console window for the child.
-        cmd.creation_flags(0x0800_0000);
-    }
-
-    let output = cmd
-        .output()
-        .map_err(|err| format!("failed to launch {}: {err}", python.display()))?;
-    if !output.status.success() {
-        let stderr = String::from_utf8_lossy(&output.stderr);
-        return Err(format!("compose_psd failed: {}", stderr.trim()));
-    }
-    let stdout = String::from_utf8_lossy(&output.stdout);
-    serde_json::from_str::<ComposePsdResult>(stdout.trim()).map_err(|err| {
-        format!(
-            "could not parse compose_psd output: {err} (raw: {})",
-            stdout.trim()
-        )
-    })
-}
-
-/// A single PSD layer, mirroring the rows printed by `inspect_psd_cli.py`.
-#[derive(Serialize, Deserialize)]
-struct PsdLayerInfo {
-    name: String,
-    /// "group" | "smartobject" | "pixel".
-    kind: String,
-}
-
-/// Result of an `inspect_psd` run, mirroring the JSON printed by the
-/// `inspect_psd_cli.py` helper.
-#[derive(Serialize, Deserialize)]
-struct InspectPsdResult {
-    status: String,
-    /// `false` when the template path does not point at a file on disk.
-    exists: bool,
-    width: u32,
-    height: u32,
-    /// Flat list of every layer (groups and their children), newest-first as
-    /// PSD stores them.
-    layers: Vec<PsdLayerInfo>,
-    /// Subset of the requested `names` that were not found in the PSD.
-    missing: Vec<String>,
-}
-
-/// Inspect a PSD template: report whether it exists on disk, its canvas size,
-/// and the names/kinds of its layers, plus which of the requested placeholder
-/// `names` are missing. This lets the editor validate a real PSD before a run
-/// (file present, placeholder layer name actually exists) instead of only
-/// surfacing the problem mid-compose.
-///
-/// Like `compose_psd`, this shells out to `python/bridge/inspect_psd_cli.py`
-/// using the same Python interpreter resolution as ComfyUI, reusing the
-/// vendored psd-tools pipeline without a running ComfyUI server.
-#[tauri::command]
-fn inspect_psd(
-    dir: Option<String>,
-    template: String,
-    names: Option<Vec<String>>,
-) -> Result<InspectPsdResult, String> {
-    let dir = resolve_comfy_dir(&dir)?;
-    let python = comfy_python(&dir);
-    let script = dir.join("python").join("bridge").join("inspect_psd_cli.py");
-    if !script.is_file() {
-        return Err(format!("inspect_psd_cli.py not found at {}", script.display()));
-    }
-    let names_json =
-        serde_json::to_string(&names.unwrap_or_default()).map_err(|err| err.to_string())?;
-
-    let mut cmd = std::process::Command::new(&python);
-    cmd.arg(&script)
-        .arg("--template")
-        .arg(&template)
-        .arg("--names")
-        .arg(&names_json)
-        .current_dir(&dir);
-    #[cfg(windows)]
-    {
-        use std::os::windows::process::CommandExt;
-        // CREATE_NO_WINDOW: don't pop a console window for the child.
-        cmd.creation_flags(0x0800_0000);
-    }
-
-    let output = cmd
-        .output()
-        .map_err(|err| format!("failed to launch {}: {err}", python.display()))?;
-    if !output.status.success() {
-        let stderr = String::from_utf8_lossy(&output.stderr);
-        return Err(format!("inspect_psd failed: {}", stderr.trim()));
-    }
-    let stdout = String::from_utf8_lossy(&output.stdout);
-    serde_json::from_str::<InspectPsdResult>(stdout.trim()).map_err(|err| {
-        format!(
-            "could not parse inspect_psd output: {err} (raw: {})",
-            stdout.trim()
-        )
-    })
-}
-
 fn main() {
     tauri::Builder::default()
         .plugin(tauri_plugin_dialog::init())
@@ -2151,17 +1752,17 @@ fn main() {
             rerun_task,
             open_url,
             pick_file,
-            list_psd_outputs,
+            psd::list_psd_outputs,
             read_image_data_url,
             generate_thumbnail,
             read_text_file,
             open_path,
-            comfyui_reachable,
-            comfyui_status,
-            start_comfyui,
-            stop_comfyui,
-            compose_psd,
-            inspect_psd
+            comfy::comfyui_reachable,
+            comfy::comfyui_status,
+            comfy::start_comfyui,
+            comfy::stop_comfyui,
+            psd::compose_psd,
+            psd::inspect_psd
         ])
         .build(tauri::generate_context!())
         .expect("error while running H-Gripe Desktop")

@@ -472,8 +472,9 @@ fn main() {
         .manage(StudioRunCancels::default())
         .setup(|app| {
             // Capture the bundled resource directory so the PSD nodes can fall
-            // back to the `main.py` + `python/bridge` subtree shipped via
-            // `bundle.resources` when running from a packaged install.
+            // back to the `h-gripe.project.json` + `python/bridge` subtree
+            // shipped via `bundle.resources` when running from a packaged
+            // install.
             use tauri::Manager;
             psd::set_resource_dir(app.path().resource_dir().ok());
             Ok(())

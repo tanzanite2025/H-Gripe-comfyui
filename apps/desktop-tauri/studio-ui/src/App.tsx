@@ -56,6 +56,7 @@ import {
 } from "./editor/runhistory";
 import { diffGraphs } from "./editor/snapshotdiff";
 import { useProjectScopedStore } from "./editor/useProjectScopedStore";
+import { useKeyboardShortcuts } from "./editor/useKeyboardShortcuts";
 import { LangContext, loadLang, saveLang, translate, type Lang } from "./i18n";
 import {
   addSnapshot,
@@ -1347,75 +1348,26 @@ function Studio() {
     };
   }, [nodes, edges, desktopAutosaveReady]);
 
-  // Keyboard: undo/redo (Ctrl+Z / Ctrl+Shift+Z / Ctrl+Y) and copy/paste
-  // (Ctrl+C / Ctrl+V). Skipped while editing a form field so native text
-  // editing keeps working there.
-  useEffect(() => {
-    const onKey = (e: KeyboardEvent) => {
-      if (!(e.ctrlKey || e.metaKey)) return;
-      const t = e.target as HTMLElement | null;
-      const editable =
-        !!t && (t.tagName === "INPUT" || t.tagName === "TEXTAREA" || t.tagName === "SELECT" || t.isContentEditable);
-      if (editable) return;
-      switch (e.key.toLowerCase()) {
-        case "z":
-          e.preventDefault();
-          if (e.shiftKey) redo();
-          else undo();
-          break;
-        case "y":
-          e.preventDefault();
-          redo();
-          break;
-        case "a":
-          e.preventDefault();
-          setNodes((ns) => ns.map((n) => ({ ...n, selected: true })));
-          setEdges((es) => es.map((ed) => ({ ...ed, selected: true })));
-          break;
-        case "c":
-          copySelection();
-          break;
-        case "v":
-          e.preventDefault();
-          pasteClipboard();
-          break;
-      }
-    };
-    window.addEventListener("keydown", onKey);
-    return () => window.removeEventListener("keydown", onKey);
-  }, [undo, redo, copySelection, pasteClipboard, setNodes, setEdges]);
+  // Select every node and edge (Ctrl/Cmd+A).
+  const selectAll = useCallback(() => {
+    setNodes((ns) => ns.map((n) => ({ ...n, selected: true })));
+    setEdges((es) => es.map((ed) => ({ ...ed, selected: true })));
+  }, [setNodes, setEdges]);
 
-  // File + run shortcuts: Ctrl/Cmd+S save, +Shift+S save as, +O open, +N new,
-  // +Enter run. These intentionally fire even while editing a field so a quick
-  // Ctrl+S always saves.
-  useEffect(() => {
-    const onKey = (e: KeyboardEvent) => {
-      if (!(e.ctrlKey || e.metaKey) || e.altKey) return;
-      switch (e.key.toLowerCase()) {
-        case "s":
-          e.preventDefault();
-          if (e.shiftKey) void handleSaveAs();
-          else void handleSave();
-          break;
-        case "o":
-          if (e.shiftKey) return;
-          e.preventDefault();
-          void handleOpen();
-          break;
-        case "n":
-          if (e.shiftKey) return;
-          e.preventDefault();
-          newWorkflow();
-          break;
-        case "enter":
-          e.preventDefault();
-          if (!running && issues.length === 0) void run();
-          break;
-      }
-    };
-    window.addEventListener("keydown", onKey);
-    return () => window.removeEventListener("keydown", onKey);
-  }, [handleSave, handleSaveAs, handleOpen, newWorkflow, run, running, issues]);
+  // Global keyboard shortcuts (edit + file/run); see the hook for behavior.
+  useKeyboardShortcuts({
+    undo,
+    redo,
+    selectAll,
+    copySelection,
+    pasteClipboard,
+    save: () => void handleSave(),
+    saveAs: () => void handleSaveAs(),
+    open: () => void handleOpen(),
+    newWorkflow,
+    run: () => void run(),
+    canRun: !running && issues.length === 0,
+  });
 
   // Stable context value so memoized node cards can edit their own params.
   const editing = useMemo(() => ({ onParamChange }), [onParamChange]);

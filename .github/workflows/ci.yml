@@ -66,3 +66,19 @@ jobs:
       - name: cargo test
         working-directory: apps/desktop-tauri/src-tauri
         run: cargo test
+
+  python-bridge:
+    name: python bridge (pytest)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.x'
+
+      - name: Install runtime + test deps
+        run: pip install Pillow numpy pytest
+
+      - name: Run bridge tests
+        run: python -m pytest python/bridge/tests -q

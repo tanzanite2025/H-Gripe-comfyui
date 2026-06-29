@@ -9,10 +9,25 @@ dropped into a large print PSD it goes soft, loses texture and is unusable at
 and restores high-frequency detail.
 
 Phase 1 is deliberately CPU-only and dependency-light -- only the vendored
-``Pillow`` + ``numpy`` (no GPU, no SupIR / CCSR / RealESRGAN): denoise is a
-Gaussian-blur blend, the upscale is a Lanczos resample, and detail is an unsharp
-mask. The GPU super-resolution backends are left as a future ``profile_ref``
+``Pillow`` + ``numpy`` (no GPU, no SupIR / CCSR / RealESRGAN). The upscale is a
+Lanczos resample, detail is an unsharp mask, and denoise is an *edge-preserving*
+median blend (a plain Gaussian blur would smear the very edges we are about to
+sharpen). The GPU super-resolution backends are left as a future ``profile_ref``
 mode behind the same node contract.
+
+The enhancement is **alpha-aware and colour-space aware** so the node behaves on
+real production assets, not just clean 8-bit RGB PNGs:
+
+* The alpha channel of a cut-out subject is split off, resized on its own and
+  recombined *after* enhancement, so denoise/sharpen never bleed a halo across
+  the matte edge.
+* CMYK, 16-bit (``I;16``), float (``F``), grayscale and palette (``P``) inputs
+  are converted to an 8-bit RGB working space first (CMYK via its embedded ICC
+  profile when present), and the resolved ``source_mode`` is recorded in the
+  report. An ICC profile is preserved on the output when the working space did
+  not change colour model.
+* EXIF orientation is normalised, and an input larger than ``--max-decode-pixels``
+  is rejected before it is decoded so a crafted/huge image cannot exhaust memory.
 
 Presets keep the UI to "pick an enhance style + target size"; the per-step
 strengths live behind an advanced toggle:
@@ -29,7 +44,9 @@ win, else the connected ``target_bounds`` (a PSD placeholder rectangle) via
 (aspect ratio preserved) and "covers" the target so both dimensions reach it;
 the final fit into the placeholder is left to PSD Export. ``--max-pixels`` caps
 the output so a huge placeholder cannot blow up memory -- the scale is reduced
-to fit and ``clamped`` is flagged in the report.
+to fit and ``clamped`` is flagged in the report. When the resolved scale is < 1
+(the target is smaller than the source) the node down-samples with a box filter
+and skips sharpening, which would only amplify the resampling artefacts.
 
 The emitted JSON is ``{"enhanced_image", "scale_factor", "enhance_report"}``
 where ``enhance_report`` records the resolved mode, sizes, scale factor and
@@ -40,6 +57,7 @@ stderr.
 from __future__ import annotations
 
 import argparse
+import io
 import json
 import sys
 import time
@@ -56,6 +74,16 @@ _PRESETS: dict[str, dict[str, float]] = {
 }
 
 _VALID = {"conservative", "texture_rebuild", "print_ready", "custom"}
+
+# Default ceiling on *input* pixels (~96 MP). The decode is refused above this
+# so a decompression-bomb workflow asset cannot exhaust memory before we even
+# look at it. Tunable via ``--max-decode-pixels`` (0 disables).
+_DEFAULT_MAX_DECODE_PIXELS = 96_000_000
+
+# Pillow modes that carry per-pixel transparency.
+_ALPHA_MODES = {"RGBA", "LA", "La", "PA"}
+# High-bit-depth integer/float modes we normalise down to 8-bit RGB.
+_HIGHBIT_MODES = {"I", "I;16", "I;16B", "I;16L", "I;16N", "F"}
 
 
 def _clip01(value: float) -> float:
@@ -124,19 +152,111 @@ def _resolve_scale(
     return scale, clamped
 
 
-def _denoise(img: Any, strength: float) -> Any:
-    """Blend a slight Gaussian blur back over the image to suppress noise.
+def _load_image(image_path: str, max_decode_pixels: int) -> tuple[Any, bool]:
+    """Open an image, refusing oversized inputs and fixing EXIF orientation.
 
-    A full blur would destroy texture, so we mix the blurred copy in by
-    ``strength`` only -- enough to soften sensor/compression noise before the
-    upscale amplifies it.
+    ``Image.open`` is lazy, so we read the declared size first and bail before
+    decoding when it exceeds ``max_decode_pixels`` (0 disables the guard).
+    Returns ``(image, exif_transposed)``.
+    """
+    from PIL import Image, ImageOps
+
+    img = Image.open(image_path)
+    width, height = img.size
+    if max_decode_pixels > 0 and width * height > max_decode_pixels:
+        raise ValueError(
+            f"input image too large to decode safely: {width}x{height} "
+            f"({width * height} px > max {max_decode_pixels})"
+        )
+    img.load()
+
+    transposed = False
+    try:
+        fixed = ImageOps.exif_transpose(img)
+    except Exception:  # noqa: BLE001 - a broken EXIF block must not abort enhance
+        fixed = img
+    if fixed is not img:
+        transposed = True
+    return fixed, transposed
+
+
+def _cmyk_to_rgb(img: Any) -> Any:
+    """Convert CMYK to sRGB, honouring an embedded ICC profile when present.
+
+    A bare ``convert("RGB")`` uses a naive transform that visibly shifts colour;
+    when the file carries a CMYK ICC profile we run a real profile-to-profile
+    transform into sRGB instead, falling back to the naive path on any error.
+    """
+    icc = img.info.get("icc_profile")
+    if icc:
+        try:
+            from PIL import ImageCms
+
+            src = ImageCms.ImageCmsProfile(io.BytesIO(icc))
+            dst = ImageCms.createProfile("sRGB")
+            return ImageCms.profileToProfile(img, src, dst, outputMode="RGB")
+        except Exception:  # noqa: BLE001 - fall back to the naive conversion
+            pass
+    return img.convert("RGB")
+
+
+def _highbit_to_rgb(img: Any) -> Any:
+    """Normalise a 16-bit / 32-bit / float image down to 8-bit RGB.
+
+    ``Image.convert("RGB")`` on an ``I;16`` image clips to 0..255 and destroys
+    the tonal range, so we scale the actual data range into 8 bits with numpy
+    first.
+    """
+    import numpy as np
+
+    arr = np.asarray(img).astype(np.float64)
+    if arr.size == 0:
+        return img.convert("RGB")
+    peak = float(arr.max())
+    if peak > 255.0:
+        # 16-bit data spans 0..65535; map to 0..255 preserving relative tone.
+        arr = arr * (255.0 / peak)
+    arr = np.clip(arr, 0.0, 255.0).astype(np.uint8)
+    from PIL import Image
+
+    gray = Image.fromarray(arr, mode="L")
+    return gray.convert("RGB")
+
+
+def _split_alpha_and_rgb(img: Any) -> tuple[Any, Any | None, bool]:
+    """Split an image into an 8-bit RGB working image and an optional alpha.
+
+    Returns ``(rgb, alpha_or_none, had_alpha)``. The alpha channel is kept as a
+    separate ``L`` image so enhancement only ever touches colour data.
+    """
+    mode = img.mode
+    had_alpha = mode in _ALPHA_MODES or (mode == "P" and "transparency" in img.info)
+
+    if had_alpha:
+        rgba = img.convert("RGBA")
+        alpha = rgba.getchannel("A")
+        return rgba.convert("RGB"), alpha, True
+
+    if mode == "CMYK":
+        return _cmyk_to_rgb(img), None, False
+    if mode in _HIGHBIT_MODES:
+        return _highbit_to_rgb(img), None, False
+    return img.convert("RGB"), None, False
+
+
+def _denoise(img: Any, strength: float) -> Any:
+    """Edge-preserving denoise: blend a median-filtered copy back in.
+
+    A median filter removes speckle/compression noise while keeping edges
+    crisp; mixing it in by ``strength`` softens noise without the global smear a
+    Gaussian blur would leave for the unsharp mask to then re-amplify.
     """
     if strength <= 0.0:
         return img
     from PIL import Image, ImageFilter
 
-    blurred = img.filter(ImageFilter.GaussianBlur(radius=1.2))
-    return Image.blend(img, blurred, _clip01(strength))
+    cleaned = img.filter(ImageFilter.MedianFilter(size=3))
+    return Image.blend(img, cleaned, _clip01(strength))
 
 
 def _sharpen(img: Any, strength: float) -> Any:
@@ -149,9 +269,17 @@ def _sharpen(img: Any, strength: float) -> Any:
     return img.filter(ImageFilter.UnsharpMask(radius=2.0, percent=percent, threshold=2))
 
 
-def enhance(args: argparse.Namespace) -> dict[str, Any]:
+def _resample(img: Any, out_w: int, out_h: int, downscaling: bool) -> Any:
+    """Resize, using a box filter when shrinking and Lanczos when enlarging."""
     from PIL import Image
 
+    if (out_w, out_h) == img.size:
+        return img
+    resample = Image.BOX if downscaling else Image.LANCZOS
+    return img.resize((out_w, out_h), resample)
+
+
+def enhance(args: argparse.Namespace) -> dict[str, Any]:
     image_path = (args.image or "").strip()
     if not image_path or not Path(image_path).is_file():
         raise FileNotFoundError(f"base image not found: {image_path}")
@@ -184,23 +312,43 @@ def enhance(args: argparse.Namespace) -> dict[str, Any]:
         target_w, target_h = _target_from_bounds(args.target_bounds_json)
 
     max_pixels = int(max(0, args.max_pixels))
+    max_decode_pixels = int(max(0, args.max_decode_pixels))
 
     started = time.perf_counter()
-    img = Image.open(image_path).convert("RGBA")
-    src_w, src_h = img.size
+
+    raw, exif_transposed = _load_image(image_path, max_decode_pixels)
+    source_mode = raw.mode
+    # Preserve an ICC profile only when we stay in the same colour model; a
+    # CMYK/high-bit conversion produces sRGB data the old profile no longer
+    # describes.
+    icc_profile = raw.info.get("icc_profile") if source_mode in ("RGB", "RGBA", "L", "LA") else None
+
+    rgb, alpha, had_alpha = _split_alpha_and_rgb(raw)
+    src_w, src_h = rgb.size
 
     scale, clamped = _resolve_scale(
         src_w, src_h, target_w, target_h, fallback_scale, max_pixels
     )
     out_w = max(1, int(round(src_w * scale)))
     out_h = max(1, int(round(src_h * scale)))
+    downscaling = out_w < src_w or out_h < src_h
 
-    # Pipeline: denoise the small image, upscale (Lanczos), then sharpen so the
-    # restored detail lands on the final pixel grid.
-    img = _denoise(img, denoise_strength)
-    if (out_w, out_h) != (src_w, src_h):
-        img = img.resize((out_w, out_h), Image.LANCZOS)
-    img = _sharpen(img, texture_strength)
+    # Pipeline (colour channels only): denoise the small image, resample, then
+    # sharpen so restored detail lands on the final grid. When downscaling we
+    # skip the unsharp pass -- it would only amplify resampling artefacts.
+    rgb = _denoise(rgb, denoise_strength)
+    rgb = _resample(rgb, out_w, out_h, downscaling)
+    applied_texture = 0.0 if downscaling else texture_strength
+    rgb = _sharpen(rgb, applied_texture)
+
+    # Recombine the untouched alpha, resized on its own track so the matte edge
+    # never picks up a denoise/sharpen halo.
+    if had_alpha and alpha is not None:
+        alpha_resized = _resample(alpha, out_w, out_h, downscaling)
+        out_img = rgb.convert("RGBA")
+        out_img.putalpha(alpha_resized)
+    else:
+        out_img = rgb
 
     directory = Path((args.output_dir or "").strip() or ".")
     directory.mkdir(parents=True, exist_ok=True)
@@ -208,7 +356,12 @@ def enhance(args: argparse.Namespace) -> dict[str, Any]:
     image_out = directory / f"{stem}.png"
 
     target_dpi = int(max(1, args.target_dpi))
-    img.save(str(image_out), format="PNG", dpi=(target_dpi, target_dpi))
+    save_kwargs: dict[str, Any] = {"format": "PNG", "dpi": (target_dpi, target_dpi)}
+    icc_preserved = False
+    if icc_profile:
+        save_kwargs["icc_profile"] = icc_profile
+        icc_preserved = True
+    out_img.save(str(image_out), **save_kwargs)
 
     elapsed_ms = int(round((time.perf_counter() - started) * 1000.0))
     scale_factor = round(out_w / src_w, 4)
@@ -216,14 +369,22 @@ def enhance(args: argparse.Namespace) -> dict[str, Any]:
     enhance_report = {
         "mode": mode,
         "scale_factor": scale_factor,
+        "source_mode": source_mode,
+        "output_mode": out_img.mode,
+        "had_alpha": had_alpha,
         "source_size": [src_w, src_h],
         "output_size": [out_w, out_h],
         "target_size": [target_w, target_h] if (target_w > 0 or target_h > 0) else None,
         "target_dpi": target_dpi,
         "max_pixels": max_pixels,
+        "max_decode_pixels": max_decode_pixels,
         "clamped": clamped,
+        "downscaled": downscaling,
+        "exif_transposed": exif_transposed,
+        "icc_preserved": icc_preserved,
+        "denoise_method": "median" if denoise_strength > 0.0 else "none",
         "denoise_strength": round(denoise_strength, 4),
-        "texture_strength": round(texture_strength, 4),
+        "texture_strength": round(applied_texture, 4),
         "preserve_text_logo": preserve_text_logo,
         "processing_time_ms": elapsed_ms,
     }
@@ -280,6 +441,13 @@ def build_parser() -> argparse.ArgumentParser:
         help="cap on output pixels; scale is reduced to fit (0 disables)",
     )
     parser.add_argument(
+        "--max-decode-pixels",
+        dest="max_decode_pixels",
+        type=int,
+        default=_DEFAULT_MAX_DECODE_PIXELS,
+        help="reject input images larger than this many pixels (0 disables)",
+    )
+    parser.add_argument(
         "--scale",
         type=float,
         default=2.0,
@@ -290,7 +458,7 @@ def build_parser() -> argparse.ArgumentParser:
         dest="denoise_strength",
         type=float,
         default=0.3,
-        help="Gaussian-blur denoise blend 0..1 (custom)",
+        help="edge-preserving median denoise blend 0..1 (custom)",
     )
     parser.add_argument(
         "--texture-strength",

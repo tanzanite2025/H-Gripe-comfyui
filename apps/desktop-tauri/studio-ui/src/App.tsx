@@ -31,6 +31,7 @@ import { layeredPositions } from "./editor/layout";
 import type { HgripeNodeData } from "./editor/HgripeNode";
 import { fromWorkflowGraph, toWorkflowGraph } from "./editor/adapter";
 import { ProjectPanel, baseName } from "./editor/ProjectPanel";
+import { NodeSearchBox } from "./editor/NodeSearchBox";
 import { RunLog } from "./editor/RunLogPanel";
 import {
   appendLog,
@@ -395,6 +396,15 @@ function Studio() {
       setSelectedId(nodeId);
     },
     [setNodes],
+  );
+
+  // Select a node and pan/zoom the viewport to center it (used by node search).
+  const jumpToNode = useCallback(
+    (id: string) => {
+      focusNode(id);
+      void fitView({ nodes: [{ id }], duration: 400, maxZoom: 1.5 });
+    },
+    [focusNode, fitView],
   );
 
   // After a run settles, surface any failed nodes: select/focus the first one
@@ -1282,6 +1292,7 @@ function Studio() {
           {showSnapshots ? "Hide Snapshots" : "Snapshots"}
           {snapshots.length > 0 ? ` (${snapshots.length})` : ""}
         </button>
+        <NodeSearchBox nodes={nodes} onJump={jumpToNode} />
         {isDesktop && (
           <button onClick={newWorkflow} title="start a new, empty workflow (Ctrl/Cmd+N)">
             New

@@ -119,6 +119,47 @@ button:disabled { opacity: 0.6; cursor: default; }
 }
 .snapshot-auto input { cursor: pointer; }
 
+.node-search { position: relative; display: inline-block; }
+.node-search > input {
+  width: 140px;
+  padding: 4px 8px;
+  font-size: 12px;
+}
+.node-search-results {
+  position: absolute;
+  z-index: 20;
+  top: calc(100% + 2px);
+  left: 0;
+  min-width: 200px;
+  max-height: 260px;
+  overflow: auto;
+  margin: 0;
+  padding: 4px;
+  list-style: none;
+  background: var(--panel);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  box-shadow: 0 6px 18px rgba(0, 0, 0, 0.4);
+}
+.node-search-results li { margin: 0; }
+.node-search-empty { color: var(--muted); font-size: 12px; padding: 6px 8px; }
+.node-search-results button {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 1px;
+  width: 100%;
+  padding: 5px 8px;
+  background: none;
+  border: none;
+  border-radius: 4px;
+  cursor: pointer;
+  text-align: left;
+}
+.node-search-results button:hover { background: var(--border); }
+.node-search-title { font-size: 12px; }
+.node-search-id { font-size: 10px; color: var(--muted); font-family: ui-monospace, Menlo, Consolas, monospace; }
+
 .inspector {
   width: 300px;
   border-left: 1px solid var(--border);

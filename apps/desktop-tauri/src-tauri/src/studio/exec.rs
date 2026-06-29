@@ -760,11 +760,63 @@ async fn execute_studio_prompt_optimize(
     }
 }
 
+/// Where a Studio node runs. Authoritative server-side mirror of the
+/// `executor` field on the TS `NodeSpec` (studio-ui/src/graph/nodeSpecs.ts).
+/// Routing is driven by this classification (never by a client-supplied
+/// field), so a `local` card can only reach `python/bridge` handlers and an
+/// `api` card can only reach the broker — they can't be swapped by a crafted
+/// graph. See docs/card-executor-split-and-psd-chain-hardening.md.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum StudioExecutor {
+    /// Pure in-process node (no backend call, no network).
+    Graph,
+    /// Always a `python/bridge` CLI; must not touch the network.
+    Local,
+    /// Always a provider call through the broker.
+    Api,
+    /// User picks per-node via a `mode` param (`promptOptimize`).
+    Hybrid,
+}
+
+/// Classify a node kind. Returns `None` for an unknown kind (the single
+/// gate for unsupported kinds). Keep in sync with `nodeSpecs.ts`.
+pub(crate) fn studio_executor_for_kind(kind: &str) -> Option<StudioExecutor> {
+    use StudioExecutor::*;
+    Some(match kind {
+        "prompt" | "batch" | "imageSource" | "psdTemplate" | "number" | "reroute" | "group"
+        | "compare" | "logic" | "if" | "switch" | "preview" | "save" => Graph,
+        "psdContextAnalyze" | "matchLightColor" | "refineMaskEdge" | "imageEnhance"
+        | "detailWatchdog" | "psdExport" => Local,
+        "generate" | "detailRepaint" => Api,
+        "promptOptimize" => Hybrid,
+        _ => return None,
+    })
+}
+
 async fn execute_studio_node(
     node: &StudioGraphNode,
     inputs: BTreeMap<String, Value>,
     cancels: &tauri::State<'_, StudioRunCancels>,
     run_id: &str,
+) -> Result<BTreeMap<String, Value>, String> {
+    // Route on the executor first, then dispatch by kind inside that class.
+    // Each class-handler only has access to the resources its executor is
+    // allowed to use, so the local/API boundary is enforced structurally.
+    match studio_executor_for_kind(node.kind.as_str()) {
+        Some(StudioExecutor::Graph) => execute_studio_graph_node(node, &inputs),
+        Some(StudioExecutor::Local) => execute_studio_local_node(node, &inputs),
+        Some(StudioExecutor::Api) => execute_studio_api_node(node, &inputs, cancels, run_id).await,
+        Some(StudioExecutor::Hybrid) => {
+            execute_studio_prompt_optimize(node, &inputs, cancels, run_id).await
+        }
+        None => Err(format!("unsupported Studio node kind: {}", node.kind)),
+    }
+}
+
+/// Pure-graph nodes: no backend call, no network.
+fn execute_studio_graph_node(
+    node: &StudioGraphNode,
+    inputs: &BTreeMap<String, Value>,
 ) -> Result<BTreeMap<String, Value>, String> {
     match node.kind.as_str() {
         "prompt" => Ok(studio_output_map([(
@@ -812,7 +864,7 @@ async fn execute_studio_node(
         "group" => Ok(BTreeMap::new()),
         "compare" => Ok(studio_output_map([(
             "result",
-            json!(if studio_compare_result(&node.params, &inputs) {
+            json!(if studio_compare_result(&node.params, inputs) {
                 1
             } else {
                 0
@@ -820,7 +872,7 @@ async fn execute_studio_node(
         )])),
         "logic" => Ok(studio_output_map([(
             "result",
-            json!(if studio_logic_result(&node.params, &inputs) {
+            json!(if studio_logic_result(&node.params, inputs) {
                 1
             } else {
                 0
@@ -854,8 +906,6 @@ async fn execute_studio_node(
                 inputs.get("value").cloned().unwrap_or(Value::Null),
             )]))
         }
-        "promptOptimize" => execute_studio_prompt_optimize(node, &inputs, cancels, run_id).await,
-        "generate" => execute_studio_generate(node, &inputs, cancels, run_id).await,
         "preview" => Ok(studio_output_map([(
             "image",
             inputs.get("image").cloned().unwrap_or(Value::Null),
@@ -871,14 +921,39 @@ async fn execute_studio_node(
                 json!(studio_value_to_string(node.params.get("filename"))),
             ),
         ])),
-        "psdContextAnalyze" => execute_studio_psd_context_analyze(node, &inputs),
-        "matchLightColor" => execute_studio_match_light_color(node, &inputs),
-        "refineMaskEdge" => execute_studio_refine_mask_edge(node, &inputs),
-        "imageEnhance" => execute_studio_image_enhance(node, &inputs),
-        "detailWatchdog" => execute_studio_detail_watchdog(node, &inputs),
-        "detailRepaint" => execute_studio_detail_repaint(node, &inputs, cancels, run_id).await,
-        "psdExport" => execute_studio_psd_export(node, &inputs),
-        other => Err(format!("unsupported Studio node kind: {other}")),
+        other => Err(format!("node kind is not a graph node: {other}")),
+    }
+}
+
+/// Local nodes: every arm shells out to a `python/bridge` CLI via `psd.rs`.
+/// This handler is intentionally given no broker/network access, so a local
+/// card can never make a provider call.
+fn execute_studio_local_node(
+    node: &StudioGraphNode,
+    inputs: &BTreeMap<String, Value>,
+) -> Result<BTreeMap<String, Value>, String> {
+    match node.kind.as_str() {
+        "psdContextAnalyze" => execute_studio_psd_context_analyze(node, inputs),
+        "matchLightColor" => execute_studio_match_light_color(node, inputs),
+        "refineMaskEdge" => execute_studio_refine_mask_edge(node, inputs),
+        "imageEnhance" => execute_studio_image_enhance(node, inputs),
+        "detailWatchdog" => execute_studio_detail_watchdog(node, inputs),
+        "psdExport" => execute_studio_psd_export(node, inputs),
+        other => Err(format!("node kind is not a local node: {other}")),
+    }
+}
+
+/// API nodes: every arm goes through the broker (`execute_and_record_cancellable`).
+async fn execute_studio_api_node(
+    node: &StudioGraphNode,
+    inputs: &BTreeMap<String, Value>,
+    cancels: &tauri::State<'_, StudioRunCancels>,
+    run_id: &str,
+) -> Result<BTreeMap<String, Value>, String> {
+    match node.kind.as_str() {
+        "generate" => execute_studio_generate(node, inputs, cancels, run_id).await,
+        "detailRepaint" => execute_studio_detail_repaint(node, inputs, cancels, run_id).await,
+        other => Err(format!("node kind is not an API node: {other}")),
     }
 }
 
@@ -1115,6 +1190,52 @@ mod tests {
         assert!(!studio_prompt_optimize_provider_supported("custom_http"));
         assert!(!studio_prompt_optimize_provider_supported("replicate"));
         assert!(!studio_prompt_optimize_provider_supported(""));
+    }
+
+    fn node_with_kind(kind: &str) -> StudioGraphNode {
+        StudioGraphNode {
+            id: "n1".to_string(),
+            kind: kind.to_string(),
+            params: BTreeMap::new(),
+        }
+    }
+
+    #[test]
+    fn executor_classification_partitions_kinds() {
+        use StudioExecutor::*;
+        for kind in [
+            "prompt", "batch", "imageSource", "psdTemplate", "number", "reroute", "group",
+            "compare", "logic", "if", "switch", "preview", "save",
+        ] {
+            assert_eq!(studio_executor_for_kind(kind), Some(Graph), "{kind}");
+        }
+        for kind in [
+            "psdContextAnalyze",
+            "matchLightColor",
+            "refineMaskEdge",
+            "imageEnhance",
+            "detailWatchdog",
+            "psdExport",
+        ] {
+            assert_eq!(studio_executor_for_kind(kind), Some(Local), "{kind}");
+        }
+        assert_eq!(studio_executor_for_kind("generate"), Some(Api));
+        assert_eq!(studio_executor_for_kind("detailRepaint"), Some(Api));
+        assert_eq!(studio_executor_for_kind("promptOptimize"), Some(Hybrid));
+        assert_eq!(studio_executor_for_kind("nope"), None);
+    }
+
+    #[test]
+    fn class_handlers_reject_foreign_kinds() {
+        let inputs = BTreeMap::new();
+        // An API kind must never be runnable through the local (python-only)
+        // path, and a local kind must never run through the graph path.
+        let err = execute_studio_local_node(&node_with_kind("generate"), &inputs).unwrap_err();
+        assert!(err.contains("not a local node"), "{err}");
+        let err = execute_studio_graph_node(&node_with_kind("psdExport"), &inputs).unwrap_err();
+        assert!(err.contains("not a graph node"), "{err}");
+        // A genuine graph node still resolves through its own handler.
+        assert!(execute_studio_graph_node(&node_with_kind("prompt"), &inputs).is_ok());
     }
 
     #[test]

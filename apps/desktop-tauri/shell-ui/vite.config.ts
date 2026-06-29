@@ -1,7 +1,7 @@
 import { defineConfig } from "vite";
 
 // The dependency-free desktop shell (Dashboard / Credentials / Profiles / Run /
-// History / PSD / Advanced Canvas). Built into the Tauri frontendDist (../dist)
+// History / PSD / Node Editor). Built into the Tauri frontendDist (../dist)
 // that the webview loads directly. The React Node Editor sub-app (studio-ui)
 // builds separately into ../dist/studio; the Tauri before* hooks build this
 // shell FIRST (emptying ../dist) and studio-ui SECOND, so dist/studio survives.

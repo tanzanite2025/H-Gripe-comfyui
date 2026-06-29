@@ -20,7 +20,7 @@ export async function listProfiles(): Promise<ProviderProfile[]> {
   if (!invoke) {
     return [
       { profile_ref: "mock-openai", provider: "openai", model: "gpt-image-1", credentials_ref: "openai-key" },
-      { profile_ref: "mock-local", provider: "comfyui", model: "sdxl", credentials_ref: null },
+      { profile_ref: "mock-local", provider: "local", model: "sdxl", credentials_ref: null },
     ];
   }
   return (await invoke("get_profiles")) as ProviderProfile[];

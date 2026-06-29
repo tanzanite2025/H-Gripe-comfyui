@@ -143,6 +143,10 @@ export function useStudioRunController({
   const [runHistory, setRunHistory] = useState<RunRecord[]>(() => loadRunHistory());
   const [showHistory, setShowHistory] = useState(false);
 
+  // True from the moment a run/batch starts until it settles. Guards against
+  // re-entrancy (e.g. the keyboard shortcut firing while a run is in flight),
+  // which would otherwise let two runs clobber each other's refs and history.
+  const inFlight = useRef(false);
   // While a run is in flight this collects that run's log entries so they can
   // be saved as a RunRecord when it ends; null when no run is active.
   const runEntriesRef = useRef<RunLogEntry[] | null>(null);
@@ -389,6 +393,8 @@ export function useStudioRunController({
   );
 
   const run = useCallback(async () => {
+    if (inFlight.current) return;
+    inFlight.current = true;
     setRunning(true);
     setShowLog(true);
     runFailures.current = [];
@@ -428,6 +434,7 @@ export function useStudioRunController({
       pushLog(cancelled ? "warn" : "error", cancelled ? "run cancelled" : `run failed: ${message}`);
     } finally {
       setRunning(false);
+      inFlight.current = false;
       highlightFailures();
       recordRunHistory("run", startedAt, outcome, backend);
     }
@@ -466,6 +473,8 @@ export function useStudioRunController({
       setMessage("batch: no items");
       return;
     }
+    if (inFlight.current) return;
+    inFlight.current = true;
     setRunning(true);
     setShowLog(true);
     runFailures.current = [];
@@ -513,6 +522,7 @@ export function useStudioRunController({
     } finally {
       if (rustRunId) endRustRun(rustRunId);
       setRunning(false);
+      inFlight.current = false;
       highlightFailures();
       recordRunHistory("batch", startedAt, outcome, backend);
     }

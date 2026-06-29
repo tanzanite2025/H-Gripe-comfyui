@@ -98,6 +98,30 @@ describe("useStudioRunController", () => {
     expect(focusNode).not.toHaveBeenCalled();
   });
 
+  it("ignores a re-entrant run while one is already in flight", async () => {
+    let release!: () => void;
+    const gate = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    runGraphMock.mockImplementation(async () => {
+      await gate;
+      return { outputs: new Map() };
+    });
+    const { options } = setup([makeNode("p1", "prompt")]);
+    const { result } = renderHook(() => useStudioRunController(options));
+
+    await act(async () => {
+      // Kick off the first run (stays pending on `gate`) then try a second.
+      const first = result.current.run();
+      const second = result.current.run();
+      release();
+      await Promise.all([first, second]);
+    });
+
+    expect(runGraphMock).toHaveBeenCalledOnce();
+    expect(result.current.runHistory).toHaveLength(1);
+  });
+
   it("records per-node telemetry and highlights the first failed node", async () => {
     runGraphMock.mockImplementation(async (_graph: unknown, _registry: unknown, observer?: RunObserver) => {
       observer?.onNodeRun?.("p1", { status: "failed", durationMs: 5, error: "boom" } as NodeRunInfo);

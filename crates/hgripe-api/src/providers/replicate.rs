@@ -2,7 +2,7 @@ use crate::credentials::{load_credential_ref, CredentialEntry};
 use crate::model::{ApiErrorInfo, ApiResult, ApiStatus, ApiTask, OutputFile};
 use crate::outputs::write_task_output_bytes;
 use crate::profiles::{load_provider_profile, ProviderProfile};
-use crate::provider::{BrokerError, BrokerResult, Provider};
+use crate::provider::{BrokerError, BrokerResult, Provider, ProviderExecutionContext};
 use async_trait::async_trait;
 use reqwest::header::CONTENT_TYPE;
 use reqwest::{Client, StatusCode};
@@ -10,7 +10,6 @@ use serde_json::{json, Map, Value};
 use std::collections::BTreeMap;
 use std::env;
 use std::time::Duration;
-use tokio::time::sleep;
 
 const DEFAULT_BASE_URL: &str = "https://api.replicate.com";
 
@@ -46,20 +45,35 @@ impl Provider for ReplicateProvider {
     }
 
     async fn execute(&self, task: &ApiTask) -> BrokerResult<ApiResult> {
+        self.execute_with_context(task, &ProviderExecutionContext::default())
+            .await
+    }
+
+    async fn execute_with_context(
+        &self,
+        task: &ApiTask,
+        context: &ProviderExecutionContext,
+    ) -> BrokerResult<ApiResult> {
+        context.check_cancelled()?;
         let task = apply_provider_profile(task)?;
-        self.run_prediction(&task).await
+        self.run_prediction(&task, context).await
     }
 }
 
 impl ReplicateProvider {
-    async fn run_prediction(&self, task: &ApiTask) -> BrokerResult<ApiResult> {
+    async fn run_prediction(
+        &self,
+        task: &ApiTask,
+        context: &ProviderExecutionContext,
+    ) -> BrokerResult<ApiResult> {
         let credentials = resolve_credentials(task)?;
         let (submit_path, submit_body) = build_submit_request(task)?;
         let submit_url = endpoint_url(task, &submit_path, credentials.as_ref());
 
-        let submit = self
-            .send_json(task, &submit_url, Some(submit_body), credentials.as_ref())
-            .await?;
+        let submit = tokio::select! {
+            response = self.send_json(task, &submit_url, Some(submit_body), credentials.as_ref()) => response?,
+            _ = context.cancellation().cancelled() => return Err(BrokerError::Cancelled),
+        };
 
         if submit.status.is_server_error() {
             return Err(BrokerError::Provider(format!(
@@ -89,14 +103,64 @@ impl ReplicateProvider {
         let mut last_status_value: Option<String> = None;
         let mut last_request_id = submit.provider_request_id.clone();
 
+        if context.cancellation().is_cancelled() {
+            return Ok(self
+                .cancelled_prediction_result(
+                    task,
+                    &submit,
+                    &prediction_id,
+                    &last_body,
+                    0,
+                    max_polls,
+                    poll_interval_ms,
+                    last_status_value.as_deref(),
+                    last_request_id,
+                    credentials.as_ref(),
+                )
+                .await);
+        }
+
         for poll_count in 1..=max_polls {
             if poll_count > 1 && poll_interval_ms > 0 {
-                sleep(Duration::from_millis(poll_interval_ms)).await;
+                if let Err(BrokerError::Cancelled) =
+                    context.sleep(Duration::from_millis(poll_interval_ms)).await
+                {
+                    return Ok(self
+                        .cancelled_prediction_result(
+                            task,
+                            &submit,
+                            &prediction_id,
+                            &last_body,
+                            poll_count.saturating_sub(1),
+                            max_polls,
+                            poll_interval_ms,
+                            last_status_value.as_deref(),
+                            last_request_id,
+                            credentials.as_ref(),
+                        )
+                        .await);
+                }
             }
 
-            let poll = self
-                .send_json(task, &poll_url, None, credentials.as_ref())
-                .await?;
+            let poll = tokio::select! {
+                response = self.send_json(task, &poll_url, None, credentials.as_ref()) => response?,
+                _ = context.cancellation().cancelled() => {
+                    return Ok(self
+                        .cancelled_prediction_result(
+                            task,
+                            &submit,
+                            &prediction_id,
+                            &last_body,
+                            poll_count.saturating_sub(1),
+                            max_polls,
+                            poll_interval_ms,
+                            last_status_value.as_deref(),
+                            last_request_id,
+                            credentials.as_ref(),
+                        )
+                        .await);
+                }
+            };
 
             if poll.status.is_server_error() {
                 return Err(BrokerError::Provider(format!(
@@ -332,6 +396,92 @@ impl ReplicateProvider {
             &extension,
         )
     }
+
+    #[allow(clippy::too_many_arguments)]
+    async fn cancelled_prediction_result(
+        &self,
+        task: &ApiTask,
+        submit: &JsonResponse,
+        prediction_id: &str,
+        last_body: &Value,
+        poll_count: u64,
+        max_polls: u64,
+        poll_interval_ms: u64,
+        status_value: Option<&str>,
+        provider_request_id: Option<String>,
+        credentials: Option<&CredentialEntry>,
+    ) -> ApiResult {
+        let cancel_json = self
+            .send_cancel_prediction(task, submit, prediction_id, credentials)
+            .await;
+        let cancel_request_id = cancel_json
+            .get("provider_request_id")
+            .and_then(Value::as_str)
+            .map(str::to_string);
+        let normalized_status = status_value
+            .map(normalized_status_value)
+            .unwrap_or_else(|| "cancelled".to_string());
+        let mut output_json = prediction_output_json(
+            prediction_id,
+            &normalized_status,
+            last_body,
+            &last_body.get("output").cloned().unwrap_or(Value::Null),
+            &[],
+            poll_count,
+            max_polls,
+            poll_interval_ms,
+        );
+        if let Some(output) = output_json.as_object_mut() {
+            output.insert("cancel".to_string(), cancel_json);
+        }
+
+        ApiResult {
+            id: task.id.clone(),
+            status: ApiStatus::Cancelled,
+            output_files: Vec::new(),
+            output_json: Some(output_json),
+            metadata: BTreeMap::new(),
+            cost: None,
+            duration_ms: 0,
+            provider_request_id: cancel_request_id
+                .or(provider_request_id)
+                .or_else(|| submit.provider_request_id.clone())
+                .or_else(|| Some(prediction_id.to_string())),
+            cache_hit: false,
+            error: Some(ApiErrorInfo {
+                code: "cancelled".to_string(),
+                message: format!("replicate prediction {prediction_id} was cancelled"),
+                retryable: false,
+            }),
+        }
+    }
+
+    async fn send_cancel_prediction(
+        &self,
+        task: &ApiTask,
+        submit: &JsonResponse,
+        prediction_id: &str,
+        credentials: Option<&CredentialEntry>,
+    ) -> Value {
+        let cancel_url = resolve_cancel_url(task, &submit.body, prediction_id, credentials);
+        match self
+            .send_json(task, &cancel_url, Some(json!({})), credentials)
+            .await
+        {
+            Ok(response) => json!({
+                "sent": true,
+                "url": cancel_url,
+                "status_code": response.status.as_u16(),
+                "body": response.body,
+                "provider_request_id": response.provider_request_id,
+            }),
+            Err(err) => json!({
+                "sent": false,
+                "url": cancel_url,
+                "error": err.to_string(),
+            }),
+        }
+    }
 }
 
 fn build_submit_request(task: &ApiTask) -> BrokerResult<(String, Value)> {
@@ -398,6 +548,27 @@ fn resolve_poll_url(
     endpoint_url(
         task,
         &format!("/v1/predictions/{prediction_id}"),
+        credentials,
+    )
+}
+
+fn resolve_cancel_url(
+    task: &ApiTask,
+    submit_body: &Value,
+    prediction_id: &str,
+    credentials: Option<&CredentialEntry>,
+) -> String {
+    if let Some(url) = json_path_value(submit_body, "urls.cancel")
+        .and_then(value_to_string)
+        .map(|value| value.trim().to_string())
+        .filter(|value| !value.is_empty())
+    {
+        return url;
+    }
+
+    endpoint_url(
+        task,
+        &format!("/v1/predictions/{prediction_id}/cancel"),
         credentials,
     )
 }

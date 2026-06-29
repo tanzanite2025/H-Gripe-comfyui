@@ -39,5 +39,7 @@ pub use profiles::{
     ProviderProfileValidationIssue, ProviderProfilesValidation, ResolvedProviderProfile,
     ResolvedProviderProfileIssue,
 };
-pub use provider::{Provider, ProviderRegistry};
+pub use provider::{
+    BrokerError, CancellationToken, Provider, ProviderExecutionContext, ProviderRegistry,
+};
 pub use setup::{initialize_local_config, InitAction, InitOptions, InitReport};

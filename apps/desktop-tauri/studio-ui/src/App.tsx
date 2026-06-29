@@ -53,6 +53,7 @@ const NODE_STATUSES = new Set<NodeStatus>([
   "running",
   "succeeded",
   "failed",
+  "cancelled",
   "cached",
   "skipped",
 ]);

@@ -13,7 +13,7 @@ export interface HgripeNodeData extends Record<string, unknown> {
   status?: NodeStatus;
   /** Last run's wall-clock duration in ms (executed nodes only). */
   durationMs?: number;
-  /** Last run's error message, when `status === "failed"`. */
+  /** Last run's error message, when `status === "failed"` / `cancelled`. */
   error?: string | null;
   /** Path of the most recent output image, if any (for the preview node). */
   imagePath?: string | null;
@@ -100,12 +100,12 @@ function HgripeNodeImpl({ id, data, selected }: NodeProps) {
         <span className="node-title">{spec.title}</span>
         <span className={`badge badge-${status}`} title={fmtDuration(d.durationMs)}>
           {status}
-          {d.durationMs != null && (status === "succeeded" || status === "failed") ? (
+          {d.durationMs != null && (status === "succeeded" || status === "failed" || status === "cancelled") ? (
             <em className="badge-time"> {fmtDuration(d.durationMs)}</em>
           ) : null}
         </span>
       </div>
-      {!lod && status === "failed" && d.error ? (
+      {!lod && (status === "failed" || status === "cancelled") && d.error ? (
         <div className="node-error nodrag" title={d.error}>
           {d.error}
         </div>

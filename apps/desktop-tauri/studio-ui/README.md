@@ -73,12 +73,16 @@ pure/value/control nodes, prunes untaken branches, and routes `generate` /
 reference implementation. The Rust runner emits node-level Tauri events on
 `studio:graph-run` (`queued` / `running` / `succeeded` / `skipped` / `failed`),
 filtered by `run_id` in the webview so repeated or batch runs do not cross-talk.
-The toolbar's **Cancel** button calls `cancel_studio_run`; first-pass
-cancellation stops before the next node starts, while an already-running
-provider/API call is allowed to finish. Before the Node Editor becomes the
-primary production surface, the backend runner still needs durable workflow
-save/load beyond autosave, a media index/cache, provider-level aborts, richer
-logs, and FFmpeg-backed video assembly/export.
+The toolbar's **Cancel** button calls `cancel_studio_run`; cancellation stops
+before the next node starts and passes a cancellation token down into the Rust
+broker/provider layer for `generate` nodes. `custom_http async_job` can call a
+configured provider-native `cancel_url` / `cancel_url_path` / `urls.cancel`, and
+`replicate run` calls the prediction cancel endpoint. This is third-party
+provider/API remote job control, not an H-Gripe account/cloud system. Before the
+Node Editor becomes the primary production surface, the backend runner still
+needs durable workflow save/load beyond autosave, a media index/cache, richer
+logs, more complete error details, more provider-native cancellation adapters,
+and FFmpeg-backed video assembly/export.
 
 ## Editor features
 

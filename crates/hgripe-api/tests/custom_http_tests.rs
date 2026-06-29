@@ -1,5 +1,5 @@
 use hgripe_api::providers::custom_http::CustomHttpProvider;
-use hgripe_api::{ApiBroker, ApiStatus, ApiTask};
+use hgripe_api::{ApiBroker, ApiStatus, ApiTask, CancellationToken, ProviderExecutionContext};
 use serde_json::json;
 use std::fs;
 use std::sync::atomic::{AtomicU64, Ordering};
@@ -335,6 +335,67 @@ async fn custom_http_async_job_polls_and_downloads_result() {
     let _ = fs::remove_dir_all(output_dir);
 }
 
+#[tokio::test]
+async fn custom_http_async_job_cancel_sends_cancel_request() {
+    let (base_url, first_poll_rx, cancel_request_rx) = spawn_cancelable_async_job_server().await;
+
+    let mut broker = ApiBroker::new();
+    broker.register_provider(CustomHttpProvider::default());
+
+    let mut task = ApiTask::new("custom_http", "async_job");
+    task.id = "custom-http-async-job-cancel-test".to_string();
+    task.params.insert("method".into(), json!("POST"));
+    task.params
+        .insert("url".into(), json!(format!("{base_url}/submit")));
+    task.params
+        .insert("json".into(), json!({"prompt": "cancel me"}));
+    task.params.insert(
+        "poll_url".into(),
+        json!(format!("{base_url}/jobs/{{job_id}}")),
+    );
+    task.params.insert(
+        "cancel_url".into(),
+        json!(format!("{base_url}/jobs/{{job_id}}/cancel")),
+    );
+    task.params.insert("cancel_method".into(), json!("POST"));
+    task.params
+        .insert("cancel_json".into(), json!({"reason": "user_cancelled"}));
+    task.params.insert("job_id_path".into(), json!("id"));
+    task.params.insert("status_path".into(), json!("status"));
+    task.params
+        .insert("success_values".into(), json!(["succeeded"]));
+    task.params
+        .insert("failure_values".into(), json!(["failed"]));
+    task.params.insert("max_polls".into(), json!(3));
+    task.params.insert("poll_interval_ms".into(), json!(60_000));
+
+    let cancellation = CancellationToken::new();
+    let context = ProviderExecutionContext::new(cancellation.clone());
+    let run = tokio::spawn(async move { broker.execute_with_context(task, context).await });
+
+    first_poll_rx
+        .await
+        .expect("server should observe the first poll");
+    cancellation.cancel();
+
+    let result = run
+        .await
+        .expect("broker task should join")
+        .expect("cancelled HTTP job should return a result");
+    let cancel_request = cancel_request_rx
+        .await
+        .expect("server should capture cancel request");
+
+    assert_eq!(result.status, ApiStatus::Cancelled);
+    assert_eq!(
+        result.provider_request_id.as_deref(),
+        Some("local-async-cancel")
+    );
+    assert!(cancel_request.contains("POST /jobs/job-cancel/cancel HTTP/1.1"));
+    assert!(cancel_request.contains(r#""reason":"user_cancelled""#));
+    assert_eq!(result.output_json.unwrap()["cancel"]["sent"], json!(true));
+}
+
 async fn spawn_once_json_server(
     status_line: &'static str,
     body: &'static str,
@@ -504,6 +565,69 @@ async fn spawn_async_job_server(video_body: &'static [u8]) -> String {
     });
 
     base_url
+}
+
+async fn spawn_cancelable_async_job_server(
+) -> (String, oneshot::Receiver<()>, oneshot::Receiver<String>) {
+    let listener = TcpListener::bind("127.0.0.1:0")
+        .await
+        .expect("test server should bind");
+    let addr = listener.local_addr().expect("test server should have addr");
+    let base_url = format!("http://{addr}");
+    let (first_poll_tx, first_poll_rx) = oneshot::channel();
+    let (cancel_tx, cancel_rx) = oneshot::channel();
+    let first_poll_tx = Arc::new(std::sync::Mutex::new(Some(first_poll_tx)));
+    let cancel_tx = Arc::new(std::sync::Mutex::new(Some(cancel_tx)));
+
+    tokio::spawn(async move {
+        for _ in 0..3 {
+            let (mut socket, _) = listener.accept().await.expect("test server should accept");
+            let request = read_http_request(&mut socket).await;
+            let request_line = request.lines().next().unwrap_or("");
+
+            if request_line.starts_with("POST /submit ") {
+                write_json_response(
+                    &mut socket,
+                    "HTTP/1.1 200 OK",
+                    r#"{"id":"job-cancel"}"#,
+                    Some("local-async-submit"),
+                )
+                .await;
+            } else if request_line.starts_with("GET /jobs/job-cancel ") {
+                if let Some(tx) = first_poll_tx.lock().unwrap().take() {
+                    let _ = tx.send(());
+                }
+                write_json_response(
+                    &mut socket,
+                    "HTTP/1.1 200 OK",
+                    r#"{"status":"running"}"#,
+                    Some("local-async-poll-running"),
+                )
+                .await;
+            } else if request_line.starts_with("POST /jobs/job-cancel/cancel ") {
+                if let Some(tx) = cancel_tx.lock().unwrap().take() {
+                    let _ = tx.send(request.clone());
+                }
+                write_json_response(
+                    &mut socket,
+                    "HTTP/1.1 200 OK",
+                    r#"{"status":"cancelled"}"#,
+                    Some("local-async-cancel"),
+                )
+                .await;
+            } else {
+                write_json_response(
+                    &mut socket,
+                    "HTTP/1.1 404 Not Found",
+                    r#"{"error":"not found"}"#,
+                    None,
+                )
+                .await;
+            }
+        }
+    });
+
+    (base_url, first_poll_rx, cancel_rx)
 }
 
 async fn write_json_response(

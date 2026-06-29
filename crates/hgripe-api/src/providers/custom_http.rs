@@ -2,7 +2,7 @@ use crate::credentials::{load_credential_ref, CredentialEntry};
 use crate::model::{ApiErrorInfo, ApiResult, ApiStatus, ApiTask, OutputFile};
 use crate::outputs::write_task_output_bytes;
 use crate::profiles::{load_provider_profile, ProviderProfile};
-use crate::provider::{BrokerError, BrokerResult, Provider};
+use crate::provider::{BrokerError, BrokerResult, Provider, ProviderExecutionContext};
 use async_trait::async_trait;
 use reqwest::header::CONTENT_TYPE;
 use reqwest::multipart::{Form, Part};
@@ -13,7 +13,6 @@ use std::env;
 use std::fs;
 use std::path::Path;
 use std::time::Duration;
-use tokio::time::sleep;
 
 pub struct CustomHttpProvider {
     client: Client,
@@ -50,9 +49,19 @@ impl Provider for CustomHttpProvider {
     }
 
     async fn execute(&self, task: &ApiTask) -> BrokerResult<ApiResult> {
+        self.execute_with_context(task, &ProviderExecutionContext::default())
+            .await
+    }
+
+    async fn execute_with_context(
+        &self,
+        task: &ApiTask,
+        context: &ProviderExecutionContext,
+    ) -> BrokerResult<ApiResult> {
+        context.check_cancelled()?;
         let task = apply_provider_profile(task)?;
         match task.operation.as_str() {
-            "async_job" | "http.async_job" => self.execute_async_job(&task).await,
+            "async_job" | "http.async_job" => self.execute_async_job(&task, context).await,
             _ => self.execute_request(&task).await,
         }
     }
@@ -109,21 +118,26 @@ impl CustomHttpProvider {
         }
     }
 
-    async fn execute_async_job(&self, task: &ApiTask) -> BrokerResult<ApiResult> {
+    async fn execute_async_job(
+        &self,
+        task: &ApiTask,
+        context: &ProviderExecutionContext,
+    ) -> BrokerResult<ApiResult> {
         let submit_url = value_str(task, "url").ok_or_else(|| {
             BrokerError::Provider("custom_http async_job requires params.url".to_string())
         })?;
         let credentials = resolve_credentials(task)?;
-        let submit_response = self
-            .send_task_request(
+        let submit_response = tokio::select! {
+            response = self.send_task_request(
                 task,
                 "",
                 submit_url,
                 inferred_default_method(task, ""),
                 false,
                 credentials.as_ref(),
-            )
-            .await?;
+            ) => response?,
+            _ = context.cancellation().cancelled() => return Err(BrokerError::Cancelled),
+        };
 
         if submit_response.status.is_server_error() {
             return Err(BrokerError::Provider(format!(
@@ -178,14 +192,74 @@ impl CustomHttpProvider {
         let mut last_response: Option<HttpResponse> = None;
         let mut last_status_value: Option<String> = None;
 
+        if context.cancellation().is_cancelled() {
+            return Ok(self
+                .cancelled_async_job_result(
+                    task,
+                    &submit_response,
+                    None,
+                    &job_id,
+                    0,
+                    max_polls,
+                    poll_interval_ms,
+                    status_path,
+                    last_status_value.as_deref(),
+                    result_path,
+                    credentials.as_ref(),
+                )
+                .await);
+        }
+
         for poll_count in 1..=max_polls {
             if poll_count > 1 && poll_interval_ms > 0 {
-                sleep(Duration::from_millis(poll_interval_ms)).await;
+                if let Err(BrokerError::Cancelled) =
+                    context.sleep(Duration::from_millis(poll_interval_ms)).await
+                {
+                    return Ok(self
+                        .cancelled_async_job_result(
+                            task,
+                            &submit_response,
+                            last_response.as_ref(),
+                            &job_id,
+                            poll_count.saturating_sub(1),
+                            max_polls,
+                            poll_interval_ms,
+                            status_path,
+                            last_status_value.as_deref(),
+                            result_path,
+                            credentials.as_ref(),
+                        )
+                        .await);
+                }
             }
 
-            let response = self
-                .send_task_request(task, "poll", &poll_url, "GET", true, credentials.as_ref())
-                .await?;
+            let response = tokio::select! {
+                response = self.send_task_request(
+                    task,
+                    "poll",
+                    &poll_url,
+                    "GET",
+                    true,
+                    credentials.as_ref(),
+                ) => response?,
+                _ = context.cancellation().cancelled() => {
+                    return Ok(self
+                        .cancelled_async_job_result(
+                            task,
+                            &submit_response,
+                            last_response.as_ref(),
+                            &job_id,
+                            poll_count.saturating_sub(1),
+                            max_polls,
+                            poll_interval_ms,
+                            status_path,
+                            last_status_value.as_deref(),
+                            result_path,
+                            credentials.as_ref(),
+                        )
+                        .await);
+                }
+            };
 
             if response.status.is_server_error() {
                 return Err(BrokerError::Provider(format!(
@@ -518,6 +592,105 @@ impl CustomHttpProvider {
             value_str(task, "download_output_extension")
                 .or_else(|| value_str(task, "output_extension")),
         )
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    async fn cancelled_async_job_result(
+        &self,
+        task: &ApiTask,
+        submit_response: &HttpResponse,
+        last_response: Option<&HttpResponse>,
+        job_id: &str,
+        poll_count: u64,
+        max_polls: u64,
+        poll_interval_ms: u64,
+        status_path: &str,
+        status_value: Option<&str>,
+        result_path: Option<&str>,
+        credentials: Option<&CredentialEntry>,
+    ) -> ApiResult {
+        let cancel_json = self
+            .send_cancel_request(task, submit_response, job_id, credentials)
+            .await;
+        let cancel_request_id = cancel_json
+            .get("provider_request_id")
+            .and_then(Value::as_str)
+            .map(str::to_string);
+        let final_response = last_response.unwrap_or(submit_response);
+        let mut output_json = async_job_output_json(
+            submit_response,
+            final_response,
+            &[],
+            job_id,
+            poll_count,
+            max_polls,
+            poll_interval_ms,
+            status_path,
+            status_value,
+            result_path,
+            false,
+            false,
+        );
+        if let Some(output) = output_json.as_object_mut() {
+            output.insert("cancel".to_string(), cancel_json);
+        }
+
+        ApiResult {
+            id: task.id.clone(),
+            status: ApiStatus::Cancelled,
+            output_files: Vec::new(),
+            output_json: Some(output_json),
+            metadata: BTreeMap::new(),
+            cost: None,
+            duration_ms: 0,
+            provider_request_id: cancel_request_id
+                .or_else(|| final_response.provider_request_id.clone())
+                .or_else(|| submit_response.provider_request_id.clone())
+                .or_else(|| Some(job_id.to_string())),
+            cache_hit: false,
+            error: Some(ApiErrorInfo {
+                code: "cancelled".to_string(),
+                message: format!("custom_http async job {job_id} was cancelled"),
+                retryable: false,
+            }),
+        }
+    }
+
+    async fn send_cancel_request(
+        &self,
+        task: &ApiTask,
+        submit_response: &HttpResponse,
+        job_id: &str,
+        credentials: Option<&CredentialEntry>,
+    ) -> Value {
+        let Some(cancel_url) = resolve_cancel_url(task, &submit_response.body, job_id) else {
+            return json!({
+                "configured": false,
+                "sent": false,
+            });
+        };
+
+        match self
+            .send_task_request(task, "cancel", &cancel_url, "POST", true, credentials)
+            .await
+        {
+            Ok(response) => json!({
+                "configured": true,
+                "sent": true,
+                "url": cancel_url,
+                "status_code": response.status.as_u16(),
+                "headers": response.headers,
+                "body": response.body,
+                "body_size_bytes": response.body_bytes.len(),
+                "provider_request_id": response.provider_request_id,
+            }),
+            Err(err) => json!({
+                "configured": true,
+                "sent": false,
+                "url": cancel_url,
+                "error": err.to_string(),
+            }),
+        }
     }
 }
 
@@ -1304,6 +1477,40 @@ fn resolve_poll_url(task: &ApiTask, submit_body: &Value, job_id: &str) -> Broker
     Err(BrokerError::Provider(
         "custom_http async_job requires poll_url or poll_url_path".to_string(),
     ))
+}
+
+fn resolve_cancel_url(task: &ApiTask, submit_body: &Value, job_id: &str) -> Option<String> {
+    if let Some(cancel_url) = value_str(task, "cancel_url")
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+    {
+        return Some(apply_job_id_template(cancel_url, job_id));
+    }
+
+    if let Some(path) = value_str(task, "cancel_url_path")
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+    {
+        return json_path_value(submit_body, path)
+            .and_then(value_to_string)
+            .map(|value| apply_job_id_template(&value, job_id));
+    }
+
+    for path in [
+        "cancel_url",
+        "urls.cancel",
+        "data.cancel_url",
+        "data.urls.cancel",
+    ] {
+        if let Some(value) = json_path_value(submit_body, path).and_then(value_to_string) {
+            let value = value.trim();
+            if !value.is_empty() {
+                return Some(apply_job_id_template(value, job_id));
+            }
+        }
+    }
+
+    None
 }
 
 fn apply_job_id_template(template: &str, job_id: &str) -> String {

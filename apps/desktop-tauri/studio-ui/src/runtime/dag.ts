@@ -17,6 +17,7 @@ export type NodeStatus =
   | "running"
   | "succeeded"
   | "failed"
+  | "cancelled"
   | "cached"
   // Pruned by control flow: it sits on a branch that was not taken, so it is
   // intentionally not executed.

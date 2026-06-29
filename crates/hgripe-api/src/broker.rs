@@ -1,11 +1,13 @@
 use crate::model::{ApiResult, ApiStatus, ApiTask};
-use crate::provider::{BrokerError, BrokerResult, Provider, ProviderRegistry};
+use crate::provider::{
+    BrokerError, BrokerResult, Provider, ProviderExecutionContext, ProviderRegistry,
+};
 use sha2::{Digest, Sha256};
 use std::collections::HashMap;
 use std::sync::Arc;
 use std::time::Instant;
 use tokio::sync::Mutex;
-use tokio::time::{sleep, Duration};
+use tokio::time::Duration;
 
 #[derive(Default)]
 pub struct ApiBroker {
@@ -37,6 +39,16 @@ impl ApiBroker {
     }
 
     pub async fn execute(&self, task: ApiTask) -> BrokerResult<ApiResult> {
+        self.execute_with_context(task, ProviderExecutionContext::default())
+            .await
+    }
+
+    pub async fn execute_with_context(
+        &self,
+        task: ApiTask,
+        context: ProviderExecutionContext,
+    ) -> BrokerResult<ApiResult> {
+        context.check_cancelled()?;
         let cache_key = self.cache_key(&task)?;
         if task.cache_policy.enabled {
             if let Some(mut cached) = self.cache.lock().await.get(&cache_key).cloned() {
@@ -64,7 +76,8 @@ impl ApiBroker {
         let mut last_error: Option<BrokerError> = None;
 
         for attempt in 1..=max_attempts {
-            match provider.execute(&task).await {
+            context.check_cancelled()?;
+            match provider.execute_with_context(&task, &context).await {
                 Ok(mut result) => {
                     result.duration_ms = started.elapsed().as_millis();
                     if task.cache_policy.enabled && result.status == ApiStatus::Succeeded {
@@ -73,9 +86,14 @@ impl ApiBroker {
                     return Ok(result);
                 }
                 Err(err) => {
+                    if matches!(err, BrokerError::Cancelled) {
+                        return Err(err);
+                    }
                     last_error = Some(err);
                     if attempt < max_attempts {
-                        sleep(Duration::from_millis(task.retry_policy.backoff_ms)).await;
+                        context
+                            .sleep(Duration::from_millis(task.retry_policy.backoff_ms))
+                            .await?;
                     }
                 }
             }

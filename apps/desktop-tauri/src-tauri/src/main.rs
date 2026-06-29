@@ -19,10 +19,11 @@ use hgripe_api::{
     credentials_file_path, get_history_detail, get_history_record, list_credential_summaries,
     list_provider_profile_summaries, plan_history_cleanup, provider_profiles_path,
     query_history_records, record_task_failure, record_task_result, validate_credentials,
-    validate_provider_profiles, ApiBroker, ApiResult, ApiStatus, ApiTask, CredentialSummary,
-    CredentialsValidation, DoctorOptions, DoctorReport, HistoryCleanupOptions, HistoryCleanupPlan,
-    HistoryCleanupResult, HistoryDetail, HistoryQuery, HistoryRecord, HistoryRerunOptions,
-    OutputType, ProviderProfileSummary, ProviderProfilesValidation, RuntimePaths,
+    validate_provider_profiles, ApiBroker, ApiErrorInfo, ApiResult, ApiStatus, ApiTask,
+    BrokerError, CancellationToken, CredentialSummary, CredentialsValidation, DoctorOptions,
+    DoctorReport, HistoryCleanupOptions, HistoryCleanupPlan, HistoryCleanupResult, HistoryDetail,
+    HistoryQuery, HistoryRecord, HistoryRerunOptions, OutputType, ProviderExecutionContext,
+    ProviderProfileSummary, ProviderProfilesValidation, RuntimePaths,
 };
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
@@ -30,8 +31,8 @@ use tauri::Emitter;
 
 const STUDIO_GRAPH_RUN_EVENT: &str = "studio:graph-run";
 
-#[derive(Debug, Default)]
-struct StudioRunCancels(Mutex<HashSet<String>>);
+#[derive(Default)]
+struct StudioRunCancels(Mutex<HashMap<String, CancellationToken>>);
 
 fn broker() -> ApiBroker {
     let mut broker = ApiBroker::new();
@@ -181,6 +182,47 @@ async fn execute_and_record(task: ApiTask) -> Result<ApiResult, String> {
     }
 }
 
+async fn execute_and_record_cancellable(
+    task: ApiTask,
+    cancels: &tauri::State<'_, StudioRunCancels>,
+    run_id: &str,
+) -> Result<ApiResult, String> {
+    let history_task = task.clone();
+    let context = ProviderExecutionContext::new(studio_run_token(cancels, run_id));
+
+    match broker().execute_with_context(task, context).await {
+        Ok(result) => {
+            let _ = record_task_result(&history_task, &result);
+            Ok(result)
+        }
+        Err(BrokerError::Cancelled) => {
+            let result = ApiResult {
+                id: history_task.id.clone(),
+                status: ApiStatus::Cancelled,
+                output_files: Vec::new(),
+                output_json: None,
+                metadata: BTreeMap::new(),
+                cost: None,
+                duration_ms: 0,
+                provider_request_id: None,
+                cache_hit: false,
+                error: Some(ApiErrorInfo {
+                    code: "cancelled".to_string(),
+                    message: "Studio run cancelled".to_string(),
+                    retryable: false,
+                }),
+            };
+            let _ = record_task_result(&history_task, &result);
+            Ok(result)
+        }
+        Err(err) => {
+            let message = err.to_string();
+            let _ = record_task_failure(&history_task, message.clone());
+            Err(message)
+        }
+    }
+}
+
 #[tauri::command]
 async fn run_task(task: ApiTask) -> Result<ApiResult, String> {
     execute_and_record(task).await
@@ -282,8 +324,18 @@ fn studio_graph_event(run_id: &str, status: &str, message: Option<String>) -> St
     }
 }
 
+fn studio_run_token(state: &tauri::State<'_, StudioRunCancels>, run_id: &str) -> CancellationToken {
+    let mut cancels = state.0.lock().unwrap();
+    cancels.entry(run_id.to_string()).or_default().clone()
+}
+
 fn is_studio_run_cancelled(state: &tauri::State<'_, StudioRunCancels>, run_id: &str) -> bool {
-    state.0.lock().unwrap().contains(run_id)
+    state
+        .0
+        .lock()
+        .unwrap()
+        .get(run_id)
+        .is_some_and(CancellationToken::is_cancelled)
 }
 
 fn clear_studio_run_cancel(state: &tauri::State<'_, StudioRunCancels>, run_id: &str) {
@@ -510,6 +562,8 @@ fn studio_logic_result(params: &BTreeMap<String, Value>, inputs: &BTreeMap<Strin
 async fn execute_studio_generate(
     node: &StudioGraphNode,
     inputs: &BTreeMap<String, Value>,
+    cancels: &tauri::State<'_, StudioRunCancels>,
+    run_id: &str,
 ) -> Result<BTreeMap<String, Value>, String> {
     let mut task = ApiTask::new(
         studio_value_to_string(node.params.get("provider"))
@@ -559,7 +613,7 @@ async fn execute_studio_generate(
         task.credentials_ref = Some(credentials_ref);
     }
 
-    let result = execute_and_record(task).await?;
+    let result = execute_and_record_cancellable(task, cancels, run_id).await?;
     if !matches!(result.status, ApiStatus::Succeeded | ApiStatus::Cached) {
         let message = result
             .error
@@ -661,6 +715,8 @@ fn execute_studio_psd_export(
 async fn execute_studio_node(
     node: &StudioGraphNode,
     inputs: BTreeMap<String, Value>,
+    cancels: &tauri::State<'_, StudioRunCancels>,
+    run_id: &str,
 ) -> Result<BTreeMap<String, Value>, String> {
     match node.kind.as_str() {
         "prompt" => Ok(studio_output_map([(
@@ -750,7 +806,7 @@ async fn execute_studio_node(
                 inputs.get("value").cloned().unwrap_or(Value::Null),
             )]))
         }
-        "generate" => execute_studio_generate(node, &inputs).await,
+        "generate" => execute_studio_generate(node, &inputs, cancels, run_id).await,
         "preview" => Ok(studio_output_map([(
             "image",
             inputs.get("image").cloned().unwrap_or(Value::Null),
@@ -779,6 +835,7 @@ async fn run_studio_graph(
     run_id: Option<String>,
 ) -> Result<StudioGraphRunResult, String> {
     let run_id = run_id.unwrap_or_else(|| studio_task_id("graph"));
+    let _ = studio_run_token(&cancels, &run_id);
     emit_studio_run_event(
         &app,
         studio_graph_event(&run_id, "running", Some("Studio graph started".to_string())),
@@ -852,7 +909,7 @@ async fn run_studio_graph(
         );
         let started_at = Instant::now();
         let inputs = studio_node_inputs(&node.id, &graph, &outputs);
-        match execute_studio_node(node, inputs).await {
+        match execute_studio_node(node, inputs, &cancels, &run_id).await {
             Ok(node_outputs) => {
                 let duration_ms = started_at.elapsed().as_millis();
                 outputs.insert(node.id.clone(), node_outputs);
@@ -870,31 +927,41 @@ async fn run_studio_graph(
                 });
             }
             Err(error) => {
+                let cancelled = error.to_ascii_lowercase().contains("cancel");
                 let duration_ms = started_at.elapsed().as_millis();
-                statuses.insert(node.id.clone(), "failed".to_string());
+                let status = if cancelled { "cancelled" } else { "failed" };
+                statuses.insert(node.id.clone(), status.to_string());
                 emit_studio_run_event(
                     &app,
                     studio_node_event(
                         &run_id,
                         node,
-                        "failed",
+                        status,
                         Some(duration_ms),
                         Some(error.clone()),
                     ),
                 );
                 emit_studio_run_event(
                     &app,
-                    studio_graph_event(&run_id, "failed", Some(error.clone())),
+                    studio_graph_event(
+                        &run_id,
+                        if cancelled { "cancelled" } else { "failed" },
+                        Some(error.clone()),
+                    ),
                 );
                 clear_studio_run_cancel(&cancels, &run_id);
                 node_runs.push(StudioNodeRun {
                     node_id: node.id.clone(),
                     kind: node.kind.clone(),
-                    status: "failed".to_string(),
+                    status: status.to_string(),
                     duration_ms: Some(duration_ms),
                     error: Some(error.clone()),
                 });
-                return Err(format!("Studio node {} failed: {error}", node.id));
+                return Err(if cancelled {
+                    "Studio run cancelled".to_string()
+                } else {
+                    format!("Studio node {} failed: {error}", node.id)
+                });
             }
         }
         if is_studio_run_cancelled(&cancels, &run_id) {
@@ -982,7 +1049,7 @@ fn cancel_studio_run(
     if run_id.is_empty() {
         return Err("run_id is empty".to_string());
     }
-    cancels.0.lock().unwrap().insert(run_id.to_string());
+    studio_run_token(&cancels, run_id).cancel();
     emit_studio_run_event(
         &app,
         studio_graph_event(

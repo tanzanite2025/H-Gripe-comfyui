@@ -42,7 +42,8 @@ import {
   type LogLevel,
   type RunLogEntry,
 } from "./editor/runlog";
-import { SnapshotsPanel } from "./editor/SnapshotsPanel";
+import { SnapshotsPanel, type SnapshotDiffView } from "./editor/SnapshotsPanel";
+import { diffGraphs } from "./editor/snapshotdiff";
 import {
   addSnapshot,
   loadAutoSnapshotPref,
@@ -152,6 +153,7 @@ function Studio() {
   const [showLog, setShowLog] = useState(false);
   const [snapshots, setSnapshots] = useState<Snapshot[]>(() => loadSnapshots());
   const [showSnapshots, setShowSnapshots] = useState(false);
+  const [snapshotDiff, setSnapshotDiff] = useState<SnapshotDiffView | null>(null);
   const [autoSnapshot, setAutoSnapshot] = useState<boolean>(() => loadAutoSnapshotPref());
   const [snapToGrid, setSnapToGrid] = useState(false);
   const [helperLines, setHelperLines] = useState<{ horizontal?: number; vertical?: number }>({});
@@ -887,6 +889,17 @@ function Studio() {
     [snapshots, confirmDiscard, takeSnapshot, loadGraphIntoEditor],
   );
 
+  // Compare a snapshot against the live graph (no mutation — read-only diff).
+  const diffSnapshot = useCallback(
+    (id: string) => {
+      const snap = snapshots.find((s) => s.id === id);
+      if (!snap) return;
+      const current = toWorkflowGraph(nodes, edges);
+      setSnapshotDiff({ id: snap.id, name: snap.name, diff: diffGraphs(snap.graph, current) });
+    },
+    [snapshots, nodes, edges],
+  );
+
   const renameSnapshotById = useCallback((id: string) => {
     setSnapshots((list) => {
       const snap = list.find((s) => s.id === id);
@@ -1445,6 +1458,9 @@ function Studio() {
               onRestore={restoreSnapshot}
               onRename={renameSnapshotById}
               onDelete={deleteSnapshot}
+              onDiff={diffSnapshot}
+              diff={snapshotDiff}
+              onClearDiff={() => setSnapshotDiff(null)}
               onClose={() => setShowSnapshots(false)}
             />
           )}

@@ -1,4 +1,5 @@
 import type { Snapshot } from "./snapshots";
+import { isEmptyDiff, type GraphDiff } from "./snapshotdiff";
 
 function formatTaken(ms: number): string {
   try {
@@ -6,6 +7,13 @@ function formatTaken(ms: number): string {
   } catch {
     return "";
   }
+}
+
+/** A computed comparison of one snapshot against the current graph. */
+export interface SnapshotDiffView {
+  id: string;
+  name: string;
+  diff: GraphDiff;
 }
 
 export interface SnapshotsPanelProps {
@@ -18,7 +26,53 @@ export interface SnapshotsPanelProps {
   onRestore: (id: string) => void;
   onRename: (id: string) => void;
   onDelete: (id: string) => void;
+  /** Compare the given snapshot against the current graph. */
+  onDiff: (id: string) => void;
+  /** Active comparison result (vs. the current graph), if any. */
+  diff: SnapshotDiffView | null;
+  onClearDiff: () => void;
   onClose: () => void;
+}
+
+function DiffSummary({ view, onClear }: { view: SnapshotDiffView; onClear: () => void }) {
+  const { diff } = view;
+  const empty = isEmptyDiff(diff);
+  return (
+    <div className="snapshot-diff">
+      <div className="snapshot-diff-head">
+        <span>
+          vs <strong>{view.name}</strong>
+        </span>
+        <button onClick={onClear} title="close comparison">
+          ✕
+        </button>
+      </div>
+      {empty ? (
+        <p className="snapshot-diff-same">identical to the current graph</p>
+      ) : (
+        <ul className="snapshot-diff-list">
+          {diff.addedNodes.map((n) => (
+            <li key={`an-${n.id}`} className="diff-add">+ node {n.kind} ({n.id})</li>
+          ))}
+          {diff.removedNodes.map((n) => (
+            <li key={`rn-${n.id}`} className="diff-del">− node {n.kind} ({n.id})</li>
+          ))}
+          {diff.changedNodes.map((n) => (
+            <li key={`cn-${n.id}`} className="diff-chg">
+              ~ {n.kind} ({n.id}){" "}
+              {n.kindChanged ? "kind changed" : `params: ${n.params.join(", ")}`}
+            </li>
+          ))}
+          {diff.addedEdges.map((e) => (
+            <li key={`ae-${e}`} className="diff-add">+ edge {e}</li>
+          ))}
+          {diff.removedEdges.map((e) => (
+            <li key={`re-${e}`} className="diff-del">− edge {e}</li>
+          ))}
+        </ul>
+      )}
+    </div>
+  );
 }
 
 /**
@@ -34,6 +88,9 @@ export function SnapshotsPanel({
   onRestore,
   onRename,
   onDelete,
+  onDiff,
+  diff,
+  onClearDiff,
   onClose,
 }: SnapshotsPanelProps) {
   return (
@@ -58,6 +115,8 @@ export function SnapshotsPanel({
         Auto-snapshot before run
       </label>
 
+      {diff ? <DiffSummary view={diff} onClear={onClearDiff} /> : null}
+
       <div className="project-list">
         {snapshots.length === 0 ? (
           <p className="project-empty">no snapshots yet</p>
@@ -75,6 +134,13 @@ export function SnapshotsPanel({
                 </span>
               </button>
               <div className="project-actions">
+                <button
+                  onClick={() => onDiff(s.id)}
+                  title="compare with the current graph"
+                  aria-label={`compare ${s.name}`}
+                >
+                  ⇄
+                </button>
                 <button onClick={() => onRename(s.id)} title="rename" aria-label={`rename ${s.name}`}>
                   ✎
                 </button>

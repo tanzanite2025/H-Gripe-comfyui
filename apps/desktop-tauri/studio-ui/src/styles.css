@@ -214,6 +214,41 @@ button:disabled { opacity: 0.6; cursor: default; }
 }
 .psd-meta { font-size: 10px; color: var(--muted); }
 
+.snapshot-diff {
+  margin: 6px 0;
+  padding: 6px 8px;
+  background: var(--panel);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+}
+.snapshot-diff-head {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  font-size: 12px;
+  margin-bottom: 4px;
+}
+.snapshot-diff-head button {
+  background: none;
+  border: none;
+  color: var(--muted);
+  cursor: pointer;
+}
+.snapshot-diff-same { font-size: 11px; color: var(--muted); margin: 0; }
+.snapshot-diff-list {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+  max-height: 180px;
+  overflow: auto;
+  font-size: 11px;
+  font-family: ui-monospace, Menlo, Consolas, monospace;
+}
+.snapshot-diff-list li { padding: 1px 0; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.snapshot-diff-list .diff-add { color: var(--ok); }
+.snapshot-diff-list .diff-del { color: var(--err); }
+.snapshot-diff-list .diff-chg { color: var(--running); }
+
 .inspector {
   width: 300px;
   border-left: 1px solid var(--border);

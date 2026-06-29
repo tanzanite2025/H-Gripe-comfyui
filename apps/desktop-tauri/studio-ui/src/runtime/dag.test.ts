@@ -105,6 +105,26 @@ describe("runGraph", () => {
     expect(outputs.get("preview-1")).toEqual({ image: "img:hi" });
     expect(statuses.get("preview-1")).toBe("succeeded");
   });
+
+  it("emits per-node run telemetry (duration on success, error on failure)", async () => {
+    const events = new Map<string, { status: string; durationMs?: number; error?: string }>();
+    const registry: ExecutorRegistry = {
+      prompt: async () => ({ text: "x" }),
+      generate: async () => {
+        throw new Error("boom");
+      },
+      preview: async (ctx) => ({ image: ctx.inputs.image ?? null }),
+    };
+    await expect(
+      runGraph(chain, registry, { onNodeRun: (id, info) => events.set(id, info) }),
+    ).rejects.toThrow("boom");
+
+    expect(events.get("prompt-1")?.status).toBe("succeeded");
+    expect(typeof events.get("prompt-1")?.durationMs).toBe("number");
+    expect(events.get("generate-1")).toMatchObject({ status: "failed", error: "boom" });
+    // preview never ran (its level was reached after the failure threw).
+    expect(events.has("preview-1")).toBe(false);
+  });
 });
 
 describe("conditional branch execution", () => {

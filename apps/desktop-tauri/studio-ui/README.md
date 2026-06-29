@@ -2,16 +2,14 @@
 
 A Vite + React + TypeScript sub-app implementing H-Gripe's own production
 node-graph editor on top of [React Flow](https://reactflow.dev) (`@xyflow/react`).
-This is the in-house alternative to the embedded ComfyUI — ComfyUI stays as the
-**Advanced Canvas** and is **not touched** by this work.
+This is H-Gripe's own visual workflow canvas — the only node canvas in the app.
 
 > Status: **embedded in the desktop shell** as the **Node Editor** tab. The
 > build output is written to `../dist/studio` (gitignored) and loaded as an
-> iframe by the static shell. The shell and the embedded ComfyUI **Advanced
-> Canvas** are otherwise unaffected. When embedded, the Tauri bridge reaches
-> IPC via the parent window (see `bridge/tauri.ts`). A plain `cargo run` does
-> not build this; run `npm run build` first (the Tauri CLI does it via the
-> `before*` hooks in `tauri.conf.json`).
+> iframe by the shell. When embedded, the Tauri bridge reaches IPC via the
+> parent window (see `bridge/tauri.ts`). A plain `cargo run` does not build
+> this; run `npm run build` first (the Tauri CLI does it via the `before*`
+> hooks in `tauri.conf.json`).
 
 ## Architecture (renderer-agnostic by design)
 

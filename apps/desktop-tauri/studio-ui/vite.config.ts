@@ -1,9 +1,8 @@
 import { defineConfig } from "vite";
 import react from "@vitejs/plugin-react";
 
-// Built into the desktop shell's frontendDist under `/studio` so the static
-// shell can embed it as the "Node Editor" tab (iframe -> studio/index.html).
-// The existing shell and the embedded ComfyUI canvas are unaffected. The build
+// Built into the desktop shell's frontendDist under `/studio` so the shell can
+// embed it as the "Node Editor" tab (iframe -> studio/index.html). The build
 // output (../dist/studio) is gitignored and produced by tauri before* hooks.
 export default defineConfig({
   plugins: [react()],

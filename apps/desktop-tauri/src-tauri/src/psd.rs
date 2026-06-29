@@ -1,15 +1,49 @@
 //! PSD tooling: listing exported PSD triplets and shelling out to the vendored
-//! `compose_psd_cli.py` / `inspect_psd_cli.py` helpers (reusing ComfyUI's
-//! Python interpreter) without requiring a running ComfyUI server.
+//! `compose_psd_cli.py` / `inspect_psd_cli.py` helpers. These reuse the
+//! project's bundled Python interpreter (the portable `python_embeded` layout
+//! when present, otherwise PATH `python`) so the proven psd-tools pipeline runs
+//! without any separate runtime install.
 
 use std::fs;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 
 use serde::{Deserialize, Serialize};
 
-use crate::comfy::{comfy_python, resolve_comfy_dir};
 use crate::modified_ms;
 use crate::studio::studio_reject_unsafe_basename;
+
+/// Resolve the project directory that hosts the vendored `python/bridge`
+/// helpers: the caller-provided path, else the process working directory (the
+/// repo root in dev / the install dir when packaged). Requires `main.py` at the
+/// root so a misconfigured folder fails fast with a clear message.
+pub(crate) fn resolve_project_dir(dir: &Option<String>) -> Result<PathBuf, String> {
+    let base = match dir {
+        Some(d) if !d.trim().is_empty() => PathBuf::from(d.trim()),
+        _ => std::env::current_dir().map_err(|err| err.to_string())?,
+    };
+    if !base.join("main.py").is_file() {
+        return Err(format!(
+            "main.py not found in {} (set the project folder)",
+            base.display()
+        ));
+    }
+    Ok(base)
+}
+
+/// Pick a Python interpreter: prefer the portable `python_embeded` shipped in
+/// the project root (the Windows embeddable layout), otherwise fall back to
+/// PATH `python` / `python3`.
+pub(crate) fn project_python(dir: &Path) -> PathBuf {
+    for candidate in [
+        dir.join("python_embeded").join("python.exe"),
+        dir.join("python_embeded").join("python"),
+    ] {
+        if candidate.is_file() {
+            return candidate;
+        }
+    }
+    PathBuf::from(if cfg!(windows) { "python" } else { "python3" })
+}
 
 #[derive(Serialize)]
 pub(crate) struct PsdOutputFile {
@@ -122,10 +156,9 @@ pub(crate) struct ComposePsdResult {
 /// smart-object content replacement when applicable) and export
 /// `<filename>.psd` + `<filename>_preview.png` + `<filename>_metadata.json`.
 ///
-/// This shells out to `python/bridge/compose_psd_cli.py` using the same Python
-/// interpreter resolution as ComfyUI (`python_embeded` when present), so it
-/// reuses the proven, vendored psd-tools pipeline without requiring a running
-/// ComfyUI server. `dir` is the ComfyUI/project root (defaults to the process
+/// This shells out to `python/bridge/compose_psd_cli.py` using the project's
+/// bundled Python (`python_embeded` when present), reusing the proven, vendored
+/// psd-tools pipeline. `dir` is the project root (defaults to the process
 /// working dir); the rest map 1:1 onto the CLI flags.
 #[tauri::command]
 #[allow(clippy::too_many_arguments)]
@@ -143,8 +176,8 @@ pub(crate) fn compose_psd(
     metadata: Option<String>,
     save_preview: Option<bool>,
 ) -> Result<ComposePsdResult, String> {
-    let dir = resolve_comfy_dir(&dir)?;
-    let python = comfy_python(&dir);
+    let dir = resolve_project_dir(&dir)?;
+    let python = project_python(&dir);
     let script = dir.join("python").join("bridge").join("compose_psd_cli.py");
     if !script.is_file() {
         return Err(format!(
@@ -242,16 +275,15 @@ pub(crate) struct InspectPsdResult {
 /// surfacing the problem mid-compose.
 ///
 /// Like `compose_psd`, this shells out to `python/bridge/inspect_psd_cli.py`
-/// using the same Python interpreter resolution as ComfyUI, reusing the
-/// vendored psd-tools pipeline without a running ComfyUI server.
+/// using the project's bundled Python, reusing the vendored psd-tools pipeline.
 #[tauri::command]
 pub(crate) fn inspect_psd(
     dir: Option<String>,
     template: String,
     names: Option<Vec<String>>,
 ) -> Result<InspectPsdResult, String> {
-    let dir = resolve_comfy_dir(&dir)?;
-    let python = comfy_python(&dir);
+    let dir = resolve_project_dir(&dir)?;
+    let python = project_python(&dir);
     let script = dir.join("python").join("bridge").join("inspect_psd_cli.py");
     if !script.is_file() {
         return Err(format!("inspect_psd_cli.py not found at {}", script.display()));

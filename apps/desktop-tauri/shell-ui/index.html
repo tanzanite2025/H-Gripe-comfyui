@@ -20,12 +20,8 @@
       <button data-tab="run" data-i18n="tab.run">Run Task</button>
       <button data-tab="history" data-i18n="tab.history">History</button>
       <button data-tab="psd" data-i18n="tab.psd">PSD</button>
-      <!-- Node Editor: H-Gripe's own visual workflow canvas (React Flow). The
-           in-house production counterpart to the embedded ComfyUI canvas. -->
+      <!-- Node Editor: H-Gripe's own visual workflow canvas (React Flow). -->
       <button data-tab="node-editor" data-i18n="tab.nodeEditor">Node Editor</button>
-      <!-- Advanced Canvas (embedded ComfyUI) is an advanced/escape-hatch tab,
-           not the product's main surface; keep it last in the nav. -->
-      <button data-tab="comfyui" data-i18n="tab.comfy">Advanced Canvas</button>
     </nav>
 
     <main>
@@ -41,8 +37,7 @@
 
       <!-- PSD Studio: H-Gripe's own production entry point. It composes an
            ApiTask (provider profile + prompt + reference image + PSD template)
-           and runs it through the existing broker, so production goes through
-           H-Gripe panels rather than the embedded ComfyUI canvas. -->
+           and runs it through the existing broker. -->
       <section id="studio" class="panel">
         <div class="row wrap">
           <h2 data-i18n="studio.heading">PSD Studio</h2>
@@ -225,48 +220,15 @@
       </section>
 
       <!-- Node Editor: H-Gripe's own node-graph editor (the studio-ui React
-           Flow sub-app), embedded as an iframe from the build at studio/.
-           This is the in-house production canvas; the embedded ComfyUI below
-           stays as the advanced/escape-hatch surface. The iframe is loaded
-           lazily on first open (studio/index.html) so the shell starts fast. -->
+           Flow sub-app), embedded as an iframe from the build at studio/. The
+           iframe is loaded lazily on first open (studio/index.html) so the
+           shell starts fast. -->
       <section id="node-editor" class="panel node-editor-panel">
         <div class="node-editor-stage">
           <iframe id="studio-frame" class="studio-frame hidden" title="H-Gripe Node Editor"></iframe>
-          <div id="studio-placeholder" class="comfy-placeholder">
+          <div id="studio-placeholder" class="embed-placeholder">
             <p data-i18n="node.title">H-Gripe Node Editor</p>
             <p class="hint" data-i18n="node.loading">Loading the visual workflow canvas…</p>
-          </div>
-        </div>
-      </section>
-
-      <!-- Advanced Canvas: the embedded ComfyUI node editor. This is an
-           advanced workflow surface (complex node graphs, legacy workflows,
-           mature plugins) — day-to-day production should go through the
-           H-Gripe panels above, not here. ComfyUI stays embedded as the
-           advanced canvas; it is not the product's main UI. -->
-      <section id="comfyui" class="panel comfyui-panel">
-        <p class="hint" data-i18n-html="comfy.intro">
-          <strong>Advanced Canvas</strong> embeds the full ComfyUI node editor
-          for complex workflows, legacy graphs, and mature plugins. For routine
-          work, prefer the H-Gripe production panels (Dashboard, Run Task, PSD).
-        </p>
-        <div class="row comfy-bar">
-          <input id="comfy-url" value="http://127.0.0.1:8188" />
-          <button id="comfy-start" class="primary" data-i18n="comfy.start">Start ComfyUI</button>
-          <button id="comfy-stop" data-i18n="comfy.stop">Stop</button>
-          <button id="comfy-reload" data-i18n="comfy.reload">Reload</button>
-          <button id="comfy-open" data-i18n="comfy.openBrowser">Open in browser</button>
-          <span id="comfy-status" class="status"></span>
-        </div>
-        <div class="row comfy-bar">
-          <input id="comfy-dir" data-i18n-placeholder="comfy.dirPh" placeholder="ComfyUI folder (blank = app working dir)" />
-          <input id="comfy-args" data-i18n-placeholder="comfy.argsPh" placeholder="extra args (e.g. --cpu --listen)" />
-        </div>
-        <div class="comfy-stage">
-          <iframe id="comfy-frame" class="comfy-frame hidden" title="ComfyUI"></iframe>
-          <div id="comfy-placeholder" class="comfy-placeholder">
-            <p data-i18n="comfy.embedding">Embedding the running ComfyUI web UI.</p>
-            <p class="hint" data-i18n-html="comfy.embedHint">Click <strong>Start ComfyUI</strong> to launch a local server (it embeds automatically when ready), or point the URL at an already-running instance and click <strong>Reload</strong>. The full node editor loads here inside the app.</p>
           </div>
         </div>
       </section>

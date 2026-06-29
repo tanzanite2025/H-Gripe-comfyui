@@ -152,22 +152,8 @@ tr:hover td { background: var(--panel); }
 
 .hidden { display: none !important; }
 
-/* ComfyUI embed */
-.comfyui-panel.active { display: flex; flex-direction: column; }
-.comfy-bar { gap: 8px; align-items: center; }
-.comfy-bar #comfy-url { flex: 1; }
-.comfy-stage {
-  position: relative;
-  margin-top: 10px;
-  border: 1px solid var(--border);
-  border-radius: 10px;
-  overflow: hidden;
-  background: #0b0d12;
-  height: calc(100vh - 190px);
-  min-height: 420px;
-}
-.comfy-frame { width: 100%; height: 100%; border: 0; background: #0b0d12; }
-.comfy-placeholder {
+/* Embedded-iframe placeholder (shown while the Node Editor sub-app loads) */
+.embed-placeholder {
   position: absolute;
   inset: 0;
   display: flex;

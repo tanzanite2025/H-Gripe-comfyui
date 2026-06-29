@@ -1,15 +1,19 @@
-# H-Gripe Studio (node-graph editor)
+# H-Gripe Studio (desktop front end)
 
-A Vite + React + TypeScript sub-app implementing H-Gripe's own production
-node-graph editor on top of [React Flow](https://reactflow.dev) (`@xyflow/react`).
-This is H-Gripe's own visual workflow canvas — the only node canvas in the app.
+The Vite + React + TypeScript front end for H-Gripe Desktop. It hosts the shell
+panels (Dashboard / PSD Studio / Credentials / Profiles / Run Task / History /
+PSD, under [`src/shell/`](src/shell/)) and H-Gripe's own production node-graph
+editor built on [React Flow](https://reactflow.dev) (`@xyflow/react`, under
+[`src/editor/`](src/editor/)) as tabs of one app. The node editor is H-Gripe's
+own visual workflow canvas — the only node canvas in the app.
 
-> Status: **embedded in the desktop shell** as the **Node Editor** tab. The
-> build output is written to `../dist/studio` (gitignored) and loaded as an
-> iframe by the shell. When embedded, the Tauri bridge reaches IPC via the
-> parent window (see `bridge/tauri.ts`). A plain `cargo run` does not build
-> this; run `npm run build` first (the Tauri CLI does it via the `before*`
-> hooks in `tauri.conf.json`).
+> Status: **this is the whole desktop front end** (the former vanilla-TS shell
+> and this editor have been merged — no iframe). The build output is written to
+> `../dist` (gitignored) and served by Tauri as `frontendDist`. Shell-tab IPC
+> goes through [`src/bridge/desktop.ts`](src/bridge/desktop.ts); editor IPC
+> through [`src/bridge/tauri.ts`](src/bridge/tauri.ts). A plain `cargo run` does
+> not build this; run `npm run build` first (the Tauri CLI does it via the
+> `before*` hooks in `tauri.conf.json`).
 
 ## Architecture (renderer-agnostic by design)
 

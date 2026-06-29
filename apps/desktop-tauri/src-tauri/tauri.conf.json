@@ -5,8 +5,8 @@
   "identifier": "com.hgripe.desktop",
   "build": {
     "frontendDist": "../dist",
-    "beforeDevCommand": "npm --prefix shell-ui ci && npm --prefix shell-ui run build && npm --prefix studio-ui ci && npm --prefix studio-ui run build",
-    "beforeBuildCommand": "npm --prefix shell-ui ci && npm --prefix shell-ui run build && npm --prefix studio-ui ci && npm --prefix studio-ui run build"
+    "beforeDevCommand": "npm --prefix studio-ui ci && npm --prefix studio-ui run build",
+    "beforeBuildCommand": "npm --prefix studio-ui ci && npm --prefix studio-ui run build"
   },
   "app": {
     "withGlobalTauri": true,
@@ -21,7 +21,7 @@
       }
     ],
     "security": {
-      "csp": "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob:; font-src 'self' data:; connect-src 'self' ipc: http://ipc.localhost; frame-src 'self'; object-src 'none'; base-uri 'self'"
+      "csp": "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob:; font-src 'self' data:; connect-src 'self' ipc: http://ipc.localhost; object-src 'none'; base-uri 'self'"
     }
   },
   "bundle": {

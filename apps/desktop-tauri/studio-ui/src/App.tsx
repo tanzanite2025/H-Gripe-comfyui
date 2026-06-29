@@ -38,7 +38,6 @@ import { RunHistoryPanel } from "./editor/RunHistoryPanel";
 import { useKeyboardShortcuts } from "./editor/useKeyboardShortcuts";
 import { useStudioRunController } from "./editor/useStudioRunController";
 import { useStudioFileController } from "./editor/useStudioFileController";
-import { LangContext, loadLang, saveLang, type Lang } from "./i18n";
 import { loadPersistedGraph } from "./editor/persist";
 import { defaultParams } from "./graph/nodeSpecs";
 import { topoLevels, validateGraph } from "./runtime/dag";
@@ -60,7 +59,7 @@ const initialEdges: Edge[] = [
   { id: "e2", source: "generate-1", sourceHandle: "image", target: "preview-1", targetHandle: "image" },
 ];
 
-function Studio() {
+function Studio({ onToggleLang }: { onToggleLang: () => void }) {
   // Restore the last autosaved workflow from this workspace; fall back to the
   // pre-wired sample graph on a fresh / unreadable workspace.
   const initial = useMemo(() => {
@@ -74,14 +73,6 @@ function Studio() {
   const [edges, setEdges, onEdgesChange] = useEdgesState(initial.edges);
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const [snapToGrid, setSnapToGrid] = useState(false);
-  const [lang, setLang] = useState<Lang>(() => loadLang());
-  const toggleLang = useCallback(() => {
-    setLang((prev) => {
-      const next: Lang = prev === "en" ? "zh" : "en";
-      saveLang(next);
-      return next;
-    });
-  }, []);
   const [helperLines, setHelperLines] = useState<{ horizontal?: number; vertical?: number }>({});
   const [edgeType, setEdgeType] = useState<EdgeStyle>("default");
   const [showMinimap, setShowMinimap] = useState(true);
@@ -484,7 +475,6 @@ function Studio() {
   const editing = useMemo(() => ({ onParamChange }), [onParamChange]);
 
   return (
-    <LangContext.Provider value={lang}>
     <div className="app">
       <Toolbar
         issues={issues}
@@ -497,7 +487,7 @@ function Studio() {
         canRedo={history.canRedo}
         onUndo={undo}
         onRedo={redo}
-        onToggleLang={toggleLang}
+        onToggleLang={onToggleLang}
         showProject={showProject}
         setShowProject={setShowProject}
         showSnapshots={showSnapshots}
@@ -615,15 +605,14 @@ function Studio() {
         <ContextMenu x={menu.x} y={menu.y} items={menuItems} onClose={() => setMenu(null)} />
       )}
     </div>
-    </LangContext.Provider>
   );
 }
 
-export default function App() {
+export default function NodeEditor({ onToggleLang }: { onToggleLang: () => void }) {
   // Provider gives FlowCanvas access to screenToFlowPosition for drag-and-drop.
   return (
     <ReactFlowProvider>
-      <Studio />
+      <Studio onToggleLang={onToggleLang} />
     </ReactFlowProvider>
   );
 }

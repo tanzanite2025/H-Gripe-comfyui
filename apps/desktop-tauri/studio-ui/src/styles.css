@@ -216,6 +216,12 @@ button:disabled { opacity: 0.6; cursor: default; }
 .badge-failed { background: var(--err); color: #2a0000; }
 .badge-skipped { background: #3a3d47; color: var(--muted); }
 .node.status-skipped { opacity: 0.5; }
+/* zoom-LOD: collapsed title-only card; enlarge the title so it stays legible
+   when the whole node is scaled down by the viewport zoom. */
+.node.lod .node-header { border-bottom: none; }
+.node.lod .node-title { font-size: 20px; }
+.node.lod .badge { font-size: 14px; }
+.node.lod .badge-time { display: none; }
 .badge-time { font-style: normal; opacity: 0.7; }
 .node-error {
   margin: 4px 8px 0;

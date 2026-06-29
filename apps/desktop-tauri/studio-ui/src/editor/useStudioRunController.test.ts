@@ -122,6 +122,46 @@ describe("useStudioRunController", () => {
     expect(result.current.runHistory).toHaveLength(1);
   });
 
+  it("cancels an in-flight browser-preview run via the cooperative token", async () => {
+    let release!: () => void;
+    let entered!: () => void;
+    const gate = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    // Resolves once runGraph is reached, i.e. the cancel token is registered.
+    const started = new Promise<void>((resolve) => {
+      entered = resolve;
+    });
+    runGraphMock.mockImplementation(
+      async (
+        _graph: unknown,
+        _registry: unknown,
+        _observer?: RunObserver,
+        _overrides?: unknown,
+        shouldCancel?: () => boolean,
+      ) => {
+        entered();
+        await gate;
+        if (shouldCancel?.()) throw new Error("Run was cancelled");
+        return { outputs: new Map() };
+      },
+    );
+    const { options } = setup([makeNode("p1", "prompt")]);
+    const { result } = renderHook(() => useStudioRunController(options));
+
+    await act(async () => {
+      const pending = result.current.run();
+      await started;
+      result.current.cancelRun();
+      release();
+      await pending;
+    });
+
+    expect(result.current.canCancel).toBe(false);
+    expect(result.current.runHistory).toHaveLength(1);
+    expect(result.current.runHistory[0]).toMatchObject({ outcome: "cancelled" });
+  });
+
   it("records per-node telemetry and highlights the first failed node", async () => {
     runGraphMock.mockImplementation(async (_graph: unknown, _registry: unknown, observer?: RunObserver) => {
       observer?.onNodeRun?.("p1", { status: "failed", durationMs: 5, error: "boom" } as NodeRunInfo);

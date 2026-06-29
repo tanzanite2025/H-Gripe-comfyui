@@ -209,6 +209,13 @@ export async function runGraph(
    * distinct cache entry.
    */
   paramOverrides: Map<string, Record<string, unknown>> = new Map(),
+  /**
+   * Cooperative cancellation: polled before each node executes. When it returns
+   * true the run aborts with a cancellation error (the browser-preview backend
+   * has no server-side cancel, so this is how the editor stops an in-flight run).
+   * Cancellation is best-effort between nodes; already-running nodes finish.
+   */
+  shouldCancel: () => boolean = () => false,
 ): Promise<RunResult> {
   const issues = validateGraph(graph);
   const firstError = issues.find((i) => i.severity === "error");
@@ -244,6 +251,11 @@ export async function runGraph(
   for (const level of topoLevels(graph)) {
     await Promise.all(
       level.map(async (id) => {
+        if (shouldCancel()) {
+          setStatus(id, "cancelled");
+          observer.onNodeRun?.(id, { status: "cancelled" });
+          throw new Error("Run was cancelled");
+        }
         const edges = incoming.get(id) ?? [];
         if (edges.length > 0 && edges.every(isDeadEdge)) {
           pruned.add(id);

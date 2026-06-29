@@ -125,6 +125,44 @@ describe("runGraph", () => {
     // preview never ran (its level was reached after the failure threw).
     expect(events.has("preview-1")).toBe(false);
   });
+
+  it("aborts cooperatively when shouldCancel becomes true", async () => {
+    const ran: string[] = [];
+    const registry: ExecutorRegistry = {
+      prompt: async (ctx) => {
+        ran.push(ctx.nodeId);
+        return { text: "x" };
+      },
+      generate: async (ctx) => {
+        ran.push(ctx.nodeId);
+        return { image: "y" };
+      },
+      preview: async (ctx) => {
+        ran.push(ctx.nodeId);
+        return { image: ctx.inputs.image ?? null };
+      },
+    };
+    // Cancel after the first node so later levels never execute.
+    let cancelled = false;
+    const statuses = new Map<string, string>();
+    await expect(
+      runGraph(
+        chain,
+        registry,
+        {
+          onStatus: (id, s) => statuses.set(id, s),
+          onNodeRun: (id) => {
+            if (id === "prompt-1") cancelled = true;
+          },
+        },
+        new Map(),
+        () => cancelled,
+      ),
+    ).rejects.toThrow(/cancel/i);
+
+    expect(ran).toEqual(["prompt-1"]);
+    expect(statuses.get("generate-1")).toBe("cancelled");
+  });
 });
 
 describe("conditional branch execution", () => {

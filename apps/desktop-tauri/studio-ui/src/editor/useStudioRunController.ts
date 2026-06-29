@@ -95,6 +95,8 @@ export interface StudioRunController {
   running: boolean;
   /** Active Rust run id (desktop), or null. */
   currentRunId: string | null;
+  /** Whether the in-flight run can be cancelled (true for either backend). */
+  canCancel: boolean;
   /** Append-only run log (capped). */
   runLog: RunLogEntry[];
   showLog: boolean;
@@ -112,7 +114,7 @@ export interface StudioRunController {
   run: () => Promise<void>;
   /** Run the graph once per item of the (first) batch node. */
   runBatch: () => Promise<void>;
-  /** Request cancellation of the active Rust run. */
+  /** Request cancellation of the active run (Rust backend or browser preview). */
   cancelRun: () => void;
   /** Whether the graph contains a batch node. */
   hasBatch: boolean;
@@ -147,6 +149,9 @@ export function useStudioRunController({
   // re-entrancy (e.g. the keyboard shortcut firing while a run is in flight),
   // which would otherwise let two runs clobber each other's refs and history.
   const inFlight = useRef(false);
+  // Cooperative cancel token for the active browser-preview run (no server-side
+  // cancel exists for that backend); null when no browser run is in flight.
+  const browserCancel = useRef<{ cancelled: boolean } | null>(null);
   // While a run is in flight this collects that run's log entries so they can
   // be saved as a RunRecord when it ends; null when no run is active.
   const runEntriesRef = useRef<RunLogEntry[] | null>(null);
@@ -310,10 +315,19 @@ export function useStudioRunController({
 
   const cancelRun = useCallback(() => {
     const runId = currentRunIdRef.current;
-    if (!runId) return;
-    setMessage("cancelling…");
-    pushLog("warn", "✋ cancellation requested");
-    void cancelStudioRun(runId).catch((err) => setMessage(`cancel failed: ${String(err)}`));
+    if (runId) {
+      setMessage("cancelling…");
+      pushLog("warn", "✋ cancellation requested");
+      void cancelStudioRun(runId).catch((err) => setMessage(`cancel failed: ${String(err)}`));
+      return;
+    }
+    // Browser-preview runs have no backend to call: flip the cooperative token
+    // so runGraph aborts before its next node.
+    if (browserCancel.current) {
+      browserCancel.current.cancelled = true;
+      setMessage("cancelling…");
+      pushLog("warn", "✋ cancellation requested");
+    }
   }, [pushLog, setMessage]);
 
   // Surface output paths into preview nodes. The thumbnail itself is fetched
@@ -421,9 +435,21 @@ export function useStudioRunController({
           endRustRun(runId);
         }
       } else {
-        const result = await runGraph(graph, defaultExecutors, observer);
-        applyPreviews(graph, result);
-        setMessage("done (browser preview)");
+        const token = { cancelled: false };
+        browserCancel.current = token;
+        try {
+          const result = await runGraph(
+            graph,
+            defaultExecutors,
+            observer,
+            undefined,
+            () => token.cancelled,
+          );
+          applyPreviews(graph, result);
+          setMessage("done (browser preview)");
+        } finally {
+          browserCancel.current = null;
+        }
       }
       pushLog("success", `✔ run finished (${backend})`);
     } catch (err) {
@@ -435,6 +461,7 @@ export function useStudioRunController({
     } finally {
       setRunning(false);
       inFlight.current = false;
+      browserCancel.current = null;
       highlightFailures();
       recordRunHistory("run", startedAt, outcome, backend);
     }
@@ -487,11 +514,14 @@ export function useStudioRunController({
     runEntriesRef.current = [];
     let outcome: RunOutcome = "succeeded";
     pushLog("info", `▶ batch started: ${batchCount} run(s) (${backend})`);
+    const browserToken = useRustBackend ? null : { cancelled: false };
+    if (browserToken) browserCancel.current = browserToken;
     try {
       const graph = toWorkflowGraph(nodes, edges);
       await warnPsdChain(graph);
       const collected: string[] = [];
       for (let i = 0; i < batchCount; i++) {
+        if (browserToken?.cancelled) throw new Error("batch cancelled");
         setMessage(
           `batch ${i + 1}/${batchCount}${useRustBackend ? " (Rust backend)" : " (browser preview)"}…`,
         );
@@ -503,7 +533,13 @@ export function useStudioRunController({
           collected.push(...applyPreviews(graphForRun, { outputs: studioOutputsToMap(result) }));
         } else {
           const overrides = new Map([[batchNode.id, { index: i }]]);
-          const result = await runGraph(graph, defaultExecutors, observer, overrides);
+          const result = await runGraph(
+            graph,
+            defaultExecutors,
+            observer,
+            overrides,
+            () => browserToken?.cancelled ?? false,
+          );
           collected.push(...applyPreviews(graph, result));
         }
       }
@@ -523,6 +559,7 @@ export function useStudioRunController({
       if (rustRunId) endRustRun(rustRunId);
       setRunning(false);
       inFlight.current = false;
+      browserCancel.current = null;
       highlightFailures();
       recordRunHistory("batch", startedAt, outcome, backend);
     }
@@ -570,6 +607,7 @@ export function useStudioRunController({
   return {
     running,
     currentRunId,
+    canCancel: running,
     runLog,
     showLog,
     setShowLog,

@@ -384,7 +384,7 @@ function Studio() {
   // view state (panel toggles, counts, run actions).
   const {
     running,
-    currentRunId,
+    canCancel,
     runLog,
     showLog,
     setShowLog,
@@ -985,7 +985,7 @@ function Studio() {
         showMinimap={showMinimap}
         setShowMinimap={setShowMinimap}
         running={running}
-        currentRunId={currentRunId}
+        canCancel={canCancel}
         onRun={run}
         onCancelRun={cancelRun}
         hasBatch={hasBatch}

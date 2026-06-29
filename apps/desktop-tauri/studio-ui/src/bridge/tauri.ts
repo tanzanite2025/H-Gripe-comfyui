@@ -3,17 +3,15 @@
 // development without the desktop backend.
 
 type Invoke = (cmd: string, args?: Record<string, unknown>) => Promise<unknown>;
+type UnlistenFn = () => void;
+type EventCallback<T> = (event: { event: string; payload: T; id?: number }) => void;
+type Listen = <T>(event: string, callback: EventCallback<T>) => Promise<UnlistenFn>;
 
 interface TauriWindow {
-  __TAURI__?: { core?: { invoke?: Invoke } };
+  __TAURI__?: { core?: { invoke?: Invoke }; event?: { listen?: Listen } };
 }
 
-// When this app runs embedded as an iframe inside the desktop shell, the Tauri
-// IPC may live on the parent/top window rather than this frame. Both are
-// same-origin (tauri://localhost), so reaching across is allowed. We try this
-// frame first, then parent, then top.
-function tauriInvoke(): Invoke | null {
-  // No DOM (e.g. unit tests run in a node environment) → always use mocks.
+function tauriFrames(): (Window | null)[] | null {
   if (typeof window === "undefined") return null;
   const candidates: (Window | null)[] = [window];
   try {
@@ -22,9 +20,25 @@ function tauriInvoke(): Invoke | null {
   } catch {
     // Cross-origin access can throw; ignore and use what we have.
   }
-  for (const frame of candidates) {
+  return candidates;
+}
+
+// When this app runs embedded as an iframe inside the desktop shell, the Tauri
+// IPC may live on the parent/top window rather than this frame. Both are
+// same-origin (tauri://localhost), so reaching across is allowed. We try this
+// frame first, then parent, then top.
+function tauriInvoke(): Invoke | null {
+  for (const frame of tauriFrames() ?? []) {
     const invoke = (frame as unknown as TauriWindow | null)?.__TAURI__?.core?.invoke;
     if (invoke) return invoke;
+  }
+  return null;
+}
+
+function tauriListen(): Listen | null {
+  for (const frame of tauriFrames() ?? []) {
+    const listen = (frame as unknown as TauriWindow | null)?.__TAURI__?.event?.listen;
+    if (listen) return listen;
   }
   return null;
 }
@@ -69,8 +83,32 @@ export interface StudioGraphRunResult {
   node_runs: StudioGraphNodeRun[];
 }
 
+export interface StudioGraphRunEvent {
+  run_id: string;
+  node_id?: string | null;
+  kind?: string | null;
+  status: string;
+  duration_ms?: number | null;
+  error?: string | null;
+  message?: string | null;
+}
+
+const STUDIO_GRAPH_RUN_EVENT = "studio:graph-run";
+
+export function createStudioRunId(): string {
+  const random =
+    typeof crypto !== "undefined" && "randomUUID" in crypto
+      ? crypto.randomUUID()
+      : Math.random().toString(36).slice(2);
+  return `studio-${Date.now()}-${random}`;
+}
+
 /** Run a renderer-agnostic Studio WorkflowGraph through the Rust backend. */
-export async function runStudioGraph(graph: unknown): Promise<StudioGraphRunResult> {
+export async function runStudioGraph(
+  graph: unknown,
+  onEvent?: (event: StudioGraphRunEvent) => void,
+  runId = createStudioRunId(),
+): Promise<StudioGraphRunResult> {
   const invoke = tauriInvoke();
   if (!invoke) {
     const version =
@@ -82,9 +120,55 @@ export async function runStudioGraph(graph: unknown): Promise<StudioGraphRunResu
         : 1;
     return { version, outputs: {}, statuses: {}, node_runs: [] };
   }
-  return (await invoke("run_studio_graph", {
-    graphJson: JSON.stringify(graph),
-  })) as StudioGraphRunResult;
+
+  let unlisten: UnlistenFn | null = null;
+  const listen = tauriListen();
+  if (listen && onEvent) {
+    try {
+      unlisten = await listen<StudioGraphRunEvent>(STUDIO_GRAPH_RUN_EVENT, (event) => {
+        if (event.payload?.run_id === runId) onEvent(event.payload);
+      });
+    } catch {
+      unlisten = null;
+    }
+  }
+
+  try {
+    return (await invoke("run_studio_graph", {
+      graphJson: JSON.stringify(graph),
+      runId,
+    })) as StudioGraphRunResult;
+  } finally {
+    unlisten?.();
+  }
+}
+
+/** Request cancellation for an in-flight Studio graph run. */
+export async function cancelStudioRun(runId: string): Promise<void> {
+  const invoke = tauriInvoke();
+  if (!invoke) return;
+  await invoke("cancel_studio_run", { runId });
+}
+
+/** Restore the desktop-managed Studio autosave file, if one exists. */
+export async function readStudioAutosave(): Promise<string | null> {
+  const invoke = tauriInvoke();
+  if (!invoke) return null;
+  return (await invoke("read_studio_autosave")) as string | null;
+}
+
+/** Persist the current Studio workflow through the Rust backend. */
+export async function writeStudioAutosave(graph: unknown): Promise<void> {
+  const invoke = tauriInvoke();
+  if (!invoke) return;
+  await invoke("write_studio_autosave", { graphJson: JSON.stringify(graph) });
+}
+
+/** Clear the desktop-managed Studio autosave file. */
+export async function clearStudioAutosave(): Promise<void> {
+  const invoke = tauriInvoke();
+  if (!invoke) return;
+  await invoke("clear_studio_autosave");
 }
 
 export interface ThumbnailRequest {

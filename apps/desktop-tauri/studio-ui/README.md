@@ -59,16 +59,26 @@ effects goes through Tauri/Rust:
   the source of truth.
 - File access uses native commands such as `pick_file`, `list_psd_outputs`, and
   runtime path/profile commands rather than browser-only state.
+- Desktop workflow autosave uses `read_studio_autosave`,
+  `write_studio_autosave`, and `clear_studio_autosave`; `localStorage` is only
+  the browser-preview fallback.
 - Credentials, provider profiles, output directories, history, cache indexes,
   local GPU service startup, and video export should live behind Rust commands.
 
-Current limitation: `runtime/runGraph` is still the default TypeScript DAG
-runner in the UI. A first Rust-side `run_studio_graph` Tauri command now exists:
-it accepts the same renderer-agnostic `WorkflowGraph` JSON, executes pure/value
-nodes, and routes `generate` / `psdExport` through the backend broker and PSD
-pipeline. Before the Node Editor becomes the primary production surface, this
-backend runner still needs progress/event streaming, durable workflow save/load,
-a media index/cache, cancelable jobs, and FFmpeg-backed video assembly/export.
+The desktop Run / Run xN path uses the Rust-side `run_studio_graph` Tauri
+command. It accepts the same renderer-agnostic `WorkflowGraph` JSON, executes
+pure/value/control nodes, prunes untaken branches, and routes `generate` /
+`psdExport` through the backend broker and PSD pipeline. The TypeScript
+`runtime/runGraph` remains as the browser-preview fallback and unit-tested
+reference implementation. The Rust runner emits node-level Tauri events on
+`studio:graph-run` (`queued` / `running` / `succeeded` / `skipped` / `failed`),
+filtered by `run_id` in the webview so repeated or batch runs do not cross-talk.
+The toolbar's **Cancel** button calls `cancel_studio_run`; first-pass
+cancellation stops before the next node starts, while an already-running
+provider/API call is allowed to finish. Before the Node Editor becomes the
+primary production surface, the backend runner still needs durable workflow
+save/load beyond autosave, a media index/cache, provider-level aborts, richer
+logs, and FFmpeg-backed video assembly/export.
 
 ## Editor features
 

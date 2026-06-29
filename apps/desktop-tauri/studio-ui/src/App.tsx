@@ -32,10 +32,53 @@ import type { HgripeNodeData } from "./editor/HgripeNode";
 import { fromWorkflowGraph, toWorkflowGraph } from "./editor/adapter";
 import { clearPersistedGraph, loadPersistedGraph, persistGraph } from "./editor/persist";
 import { defaultParams } from "./graph/nodeSpecs";
-import { deserializeGraph, serializeGraph } from "./graph/model";
+import { deserializeGraph, serializeGraph, type WorkflowGraph } from "./graph/model";
 import { runGraph, topoLevels, validateGraph, type NodeRunInfo, type NodeStatus } from "./runtime/dag";
 import { batchItems, defaultExecutors } from "./runtime/executors";
-import { isTauri } from "./bridge/tauri";
+import {
+  cancelStudioRun,
+  clearStudioAutosave,
+  createStudioRunId,
+  isTauri,
+  readStudioAutosave,
+  runStudioGraph,
+  writeStudioAutosave,
+  type StudioGraphRunEvent,
+  type StudioGraphRunResult,
+} from "./bridge/tauri";
+
+const NODE_STATUSES = new Set<NodeStatus>([
+  "idle",
+  "queued",
+  "running",
+  "succeeded",
+  "failed",
+  "cached",
+  "skipped",
+]);
+
+function toNodeStatus(status: string): NodeStatus {
+  return NODE_STATUSES.has(status as NodeStatus) ? (status as NodeStatus) : "failed";
+}
+
+function studioOutputsToMap(
+  result: StudioGraphRunResult,
+): Map<string, Record<string, unknown>> {
+  return new Map(Object.entries(result.outputs));
+}
+
+function graphWithParamOverrides(
+  graph: WorkflowGraph,
+  nodeId: string,
+  params: Record<string, unknown>,
+): WorkflowGraph {
+  return {
+    ...graph,
+    nodes: graph.nodes.map((node) =>
+      node.id === nodeId ? { ...node, params: { ...node.params, ...params } } : node,
+    ),
+  };
+}
 
 function makeNode(id: string, kind: string, x: number, y: number, params?: Record<string, unknown>): Node {
   const data: HgripeNodeData = { kind, params: { ...defaultParams(kind), ...params }, status: "idle" };
@@ -67,6 +110,7 @@ function Studio() {
   const [edges, setEdges, onEdgesChange] = useEdgesState(initial.edges);
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const [running, setRunning] = useState(false);
+  const [currentRunId, setCurrentRunId] = useState<string | null>(null);
   const [snapToGrid, setSnapToGrid] = useState(false);
   const [helperLines, setHelperLines] = useState<{ horizontal?: number; vertical?: number }>({});
   const [edgeType, setEdgeType] = useState<EdgeStyle>("default");
@@ -81,7 +125,9 @@ function Studio() {
         : ""
       : "browser preview (backend mocked)",
   );
+  const [desktopAutosaveReady, setDesktopAutosaveReady] = useState(!isTauri());
   const idSeq = useRef(0);
+  const currentRunIdRef = useRef<string | null>(null);
   const fileInput = useRef<HTMLInputElement | null>(null);
   const clipboard = useRef<Clip | null>(null);
   // True while a node drag is in progress, so we snapshot only once per drag.
@@ -98,6 +144,31 @@ function Studio() {
     () => nodes.find((n) => n.id === selectedId) ?? null,
     [nodes, selectedId],
   );
+
+  useEffect(() => {
+    if (!isTauri()) return;
+    let cancelled = false;
+    void readStudioAutosave()
+      .then((raw) => {
+        if (cancelled || !raw) return;
+        const graph = deserializeGraph(raw);
+        const next = fromWorkflowGraph(graph);
+        setNodes(next.nodes);
+        setEdges(next.edges);
+        setSelectedId(null);
+        setSaved(true);
+        setMessage("restored desktop workflow");
+      })
+      .catch((err) => {
+        if (!cancelled) setMessage(`desktop autosave restore failed: ${String(err)}`);
+      })
+      .finally(() => {
+        if (!cancelled) setDesktopAutosaveReady(true);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [setNodes, setEdges]);
 
   // Static validation surfaced in the toolbar (type mismatches, cycles, …).
   const issues = useMemo(
@@ -251,6 +322,75 @@ function Studio() {
   );
   const observer = useMemo(() => ({ onStatus: setStatus, onNodeRun: recordRun }), [setStatus, recordRun]);
 
+  const applyStudioRunResult = useCallback(
+    (result: StudioGraphRunResult) => {
+      const statuses = new Map(
+        Object.entries(result.statuses).map(([id, status]) => [id, toNodeStatus(status)]),
+      );
+      const runs = new Map(result.node_runs.map((run) => [run.node_id, run]));
+      setNodes((ns) =>
+        ns.map((n) => {
+          const d = n.data as HgripeNodeData;
+          const runInfo = runs.get(n.id);
+          return {
+            ...n,
+            data: {
+              ...d,
+              status: statuses.get(n.id) ?? d.status,
+              durationMs: runInfo ? runInfo.duration_ms ?? undefined : d.durationMs,
+              error: runInfo ? runInfo.error ?? null : d.error,
+            },
+          };
+        }),
+      );
+    },
+    [setNodes],
+  );
+
+  const applyStudioRunEvent = useCallback(
+    (event: StudioGraphRunEvent) => {
+      if (!event.node_id) return;
+      const status = toNodeStatus(event.status);
+      setNodes((ns) =>
+        ns.map((n) => {
+          if (n.id !== event.node_id) return n;
+          const d = n.data as HgripeNodeData;
+          const isFreshStatus = status === "queued" || status === "running";
+          return {
+            ...n,
+            data: {
+              ...d,
+              status,
+              durationMs: event.duration_ms ?? (isFreshStatus ? undefined : d.durationMs),
+              error: event.error ?? (isFreshStatus ? undefined : d.error),
+            },
+          };
+        }),
+      );
+    },
+    [setNodes],
+  );
+
+  const beginRustRun = useCallback(() => {
+    const runId = createStudioRunId();
+    currentRunIdRef.current = runId;
+    setCurrentRunId(runId);
+    return runId;
+  }, []);
+
+  const endRustRun = useCallback((runId: string) => {
+    if (currentRunIdRef.current !== runId) return;
+    currentRunIdRef.current = null;
+    setCurrentRunId(null);
+  }, []);
+
+  const cancelRun = useCallback(() => {
+    const runId = currentRunIdRef.current;
+    if (!runId) return;
+    setMessage("cancelling…");
+    void cancelStudioRun(runId).catch((err) => setMessage(`cancel failed: ${String(err)}`));
+  }, []);
+
   // Surface output paths into preview nodes. The thumbnail itself is fetched
   // lazily by the node when it scrolls into view (see HgripeNode).
   const applyPreviews = useCallback(
@@ -270,23 +410,47 @@ function Studio() {
 
   const run = useCallback(async () => {
     setRunning(true);
-    setMessage("running…");
+    const useRustBackend = isTauri();
+    setMessage(useRustBackend ? "running Rust backend…" : "running browser preview…");
     clearRunInfo();
     try {
       const graph = toWorkflowGraph(nodes, edges);
-      const result = await runGraph(graph, defaultExecutors, observer);
-      applyPreviews(graph, result);
-      setMessage("done");
+      if (useRustBackend) {
+        const runId = beginRustRun();
+        try {
+          const result = await runStudioGraph(graph, applyStudioRunEvent, runId);
+          applyStudioRunResult(result);
+          applyPreviews(graph, { outputs: studioOutputsToMap(result) });
+          setMessage("done (Rust backend)");
+        } finally {
+          endRustRun(runId);
+        }
+      } else {
+        const result = await runGraph(graph, defaultExecutors, observer);
+        applyPreviews(graph, result);
+        setMessage("done (browser preview)");
+      }
     } catch (err) {
-      setMessage(`error: ${String(err)}`);
+      const message = String(err);
+      setMessage(message.toLowerCase().includes("cancel") ? "cancelled" : `error: ${message}`);
     } finally {
       setRunning(false);
     }
-  }, [nodes, edges, observer, clearRunInfo, applyPreviews]);
+  }, [
+    nodes,
+    edges,
+    observer,
+    clearRunInfo,
+    applyPreviews,
+    applyStudioRunResult,
+    applyStudioRunEvent,
+    beginRustRun,
+    endRustRun,
+  ]);
 
   // Batch fan-out: run the graph once per item of the (first) batch node,
-  // sweeping its `index` via runGraph's paramOverrides. Sequential so node
-  // statuses and previews update visibly per item.
+  // sweeping its `index`. In Tauri, the graph is copied with an index override
+  // and sent to Rust; in browser preview, runGraph uses paramOverrides.
   const batchNode = useMemo(
     () => nodes.find((n) => (n.data as HgripeNodeData).kind === "batch") ?? null,
     [nodes],
@@ -303,22 +467,51 @@ function Studio() {
     }
     setRunning(true);
     clearRunInfo();
+    const useRustBackend = isTauri();
+    const rustRunId = useRustBackend ? beginRustRun() : null;
     try {
       const graph = toWorkflowGraph(nodes, edges);
       const collected: string[] = [];
       for (let i = 0; i < batchCount; i++) {
-        setMessage(`batch ${i + 1}/${batchCount}…`);
-        const overrides = new Map([[batchNode.id, { index: i }]]);
-        const result = await runGraph(graph, defaultExecutors, observer, overrides);
-        collected.push(...applyPreviews(graph, result));
+        setMessage(
+          `batch ${i + 1}/${batchCount}${useRustBackend ? " (Rust backend)" : " (browser preview)"}…`,
+        );
+        if (useRustBackend) {
+          const graphForRun = graphWithParamOverrides(graph, batchNode.id, { index: i });
+          const result = await runStudioGraph(graphForRun, applyStudioRunEvent, rustRunId ?? undefined);
+          applyStudioRunResult(result);
+          collected.push(...applyPreviews(graphForRun, { outputs: studioOutputsToMap(result) }));
+        } else {
+          const overrides = new Map([[batchNode.id, { index: i }]]);
+          const result = await runGraph(graph, defaultExecutors, observer, overrides);
+          collected.push(...applyPreviews(graph, result));
+        }
       }
-      setMessage(`batch done: ${batchCount} run(s), ${collected.length} output(s)`);
+      setMessage(
+        `batch done: ${batchCount} run(s), ${collected.length} output(s)${
+          useRustBackend ? " via Rust backend" : ""
+        }`,
+      );
     } catch (err) {
-      setMessage(`batch error: ${String(err)}`);
+      const message = String(err);
+      setMessage(message.toLowerCase().includes("cancel") ? "batch cancelled" : `batch error: ${message}`);
     } finally {
+      if (rustRunId) endRustRun(rustRunId);
       setRunning(false);
     }
-  }, [batchNode, batchCount, nodes, edges, observer, clearRunInfo, applyPreviews]);
+  }, [
+    batchNode,
+    batchCount,
+    nodes,
+    edges,
+    observer,
+    clearRunInfo,
+    applyPreviews,
+    applyStudioRunResult,
+    applyStudioRunEvent,
+    beginRustRun,
+    endRustRun,
+  ]);
 
   // Switch the rendering style of all edges (and future ones).
   const changeEdgeType = useCallback(
@@ -457,6 +650,7 @@ function Studio() {
     setEdges([]);
     setSelectedId(null);
     clearPersistedGraph();
+    if (isTauri()) void clearStudioAutosave().catch((err) => setMessage(`clear autosave failed: ${String(err)}`));
   }, [setNodes, setEdges, takeSnapshot]);
 
   const resetSample = useCallback(() => {
@@ -467,17 +661,35 @@ function Studio() {
     setMessage("reset to sample workflow");
   }, [setNodes, setEdges, takeSnapshot]);
 
-  // Autosave to the workspace (debounced). Only graph-structural fields are
-  // serialized (kind/params/position/edges), so transient run statuses and
-  // fetched thumbnails never hit storage.
+  // Autosave to the workspace (debounced). Desktop builds persist through the
+  // Rust backend; browser preview falls back to localStorage.
   useEffect(() => {
+    if (isTauri() && !desktopAutosaveReady) return;
     setSaved(false);
+    let cancelled = false;
     const t = setTimeout(() => {
-      persistGraph(toWorkflowGraph(nodes, edges));
-      setSaved(true);
+      const graph = toWorkflowGraph(nodes, edges);
+      if (isTauri()) {
+        void writeStudioAutosave(graph)
+          .then(() => {
+            if (!cancelled) setSaved(true);
+          })
+          .catch((err) => {
+            if (!cancelled) {
+              setSaved(false);
+              setMessage(`autosave failed: ${String(err)}`);
+            }
+          });
+      } else {
+        persistGraph(graph);
+        setSaved(true);
+      }
     }, 500);
-    return () => clearTimeout(t);
-  }, [nodes, edges]);
+    return () => {
+      cancelled = true;
+      clearTimeout(t);
+    };
+  }, [nodes, edges, desktopAutosaveReady]);
 
   // Keyboard: undo/redo (Ctrl+Z / Ctrl+Shift+Z / Ctrl+Y) and copy/paste
   // (Ctrl+C / Ctrl+V). Skipped while editing a form field so native text
@@ -566,6 +778,11 @@ function Studio() {
         <button className="primary" onClick={run} disabled={running || issues.length > 0}>
           {running ? "Running…" : "Run"}
         </button>
+        {running && currentRunId && (
+          <button onClick={cancelRun} title="request cancellation before the next node starts">
+            Cancel
+          </button>
+        )}
         {batchNode && (
           <button
             onClick={runBatch}

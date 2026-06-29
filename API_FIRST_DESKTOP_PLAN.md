@@ -335,7 +335,8 @@ cargo build -p hgripe-api --bins
 - 引入 SQLite 历史记录和缓存索引。
 - 支持批量运行、暂停、取消、恢复。
 - 明确前后端边界：画布拖拽、选择、分组、连线辅助、缩放、节点参数编辑可以留在前端；真正执行、文件读写、API 请求、凭据、缓存、历史、视频导出、本地 GPU 小服务必须后端优先。
-- 当前 Studio 里的 TypeScript `runGraph` 只能作为原型和浏览器预览运行时；Rust `run_studio_graph` 已有第一版入口，直接吃同一个 `WorkflowGraph` JSON，后续需要把进度、日志、错误、取消状态通过 Tauri event 回传。
+- 当前 Studio 桌面端 Run / Run xN 已开始走 Rust `run_studio_graph`，直接吃同一个 `WorkflowGraph` JSON；TypeScript `runGraph` 保留为浏览器预览和测试参考实现。节点级进度已通过 `studio:graph-run` Tauri event 回传，并已有第一版 `cancel_studio_run`（节点之间取消）；后续还需要补 provider/API 请求级 abort、日志分级和更完整的错误详情。
+- Studio workflow autosave 已开始通过 Tauri/Rust 写入本地文件；后续再扩展为多工作流、项目文件夹、版本快照和显式导入/导出。
 - 视频剪辑/拼接/导出、PSD 生成、高清缩略图、媒体索引和本地模型服务启动都归入后端能力，前端只负责调度界面和可视化。
 
 ### Phase 4: Lightweight Node Editor

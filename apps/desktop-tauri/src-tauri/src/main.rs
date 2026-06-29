@@ -26,6 +26,12 @@ use hgripe_api::{
 };
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
+use tauri::Emitter;
+
+const STUDIO_GRAPH_RUN_EVENT: &str = "studio:graph-run";
+
+#[derive(Debug, Default)]
+struct StudioRunCancels(Mutex<HashSet<String>>);
 
 fn broker() -> ApiBroker {
     let mut broker = ApiBroker::new();
@@ -231,6 +237,59 @@ struct StudioNodeRun {
     error: Option<String>,
 }
 
+#[derive(Debug, Clone, Serialize)]
+struct StudioGraphRunEvent {
+    run_id: String,
+    node_id: Option<String>,
+    kind: Option<String>,
+    status: String,
+    duration_ms: Option<u128>,
+    error: Option<String>,
+    message: Option<String>,
+}
+
+fn emit_studio_run_event(app: &tauri::AppHandle, payload: StudioGraphRunEvent) {
+    let _ = app.emit(STUDIO_GRAPH_RUN_EVENT, payload);
+}
+
+fn studio_node_event(
+    run_id: &str,
+    node: &StudioGraphNode,
+    status: &str,
+    duration_ms: Option<u128>,
+    error: Option<String>,
+) -> StudioGraphRunEvent {
+    StudioGraphRunEvent {
+        run_id: run_id.to_string(),
+        node_id: Some(node.id.clone()),
+        kind: Some(node.kind.clone()),
+        status: status.to_string(),
+        duration_ms,
+        error,
+        message: None,
+    }
+}
+
+fn studio_graph_event(run_id: &str, status: &str, message: Option<String>) -> StudioGraphRunEvent {
+    StudioGraphRunEvent {
+        run_id: run_id.to_string(),
+        node_id: None,
+        kind: None,
+        status: status.to_string(),
+        duration_ms: None,
+        error: None,
+        message,
+    }
+}
+
+fn is_studio_run_cancelled(state: &tauri::State<'_, StudioRunCancels>, run_id: &str) -> bool {
+    state.0.lock().unwrap().contains(run_id)
+}
+
+fn clear_studio_run_cancel(state: &tauri::State<'_, StudioRunCancels>, run_id: &str) {
+    state.0.lock().unwrap().remove(run_id);
+}
+
 fn studio_output_map<const N: usize>(entries: [(&str, Value); N]) -> BTreeMap<String, Value> {
     entries
         .into_iter()
@@ -285,6 +344,25 @@ fn studio_task_id(node_id: &str) -> String {
         .map(|duration| duration.as_millis())
         .unwrap_or(0);
     format!("studio-{node_id}-{millis}")
+}
+
+fn studio_workspace_dir() -> PathBuf {
+    let credentials = credentials_file_path(None);
+    let base = credentials
+        .parent()
+        .filter(|path| !path.as_os_str().is_empty())
+        .map(Path::to_path_buf)
+        .unwrap_or_else(|| {
+            std::env::current_dir()
+                .unwrap_or_else(|_| PathBuf::from("."))
+                .join("user")
+                .join("hgripe")
+        });
+    base.join("studio")
+}
+
+fn studio_autosave_path() -> PathBuf {
+    studio_workspace_dir().join("autosave.workflow.json")
 }
 
 fn studio_topo_order(graph: &StudioWorkflowGraph) -> Result<Vec<String>, String> {
@@ -694,7 +772,17 @@ async fn execute_studio_node(
 }
 
 #[tauri::command]
-async fn run_studio_graph(graph_json: String) -> Result<StudioGraphRunResult, String> {
+async fn run_studio_graph(
+    app: tauri::AppHandle,
+    cancels: tauri::State<'_, StudioRunCancels>,
+    graph_json: String,
+    run_id: Option<String>,
+) -> Result<StudioGraphRunResult, String> {
+    let run_id = run_id.unwrap_or_else(|| studio_task_id("graph"));
+    emit_studio_run_event(
+        &app,
+        studio_graph_event(&run_id, "running", Some("Studio graph started".to_string())),
+    );
     let graph: StudioWorkflowGraph = serde_json::from_str(&graph_json)
         .map_err(|err| format!("invalid Studio graph JSON: {err}"))?;
     let order = studio_topo_order(&graph)?;
@@ -703,53 +791,207 @@ async fn run_studio_graph(graph_json: String) -> Result<StudioGraphRunResult, St
         .iter()
         .map(|node| (node.id.clone(), node))
         .collect();
-    let mut outputs = BTreeMap::new();
-    let mut statuses = BTreeMap::new();
-    let mut node_runs = Vec::new();
+    let mut outputs: BTreeMap<String, BTreeMap<String, Value>> = BTreeMap::new();
+    let mut statuses: BTreeMap<String, String> = BTreeMap::new();
+    let mut node_runs: Vec<StudioNodeRun> = Vec::new();
+    let mut pruned: HashSet<String> = HashSet::new();
 
     for node in &graph.nodes {
         statuses.insert(node.id.clone(), "queued".to_string());
+        emit_studio_run_event(&app, studio_node_event(&run_id, node, "queued", None, None));
     }
 
     for node_id in order {
+        if is_studio_run_cancelled(&cancels, &run_id) {
+            clear_studio_run_cancel(&cancels, &run_id);
+            emit_studio_run_event(
+                &app,
+                studio_graph_event(
+                    &run_id,
+                    "cancelled",
+                    Some("Studio graph cancelled".to_string()),
+                ),
+            );
+            return Err("Studio run cancelled".to_string());
+        }
         let node = nodes_by_id
             .get(&node_id)
             .ok_or_else(|| format!("missing node during run: {node_id}"))?;
+        let incoming_edges: Vec<&StudioGraphEdge> = graph
+            .edges
+            .iter()
+            .filter(|edge| edge.target == node.id)
+            .collect();
+        let dead_edge = |edge: &&StudioGraphEdge| {
+            pruned.contains(&edge.source)
+                || outputs
+                    .get(&edge.source)
+                    .map(|source_outputs| !source_outputs.contains_key(&edge.source_port))
+                    .unwrap_or(true)
+        };
+        if !incoming_edges.is_empty() && incoming_edges.iter().all(dead_edge) {
+            pruned.insert(node.id.clone());
+            statuses.insert(node.id.clone(), "skipped".to_string());
+            emit_studio_run_event(
+                &app,
+                studio_node_event(&run_id, node, "skipped", None, None),
+            );
+            node_runs.push(StudioNodeRun {
+                node_id: node.id.clone(),
+                kind: node.kind.clone(),
+                status: "skipped".to_string(),
+                duration_ms: None,
+                error: None,
+            });
+            continue;
+        }
         statuses.insert(node.id.clone(), "running".to_string());
+        emit_studio_run_event(
+            &app,
+            studio_node_event(&run_id, node, "running", None, None),
+        );
         let started_at = Instant::now();
         let inputs = studio_node_inputs(&node.id, &graph, &outputs);
         match execute_studio_node(node, inputs).await {
             Ok(node_outputs) => {
+                let duration_ms = started_at.elapsed().as_millis();
                 outputs.insert(node.id.clone(), node_outputs);
                 statuses.insert(node.id.clone(), "succeeded".to_string());
+                emit_studio_run_event(
+                    &app,
+                    studio_node_event(&run_id, node, "succeeded", Some(duration_ms), None),
+                );
                 node_runs.push(StudioNodeRun {
                     node_id: node.id.clone(),
                     kind: node.kind.clone(),
                     status: "succeeded".to_string(),
-                    duration_ms: Some(started_at.elapsed().as_millis()),
+                    duration_ms: Some(duration_ms),
                     error: None,
                 });
             }
             Err(error) => {
+                let duration_ms = started_at.elapsed().as_millis();
                 statuses.insert(node.id.clone(), "failed".to_string());
+                emit_studio_run_event(
+                    &app,
+                    studio_node_event(
+                        &run_id,
+                        node,
+                        "failed",
+                        Some(duration_ms),
+                        Some(error.clone()),
+                    ),
+                );
+                emit_studio_run_event(
+                    &app,
+                    studio_graph_event(&run_id, "failed", Some(error.clone())),
+                );
+                clear_studio_run_cancel(&cancels, &run_id);
                 node_runs.push(StudioNodeRun {
                     node_id: node.id.clone(),
                     kind: node.kind.clone(),
                     status: "failed".to_string(),
-                    duration_ms: Some(started_at.elapsed().as_millis()),
+                    duration_ms: Some(duration_ms),
                     error: Some(error.clone()),
                 });
                 return Err(format!("Studio node {} failed: {error}", node.id));
             }
         }
+        if is_studio_run_cancelled(&cancels, &run_id) {
+            clear_studio_run_cancel(&cancels, &run_id);
+            emit_studio_run_event(
+                &app,
+                studio_graph_event(
+                    &run_id,
+                    "cancelled",
+                    Some("Studio graph cancelled".to_string()),
+                ),
+            );
+            return Err("Studio run cancelled".to_string());
+        }
     }
 
+    emit_studio_run_event(
+        &app,
+        studio_graph_event(
+            &run_id,
+            "succeeded",
+            Some("Studio graph finished".to_string()),
+        ),
+    );
+    clear_studio_run_cancel(&cancels, &run_id);
     Ok(StudioGraphRunResult {
         version: graph.version,
         outputs,
         statuses,
         node_runs,
     })
+}
+
+#[tauri::command]
+fn read_studio_autosave() -> Result<Option<String>, String> {
+    let path = studio_autosave_path();
+    if !path.exists() {
+        return Ok(None);
+    }
+    fs::read_to_string(&path)
+        .map(Some)
+        .map_err(|err| format!("failed to read Studio autosave {}: {err}", path.display()))
+}
+
+#[tauri::command]
+fn write_studio_autosave(graph_json: String) -> Result<(), String> {
+    let graph: StudioWorkflowGraph = serde_json::from_str(&graph_json)
+        .map_err(|err| format!("invalid Studio graph JSON: {err}"))?;
+    if graph.version != 1 {
+        return Err(format!(
+            "unsupported Studio graph version: {} (expected 1)",
+            graph.version
+        ));
+    }
+
+    let path = studio_autosave_path();
+    if let Some(parent) = path.parent() {
+        fs::create_dir_all(parent)
+            .map_err(|err| format!("failed to create {}: {err}", parent.display()))?;
+    }
+    fs::write(&path, graph_json)
+        .map_err(|err| format!("failed to write Studio autosave {}: {err}", path.display()))
+}
+
+#[tauri::command]
+fn clear_studio_autosave() -> Result<(), String> {
+    let path = studio_autosave_path();
+    match fs::remove_file(&path) {
+        Ok(()) => Ok(()),
+        Err(err) if err.kind() == std::io::ErrorKind::NotFound => Ok(()),
+        Err(err) => Err(format!(
+            "failed to remove Studio autosave {}: {err}",
+            path.display()
+        )),
+    }
+}
+
+#[tauri::command]
+fn cancel_studio_run(
+    app: tauri::AppHandle,
+    cancels: tauri::State<'_, StudioRunCancels>,
+    run_id: String,
+) -> Result<(), String> {
+    let run_id = run_id.trim();
+    if run_id.is_empty() {
+        return Err("run_id is empty".to_string());
+    }
+    cancels.0.lock().unwrap().insert(run_id.to_string());
+    emit_studio_run_event(
+        &app,
+        studio_graph_event(
+            run_id,
+            "cancelling",
+            Some("Studio graph cancellation requested".to_string()),
+        ),
+    );
+    Ok(())
 }
 
 #[tauri::command]
@@ -1347,6 +1589,7 @@ fn main() {
     tauri::Builder::default()
         .plugin(tauri_plugin_dialog::init())
         .manage(ComfyServer::default())
+        .manage(StudioRunCancels::default())
         .invoke_handler(tauri::generate_handler![
             get_runtime_info,
             doctor,
@@ -1363,6 +1606,10 @@ fn main() {
             run_task,
             run_task_json,
             run_studio_graph,
+            read_studio_autosave,
+            write_studio_autosave,
+            clear_studio_autosave,
+            cancel_studio_run,
             rerun_task,
             open_url,
             pick_file,

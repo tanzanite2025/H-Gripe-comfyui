@@ -1,8 +1,10 @@
 import { deserializeGraph, serializeGraph, type WorkflowGraph } from "../graph/model";
 
-// Autosave key. Bump the suffix if the persisted shape ever changes
-// incompatibly (deserializeGraph already tolerates missing params via the
-// adapter's default-merge, so most additions are forward-compatible).
+// Browser-preview autosave key. Desktop builds use the Rust backend autosave
+// commands; localStorage remains the lightweight fallback for vite dev/tests.
+// Bump the suffix if the persisted shape ever changes incompatibly
+// (deserializeGraph already tolerates missing params via the adapter's
+// default-merge, so most additions are forward-compatible).
 const STORAGE_KEY = "hgripe.studio.workflow.v1";
 
 /** Restore the last autosaved workflow, or null if none / unreadable. */
@@ -17,7 +19,7 @@ export function loadPersistedGraph(): WorkflowGraph | null {
   }
 }
 
-/** Persist the current workflow to the workspace (best-effort). */
+/** Persist the current workflow to browser localStorage (best-effort). */
 export function persistGraph(graph: WorkflowGraph): void {
   try {
     localStorage.setItem(STORAGE_KEY, serializeGraph(graph));

@@ -6,7 +6,7 @@
 // sinks. This wires the renderer-agnostic DAG runtime to real backend
 // capability.
 
-import { composePsd, getOutputDir, runTaskJson } from "../bridge/tauri";
+import { analyzePsdContext, composePsd, getOutputDir, runTaskJson } from "../bridge/tauri";
 import type { ExecutorRegistry } from "./dag";
 import {
   optimizePromptLocally,
@@ -241,6 +241,43 @@ export const defaultExecutors: ExecutorRegistry = {
     template: ctx.inputs.template ?? null,
     filename: String(ctx.params.filename ?? "output.png"),
   }),
+
+  // Reads a PSD template (connected `template` input, else the `psd_path`
+  // param) into a structured VisualContext via the backend
+  // `analyze_psd_context` command, exposing the context plus its flat output
+  // ports (prompt suffix, background preview, placeholder mask + bounds) for
+  // downstream production nodes.
+  psdContextAnalyze: async (ctx) => {
+    const template =
+      (ctx.inputs.template as string | undefined) ??
+      (String(ctx.params.psd_path ?? "").trim() || null);
+    if (!template) {
+      throw new Error(
+        "PSD Context Analyze needs a PSD template (connect a PSD Template node or set psd_path)",
+      );
+    }
+
+    const outputDir = String(ctx.params.output_dir ?? "").trim() || (await getOutputDir());
+    const references = String(ctx.params.reference_layers ?? "")
+      .split("\n")
+      .map((s) => s.trim())
+      .filter((s) => s.length > 0);
+
+    const context = await analyzePsdContext({
+      template,
+      backgroundLayer: String(ctx.params.background_layer ?? "").trim() || undefined,
+      targetPlaceholder: String(ctx.params.target_placeholder ?? "").trim() || undefined,
+      referenceLayers: references.length > 0 ? references : undefined,
+      outputDir: outputDir || undefined,
+    });
+    return {
+      visual_context: context,
+      prompt_suffix: context.prompt_suffix,
+      background_image: context.background.image_path,
+      placeholder_mask: context.placeholder.mask_path,
+      placeholder_bounds: context.placeholder.bounds,
+    };
+  },
 
   // Writes the upstream image into the PSD template's placeholder (true
   // smart-object replacement when possible) and exports the .psd triplet via

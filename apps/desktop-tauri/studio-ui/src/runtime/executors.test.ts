@@ -262,3 +262,31 @@ describe("psdExport sink", () => {
     ).rejects.toThrow(/template input/);
   });
 });
+
+describe("psdContextAnalyze source", () => {
+  // Outside Tauri, analyzePsdContext returns a mocked VisualContext, so we can
+  // assert how the executor flattens it onto the node's output ports.
+  it("analyzes a connected template and exposes the flat output ports", async () => {
+    const out = (await defaultExecutors.psdContextAnalyze(
+      ctx("psdContextAnalyze", { output_dir: "/out" }, { template: "/t.psd" }),
+    )) as Record<string, unknown>;
+    expect(out.prompt_suffix).toBe((out.visual_context as { prompt_suffix: string }).prompt_suffix);
+    expect(out.background_image).toBe("/out/template_background.png");
+    expect(out.placeholder_mask).toBe("/out/template_placeholder_mask.png");
+    expect(out.placeholder_bounds).toEqual({ x: 320, y: 180, width: 1024, height: 1400 });
+  });
+
+  it("falls back to the psd_path param when no template is connected", async () => {
+    const out = (await defaultExecutors.psdContextAnalyze(
+      ctx("psdContextAnalyze", { psd_path: "/p.psd" }),
+    )) as Record<string, unknown>;
+    // getOutputDir's browser mock resolves to /mock/outputs.
+    expect(out.background_image).toBe("/mock/outputs/template_background.png");
+  });
+
+  it("requires a template input or psd_path param", async () => {
+    await expect(
+      defaultExecutors.psdContextAnalyze(ctx("psdContextAnalyze", {})),
+    ).rejects.toThrow(/PSD template/);
+  });
+});

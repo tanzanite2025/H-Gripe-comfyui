@@ -1,6 +1,7 @@
 //! Studio graph editor backend, split into focused submodules:
 //! - [`graph`]: the workflow graph schema + shared value-coercion helpers.
 //! - [`exec`]: the topological execution engine, run events, and cancellation.
+//! - [`psd_analyze`]: the `psdContextAnalyze` node executor (PSD context bridge).
 //! - [`psd_export`]: the `psdExport` node executor (PSD composition bridge).
 //! - [`persist`]: on-disk autosave, workflow files, recents, and pickers.
 //! - [`history`]: project-scoped snapshot / run-history JSON stores.
@@ -12,6 +13,7 @@ mod exec;
 mod graph;
 mod history;
 mod persist;
+mod psd_analyze;
 mod psd_export;
 
 // Glob re-exports so the original `crate::studio::*` command paths keep

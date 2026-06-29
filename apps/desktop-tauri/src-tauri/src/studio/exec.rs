@@ -18,6 +18,7 @@ use super::graph::{
     studio_non_empty, studio_output_map, studio_truthy, studio_value_to_number,
     studio_value_to_string, StudioGraphEdge, StudioGraphNode, StudioWorkflowGraph,
 };
+use super::psd_analyze::execute_studio_psd_context_analyze;
 use super::psd_export::execute_studio_psd_export;
 use crate::broker;
 
@@ -676,6 +677,7 @@ async fn execute_studio_node(
                 json!(studio_value_to_string(node.params.get("filename"))),
             ),
         ])),
+        "psdContextAnalyze" => execute_studio_psd_context_analyze(node, &inputs),
         "psdExport" => execute_studio_psd_export(node, &inputs),
         other => Err(format!("unsupported Studio node kind: {other}")),
     }

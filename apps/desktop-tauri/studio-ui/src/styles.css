@@ -51,7 +51,51 @@ button.primary { background: var(--accent); border-color: var(--accent); color: 
 button:disabled { opacity: 0.6; cursor: default; }
 
 .workspace { flex: 1; display: flex; min-height: 0; }
-.canvas { flex: 1; min-width: 0; }
+.canvas { flex: 1; min-width: 0; display: flex; flex-direction: column; }
+.canvas-flow { flex: 1; min-height: 0; }
+
+/* run log (beneath the canvas) */
+.run-log {
+  display: flex;
+  flex-direction: column;
+  height: 200px;
+  border-top: 1px solid var(--border);
+  background: var(--panel);
+}
+.run-log-head {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 6px 10px;
+  border-bottom: 1px solid var(--border);
+}
+.run-log-head h2 { margin: 0; font-size: 13px; }
+.run-log-head .spacer { flex: 1; }
+.run-log-head button { font-size: 11px; padding: 3px 8px; }
+.run-log-body {
+  flex: 1;
+  min-height: 0;
+  overflow: auto;
+  padding: 6px 10px;
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  font-size: 11px;
+  line-height: 1.6;
+}
+.run-log-empty { color: var(--muted); margin: 4px 0; }
+.run-log-line { display: flex; gap: 8px; white-space: pre-wrap; word-break: break-word; }
+.run-log-time { color: var(--muted); flex-shrink: 0; }
+.run-log-node {
+  color: var(--accent);
+  flex-shrink: 0;
+  max-width: 160px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.run-log-msg { flex: 1; min-width: 0; }
+.run-log-line.level-success .run-log-msg { color: var(--ok); }
+.run-log-line.level-error .run-log-msg { color: var(--err); }
+.run-log-line.level-warn .run-log-msg { color: var(--running); }
 
 .inspector {
   width: 300px;

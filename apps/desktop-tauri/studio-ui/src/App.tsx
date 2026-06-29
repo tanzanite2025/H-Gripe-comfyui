@@ -31,6 +31,14 @@ import { layeredPositions } from "./editor/layout";
 import type { HgripeNodeData } from "./editor/HgripeNode";
 import { fromWorkflowGraph, toWorkflowGraph } from "./editor/adapter";
 import { ProjectPanel, baseName } from "./editor/ProjectPanel";
+import { RunLog } from "./editor/RunLogPanel";
+import {
+  appendLog,
+  describeNodeStatus,
+  levelForStatus,
+  type LogLevel,
+  type RunLogEntry,
+} from "./editor/runlog";
 import { clearPersistedGraph, loadPersistedGraph, persistGraph } from "./editor/persist";
 import { defaultParams } from "./graph/nodeSpecs";
 import { deserializeGraph, serializeGraph, type WorkflowGraph } from "./graph/model";
@@ -125,6 +133,8 @@ function Studio() {
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const [running, setRunning] = useState(false);
   const [currentRunId, setCurrentRunId] = useState<string | null>(null);
+  const [runLog, setRunLog] = useState<RunLogEntry[]>([]);
+  const [showLog, setShowLog] = useState(false);
   const [snapToGrid, setSnapToGrid] = useState(false);
   const [helperLines, setHelperLines] = useState<{ horizontal?: number; vertical?: number }>({});
   const [edgeType, setEdgeType] = useState<EdgeStyle>("default");
@@ -158,6 +168,7 @@ function Studio() {
   const skipDirty = useRef(true);
 
   const idSeq = useRef(0);
+  const logSeq = useRef(0);
   const currentRunIdRef = useRef<string | null>(null);
   const fileInput = useRef<HTMLInputElement | null>(null);
   const clipboard = useRef<Clip | null>(null);
@@ -341,11 +352,22 @@ function Studio() {
     [patchNode],
   );
 
+  // Append a line to the run log (capped, never mutating the previous array).
+  const pushLog = useCallback((level: LogLevel, message: string, node?: string) => {
+    setRunLog((log) => appendLog(log, { id: logSeq.current++, t: Date.now(), level, message, node }));
+  }, []);
+
   // Per-node run telemetry (duration / error) for node-level logs/progress.
   const recordRun = useCallback(
-    (id: string, info: NodeRunInfo) =>
-      patchNode(id, { durationMs: info.durationMs, error: info.error ?? null }),
-    [patchNode],
+    (id: string, info: NodeRunInfo) => {
+      patchNode(id, { durationMs: info.durationMs, error: info.error ?? null });
+      pushLog(
+        levelForStatus(info.status),
+        describeNodeStatus(info.status, { durationMs: info.durationMs, error: info.error }),
+        id,
+      );
+    },
+    [patchNode, pushLog],
   );
   // Clear the previous run's duration/error before a fresh run.
   const clearRunInfo = useCallback(
@@ -381,8 +403,16 @@ function Studio() {
 
   const applyStudioRunEvent = useCallback(
     (event: StudioGraphRunEvent) => {
-      if (!event.node_id) return;
+      if (!event.node_id) {
+        if (event.message) pushLog("info", event.message);
+        return;
+      }
       const status = toNodeStatus(event.status);
+      pushLog(
+        levelForStatus(status),
+        describeNodeStatus(status, { durationMs: event.duration_ms, error: event.error }),
+        event.node_id,
+      );
       setNodes((ns) =>
         ns.map((n) => {
           if (n.id !== event.node_id) return n;
@@ -400,7 +430,7 @@ function Studio() {
         }),
       );
     },
-    [setNodes],
+    [setNodes, pushLog],
   );
 
   const beginRustRun = useCallback(() => {
@@ -420,8 +450,9 @@ function Studio() {
     const runId = currentRunIdRef.current;
     if (!runId) return;
     setMessage("cancelling…");
+    pushLog("warn", "✋ cancellation requested");
     void cancelStudioRun(runId).catch((err) => setMessage(`cancel failed: ${String(err)}`));
-  }, []);
+  }, [pushLog]);
 
   // Surface output paths into preview nodes. The thumbnail itself is fetched
   // lazily by the node when it scrolls into view (see HgripeNode).
@@ -442,9 +473,12 @@ function Studio() {
 
   const run = useCallback(async () => {
     setRunning(true);
+    setShowLog(true);
     const useRustBackend = isTauri();
+    const backend = useRustBackend ? "Rust backend" : "browser preview";
     setMessage(useRustBackend ? "running Rust backend…" : "running browser preview…");
     clearRunInfo();
+    pushLog("info", `▶ run started (${backend})`);
     try {
       const graph = toWorkflowGraph(nodes, edges);
       if (useRustBackend) {
@@ -462,9 +496,12 @@ function Studio() {
         applyPreviews(graph, result);
         setMessage("done (browser preview)");
       }
+      pushLog("success", `✔ run finished (${backend})`);
     } catch (err) {
       const message = String(err);
-      setMessage(message.toLowerCase().includes("cancel") ? "cancelled" : `error: ${message}`);
+      const cancelled = message.toLowerCase().includes("cancel");
+      setMessage(cancelled ? "cancelled" : `error: ${message}`);
+      pushLog(cancelled ? "warn" : "error", cancelled ? "run cancelled" : `run failed: ${message}`);
     } finally {
       setRunning(false);
     }
@@ -478,6 +515,7 @@ function Studio() {
     applyStudioRunEvent,
     beginRustRun,
     endRustRun,
+    pushLog,
   ]);
 
   // Batch fan-out: run the graph once per item of the (first) batch node,
@@ -498,9 +536,12 @@ function Studio() {
       return;
     }
     setRunning(true);
+    setShowLog(true);
     clearRunInfo();
     const useRustBackend = isTauri();
+    const backend = useRustBackend ? "Rust backend" : "browser preview";
     const rustRunId = useRustBackend ? beginRustRun() : null;
+    pushLog("info", `▶ batch started: ${batchCount} run(s) (${backend})`);
     try {
       const graph = toWorkflowGraph(nodes, edges);
       const collected: string[] = [];
@@ -508,6 +549,7 @@ function Studio() {
         setMessage(
           `batch ${i + 1}/${batchCount}${useRustBackend ? " (Rust backend)" : " (browser preview)"}…`,
         );
+        pushLog("info", `— batch item ${i + 1}/${batchCount}`);
         if (useRustBackend) {
           const graphForRun = graphWithParamOverrides(graph, batchNode.id, { index: i });
           const result = await runStudioGraph(graphForRun, applyStudioRunEvent, rustRunId ?? undefined);
@@ -524,9 +566,12 @@ function Studio() {
           useRustBackend ? " via Rust backend" : ""
         }`,
       );
+      pushLog("success", `✔ batch finished: ${batchCount} run(s), ${collected.length} output(s)`);
     } catch (err) {
       const message = String(err);
-      setMessage(message.toLowerCase().includes("cancel") ? "batch cancelled" : `batch error: ${message}`);
+      const cancelled = message.toLowerCase().includes("cancel");
+      setMessage(cancelled ? "batch cancelled" : `batch error: ${message}`);
+      pushLog(cancelled ? "warn" : "error", cancelled ? "batch cancelled" : `batch failed: ${message}`);
     } finally {
       if (rustRunId) endRustRun(rustRunId);
       setRunning(false);
@@ -543,6 +588,7 @@ function Studio() {
     applyStudioRunEvent,
     beginRustRun,
     endRustRun,
+    pushLog,
   ]);
 
   // Switch the rendering style of all edges (and future ones).
@@ -1141,6 +1187,13 @@ function Studio() {
           <input type="checkbox" checked={showMinimap} onChange={(e) => setShowMinimap(e.target.checked)} />
           Map
         </label>
+        <button
+          onClick={() => setShowLog((s) => !s)}
+          title="toggle the run log (per-node status, timing and errors)"
+        >
+          {showLog ? "Hide Log" : "Log"}
+          {runLog.length > 0 ? ` (${runLog.length})` : ""}
+        </button>
         <button className="primary" onClick={run} disabled={running || issues.length > 0}>
           {running ? "Running…" : "Run"}
         </button>
@@ -1193,23 +1246,32 @@ function Studio() {
           )}
           <Palette onAdd={addNode} />
           <div className="canvas">
-            <FlowCanvas
-              nodes={nodes}
-              edges={edges}
-              onNodesChange={handleNodesChange}
-              onEdgesChange={handleEdgesChange}
-              setEdges={setEdges}
-              onSelect={setSelectedId}
-              onAddNode={addNode}
-              onBeforeConnect={takeSnapshot}
-              onNodeDragStop={handleNodeDragStop}
-              snapToGrid={snapToGrid}
-              helperLines={helperLines}
-              edgeType={edgeType}
-              showMinimap={showMinimap}
-              onNodeContextMenu={openNodeMenu}
-              onPaneContextMenu={openPaneMenu}
-            />
+            <div className="canvas-flow">
+              <FlowCanvas
+                nodes={nodes}
+                edges={edges}
+                onNodesChange={handleNodesChange}
+                onEdgesChange={handleEdgesChange}
+                setEdges={setEdges}
+                onSelect={setSelectedId}
+                onAddNode={addNode}
+                onBeforeConnect={takeSnapshot}
+                onNodeDragStop={handleNodeDragStop}
+                snapToGrid={snapToGrid}
+                helperLines={helperLines}
+                edgeType={edgeType}
+                showMinimap={showMinimap}
+                onNodeContextMenu={openNodeMenu}
+                onPaneContextMenu={openPaneMenu}
+              />
+            </div>
+            {showLog && (
+              <RunLog
+                entries={runLog}
+                onClear={() => setRunLog([])}
+                onClose={() => setShowLog(false)}
+              />
+            )}
           </div>
           <Inspector node={selectedNode} onParamChange={onParamChange} />
         </div>

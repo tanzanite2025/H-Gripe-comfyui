@@ -405,6 +405,20 @@ async function ensureNodeEditorEmbedded() {
 // ---- comfyui ----
 let comfyEmbedded = false;
 
+// The Advanced Canvas embeds a *local* ComfyUI. The CSP `frame-src` only allows
+// loopback origins, so a non-loopback URL would be silently blocked by the
+// webview; reject it here with a clear message instead. Parsing is lenient: a
+// bare `host:port` (no scheme) is treated as http.
+function isLoopbackComfyUrl(raw) {
+  try {
+    const u = new URL(/^\w+:\/\//.test(raw) ? raw : `http://${raw}`);
+    const host = u.hostname.replace(/^\[|\]$/g, "").toLowerCase();
+    return host === "127.0.0.1" || host === "localhost" || host === "::1";
+  } catch {
+    return false;
+  }
+}
+
 function embedComfy() {
   const url = $("#comfy-url").value.trim();
   const frame = $("#comfy-frame");
@@ -412,6 +426,11 @@ function embedComfy() {
   const placeholder = $("#comfy-placeholder");
   if (!url) {
     status.textContent = "enter a ComfyUI URL";
+    status.className = "status err";
+    return;
+  }
+  if (!isLoopbackComfyUrl(url)) {
+    status.textContent = "only local ComfyUI is allowed (127.0.0.1 / localhost)";
     status.className = "status err";
     return;
   }

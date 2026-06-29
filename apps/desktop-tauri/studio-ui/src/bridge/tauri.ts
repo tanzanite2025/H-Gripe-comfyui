@@ -164,6 +164,24 @@ export async function writeStudioAutosave(graph: unknown): Promise<void> {
   await invoke("write_studio_autosave", { graphJson: JSON.stringify(graph) });
 }
 
+/**
+ * Read the active project folder's persisted snapshots file (raw JSON array
+ * text), or `null` outside the desktop build. Returns `"[]"` when no file
+ * exists yet.
+ */
+export async function readStudioSnapshots(dir: string): Promise<string | null> {
+  const invoke = tauriInvoke();
+  if (!invoke) return null;
+  return (await invoke("read_studio_snapshots", { dir })) as string;
+}
+
+/** Persist the snapshot list into the active project folder (desktop only). */
+export async function writeStudioSnapshots(dir: string, snapshots: unknown): Promise<void> {
+  const invoke = tauriInvoke();
+  if (!invoke) return;
+  await invoke("write_studio_snapshots", { dir, snapshotsJson: JSON.stringify(snapshots) });
+}
+
 /** Clear the desktop-managed Studio autosave file. */
 export async function clearStudioAutosave(): Promise<void> {
   const invoke = tauriInvoke();

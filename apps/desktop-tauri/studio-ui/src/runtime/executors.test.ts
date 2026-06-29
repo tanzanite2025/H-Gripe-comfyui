@@ -329,3 +329,53 @@ describe("matchLightColor", () => {
     ).rejects.toThrow(/connected image/);
   });
 });
+
+describe("refineMaskEdge", () => {
+  // Outside Tauri, refineMaskEdge returns a mocked RefineEdgeResult, so we can
+  // assert how the executor flattens it onto the node's output ports.
+  it("refines a connected image and exposes the flat output ports", async () => {
+    const out = (await defaultExecutors.refineMaskEdge(
+      ctx(
+        "refineMaskEdge",
+        { preset: "clean", output_dir: "/out", output_name: "hero" },
+        { image: "/subject.png", background: "/bg.png" },
+      ),
+    )) as Record<string, unknown>;
+    expect(out.refined_image).toBe("/out/hero.png");
+    expect(out.refined_mask).toBe("/out/hero_mask.png");
+    const report = out.edge_report as { preset: string; source_mask: string; background_applied: boolean };
+    expect(report.preset).toBe("clean");
+    // No explicit mask wired, so the image's own alpha is used.
+    expect(report.source_mask).toBe("alpha");
+    expect(report.background_applied).toBe(true);
+  });
+
+  it("honours custom-preset parameters and a connected mask", async () => {
+    const out = (await defaultExecutors.refineMaskEdge(
+      ctx(
+        "refineMaskEdge",
+        { preset: "custom", erode_px: 3, feather_px: 10, edge_decontaminate: false },
+        { image: "/subject.png", mask: "/matte.png" },
+      ),
+    )) as Record<string, unknown>;
+    const report = out.edge_report as {
+      erode_px: number;
+      feather_px: number;
+      edge_decontaminate: boolean;
+      source_mask: string;
+      background_applied: boolean;
+    };
+    expect(report.erode_px).toBe(3);
+    expect(report.feather_px).toBe(10);
+    expect(report.edge_decontaminate).toBe(false);
+    expect(report.source_mask).toBe("explicit");
+    // No background wired, so nothing is blended into the edge band.
+    expect(report.background_applied).toBe(false);
+  });
+
+  it("requires a connected image input", async () => {
+    await expect(
+      defaultExecutors.refineMaskEdge(ctx("refineMaskEdge", {})),
+    ).rejects.toThrow(/connected image/);
+  });
+});

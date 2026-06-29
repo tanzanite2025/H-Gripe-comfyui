@@ -551,3 +551,142 @@ pub(crate) fn match_light_color(
         )
     })
 }
+
+/// What `refine_mask_edge` did: the resolved preset/morphology parameters, the
+/// edge-band size and the mask coverage before/after. Fields are `snake_case`
+/// to match the `edge_refine_cli.py` JSON.
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub(crate) struct EdgeReport {
+    #[serde(default)]
+    pub(crate) preset: String,
+    /// `explicit` when a mask was connected, else `alpha` (the image's own).
+    #[serde(default)]
+    pub(crate) source_mask: String,
+    #[serde(default)]
+    pub(crate) erode_px: i64,
+    #[serde(default)]
+    pub(crate) dilate_px: i64,
+    #[serde(default)]
+    pub(crate) feather_px: f64,
+    #[serde(default)]
+    pub(crate) guided_radius: i64,
+    #[serde(default)]
+    pub(crate) edge_decontaminate: bool,
+    #[serde(default)]
+    pub(crate) background_blend_strength: f64,
+    /// `true` when a background was connected and blended into the edge band.
+    #[serde(default)]
+    pub(crate) background_applied: bool,
+    #[serde(default)]
+    pub(crate) edge_band_px: i64,
+    #[serde(default)]
+    pub(crate) coverage_before: f64,
+    #[serde(default)]
+    pub(crate) coverage_after: f64,
+    /// `[width, height]` of the written images.
+    #[serde(default)]
+    pub(crate) output_size: Option<[i64; 2]>,
+}
+
+/// Result of the **Mask Edge Refine** node: the written refined RGBA image, the
+/// refined matte (as a grayscale PNG), and the [`EdgeReport`].
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub(crate) struct RefineEdgeResult {
+    #[serde(default)]
+    pub(crate) refined_image: String,
+    #[serde(default)]
+    pub(crate) refined_mask: String,
+    #[serde(default)]
+    pub(crate) edge_report: EdgeReport,
+}
+
+/// Clean up a cut-out subject's matte so it drops into a PSD placeholder without
+/// white halos, fringing or jagged semi-transparent edges. This is the **Mask
+/// Edge Refine** node's backend (the third PSD production node): it consumes the
+/// subject image, an optional explicit matte (defaults to the image's alpha),
+/// and an optional target background for edge colour blending.
+///
+/// Like the other PSD commands it shells out to `python/bridge/edge_refine_cli.py`
+/// using the project's bundled Python (Pillow + numpy, no OpenCV in Phase 1).
+/// `preset` is `clean | natural | soft | custom`; the numeric morphology
+/// parameters apply only when `preset` is `custom`.
+#[tauri::command]
+#[allow(clippy::too_many_arguments)]
+pub(crate) fn refine_mask_edge(
+    dir: Option<String>,
+    image: String,
+    mask: Option<String>,
+    background: Option<String>,
+    placeholder_mask: Option<String>,
+    preset: Option<String>,
+    erode_px: Option<i64>,
+    dilate_px: Option<i64>,
+    feather_px: Option<f64>,
+    guided_radius: Option<i64>,
+    edge_decontaminate: Option<bool>,
+    background_blend_strength: Option<f64>,
+    output_dir: Option<String>,
+    output_name: Option<String>,
+) -> Result<RefineEdgeResult, String> {
+    let dir = resolve_project_dir(&dir)?;
+    let python = project_python(&dir);
+    let script = dir.join("python").join("bridge").join("edge_refine_cli.py");
+    if !script.is_file() {
+        return Err(format!(
+            "edge_refine_cli.py not found at {}",
+            script.display()
+        ));
+    }
+
+    let mut cmd = std::process::Command::new(&python);
+    cmd.arg(&script)
+        .arg("--image")
+        .arg(&image)
+        .arg("--mask")
+        .arg(mask.as_deref().unwrap_or(""))
+        .arg("--background")
+        .arg(background.as_deref().unwrap_or(""))
+        .arg("--placeholder-mask")
+        .arg(placeholder_mask.as_deref().unwrap_or(""))
+        .arg("--preset")
+        .arg(preset.as_deref().unwrap_or("natural"))
+        .arg("--erode-px")
+        .arg(erode_px.unwrap_or(1).to_string())
+        .arg("--dilate-px")
+        .arg(dilate_px.unwrap_or(0).to_string())
+        .arg("--feather-px")
+        .arg(feather_px.unwrap_or(4.0).to_string())
+        .arg("--guided-radius")
+        .arg(guided_radius.unwrap_or(8).to_string())
+        .arg("--background-blend-strength")
+        .arg(background_blend_strength.unwrap_or(0.4).to_string())
+        .arg("--output-dir")
+        .arg(output_dir.as_deref().unwrap_or(""))
+        .arg("--output-name")
+        .arg(output_name.as_deref().unwrap_or(""))
+        .current_dir(&dir);
+    if edge_decontaminate.unwrap_or(false) {
+        cmd.arg("--edge-decontaminate");
+    }
+    #[cfg(windows)]
+    {
+        use std::os::windows::process::CommandExt;
+        // CREATE_NO_WINDOW: don't pop a console window for the child.
+        cmd.creation_flags(0x0800_0000);
+    }
+
+    let output = cmd
+        .output()
+        .map_err(|err| format!("failed to launch {}: {err}", python.display()))?;
+    if !output.status.success() {
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        return Err(format!("refine_mask_edge failed: {}", stderr.trim()));
+    }
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    serde_json::from_str::<RefineEdgeResult>(stdout.trim()).map_err(|err| {
+        format!(
+            "could not parse refine_mask_edge output: {err} (raw: {})",
+            stdout.trim()
+        )
+    })
+}

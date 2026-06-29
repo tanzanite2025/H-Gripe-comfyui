@@ -3,6 +3,7 @@
 //! - [`exec`]: the topological execution engine, run events, and cancellation.
 //! - [`psd_analyze`]: the `psdContextAnalyze` node executor (PSD context bridge).
 //! - [`color_match`]: the `matchLightColor` node executor (light/colour match).
+//! - [`edge_refine`]: the `refineMaskEdge` node executor (mask edge refine).
 //! - [`psd_export`]: the `psdExport` node executor (PSD composition bridge).
 //! - [`persist`]: on-disk autosave, workflow files, recents, and pickers.
 //! - [`history`]: project-scoped snapshot / run-history JSON stores.
@@ -11,6 +12,7 @@
 //! re-exports below, so `main.rs`'s `invoke_handler` registration is unchanged.
 
 mod color_match;
+mod edge_refine;
 mod exec;
 mod graph;
 mod history;

@@ -108,6 +108,16 @@ button:disabled { opacity: 0.6; cursor: default; }
 .run-log-line.level-warn .run-log-msg { color: var(--running); }
 
 .snapshots-panel .project-item-meta { white-space: normal; }
+.snapshot-auto {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 4px 8px;
+  font-size: 11px;
+  color: var(--muted);
+  cursor: pointer;
+}
+.snapshot-auto input { cursor: pointer; }
 
 .inspector {
   width: 300px;

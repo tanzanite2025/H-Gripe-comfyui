@@ -18,6 +18,7 @@ export interface Snapshot {
 
 // Bump the suffix if the persisted shape changes incompatibly.
 const STORAGE_KEY = "hgripe.studio.snapshots.v1";
+const AUTO_KEY = "hgripe.studio.autosnapshot.v1";
 /** Cap retained snapshots so localStorage cannot grow without bound. */
 export const SNAPSHOT_CAP = 50;
 
@@ -82,5 +83,23 @@ export function saveSnapshots(list: Snapshot[]): void {
     localStorage.setItem(STORAGE_KEY, JSON.stringify(list));
   } catch {
     // Quota exceeded / storage disabled — snapshots are best-effort.
+  }
+}
+
+/** Read the "auto-snapshot before run" preference (defaults to true). */
+export function loadAutoSnapshotPref(): boolean {
+  try {
+    return localStorage.getItem(AUTO_KEY) !== "0";
+  } catch {
+    return true;
+  }
+}
+
+/** Persist the "auto-snapshot before run" preference (best-effort). */
+export function saveAutoSnapshotPref(on: boolean): void {
+  try {
+    localStorage.setItem(AUTO_KEY, on ? "1" : "0");
+  } catch {
+    /* best-effort */
   }
 }

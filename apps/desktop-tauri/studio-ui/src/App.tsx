@@ -43,10 +43,12 @@ import {
 import { SnapshotsPanel } from "./editor/SnapshotsPanel";
 import {
   addSnapshot,
+  loadAutoSnapshotPref,
   loadSnapshots,
   newSnapshotId,
   removeSnapshot,
   renameSnapshot,
+  saveAutoSnapshotPref,
   saveSnapshots,
   type Snapshot,
 } from "./editor/snapshots";
@@ -148,6 +150,7 @@ function Studio() {
   const [showLog, setShowLog] = useState(false);
   const [snapshots, setSnapshots] = useState<Snapshot[]>(() => loadSnapshots());
   const [showSnapshots, setShowSnapshots] = useState(false);
+  const [autoSnapshot, setAutoSnapshot] = useState<boolean>(() => loadAutoSnapshotPref());
   const [snapToGrid, setSnapToGrid] = useState(false);
   const [helperLines, setHelperLines] = useState<{ horizontal?: number; vertical?: number }>({});
   const [edgeType, setEdgeType] = useState<EdgeStyle>("default");
@@ -182,6 +185,8 @@ function Studio() {
 
   const idSeq = useRef(0);
   const logSeq = useRef(0);
+  // Node ids that reported "failed" during the in-flight run, in first-seen order.
+  const runFailures = useRef<string[]>([]);
   const currentRunIdRef = useRef<string | null>(null);
   const fileInput = useRef<HTMLInputElement | null>(null);
   const clipboard = useRef<Clip | null>(null);
@@ -392,10 +397,49 @@ function Studio() {
     [setNodes],
   );
 
+  // After a run settles, surface any failed nodes: select/focus the first one
+  // and summarise them in the log. Returns the number of failed nodes.
+  const highlightFailures = useCallback(() => {
+    const failed = runFailures.current;
+    if (failed.length === 0) return 0;
+    focusNode(failed[0]);
+    pushLog("error", `⚠ ${failed.length} node(s) failed: ${failed.join(", ")}`);
+    return failed.length;
+  }, [focusNode, pushLog]);
+
+  // Capture the current graph under a given name (no prompt).
+  const captureNamed = useCallback(
+    (name: string) => {
+      const graph = toWorkflowGraph(nodes, edges);
+      const snap: Snapshot = { id: newSnapshotId(), name, t: Date.now(), graph };
+      setSnapshots((list) => addSnapshot(list, snap));
+      return snap;
+    },
+    [nodes, edges],
+  );
+
+  // Capture the current graph as a named snapshot (prompts for a name).
+  const captureSnapshot = useCallback(() => {
+    const suggested = `Snapshot ${new Date().toLocaleString()}`;
+    const name = window.prompt("Snapshot name", suggested);
+    if (name === null) return;
+    const snap = captureNamed(name.trim() || suggested);
+    setMessage(`snapshot saved: ${snap.name}`);
+  }, [captureNamed]);
+
+  // Auto-capture before a run (when enabled and the graph is non-empty).
+  const autoSnapshotBeforeRun = useCallback(() => {
+    if (!autoSnapshot || nodes.length === 0) return;
+    captureNamed(`Auto · ${new Date().toLocaleTimeString()}`);
+  }, [autoSnapshot, nodes.length, captureNamed]);
+
   // Per-node run telemetry (duration / error) for node-level logs/progress.
   const recordRun = useCallback(
     (id: string, info: NodeRunInfo) => {
       patchNode(id, { durationMs: info.durationMs, error: info.error ?? null });
+      if (info.status === "failed" && !runFailures.current.includes(id)) {
+        runFailures.current.push(id);
+      }
       pushLog(
         levelForStatus(info.status),
         describeNodeStatus(info.status, { durationMs: info.durationMs, error: info.error }),
@@ -443,6 +487,9 @@ function Studio() {
         return;
       }
       const status = toNodeStatus(event.status);
+      if (status === "failed" && !runFailures.current.includes(event.node_id)) {
+        runFailures.current.push(event.node_id);
+      }
       pushLog(
         levelForStatus(status),
         describeNodeStatus(status, { durationMs: event.duration_ms, error: event.error }),
@@ -509,6 +556,8 @@ function Studio() {
   const run = useCallback(async () => {
     setRunning(true);
     setShowLog(true);
+    runFailures.current = [];
+    autoSnapshotBeforeRun();
     const useRustBackend = isTauri();
     const backend = useRustBackend ? "Rust backend" : "browser preview";
     setMessage(useRustBackend ? "running Rust backend…" : "running browser preview…");
@@ -539,6 +588,7 @@ function Studio() {
       pushLog(cancelled ? "warn" : "error", cancelled ? "run cancelled" : `run failed: ${message}`);
     } finally {
       setRunning(false);
+      highlightFailures();
     }
   }, [
     nodes,
@@ -551,6 +601,8 @@ function Studio() {
     beginRustRun,
     endRustRun,
     pushLog,
+    autoSnapshotBeforeRun,
+    highlightFailures,
   ]);
 
   // Batch fan-out: run the graph once per item of the (first) batch node,
@@ -572,6 +624,8 @@ function Studio() {
     }
     setRunning(true);
     setShowLog(true);
+    runFailures.current = [];
+    autoSnapshotBeforeRun();
     clearRunInfo();
     const useRustBackend = isTauri();
     const backend = useRustBackend ? "Rust backend" : "browser preview";
@@ -610,6 +664,7 @@ function Studio() {
     } finally {
       if (rustRunId) endRustRun(rustRunId);
       setRunning(false);
+      highlightFailures();
     }
   }, [
     batchNode,
@@ -624,6 +679,8 @@ function Studio() {
     beginRustRun,
     endRustRun,
     pushLog,
+    autoSnapshotBeforeRun,
+    highlightFailures,
   ]);
 
   // Switch the rendering style of all edges (and future ones).
@@ -770,16 +827,10 @@ function Studio() {
     saveSnapshots(snapshots);
   }, [snapshots]);
 
-  // Capture the current graph as a named snapshot.
-  const captureSnapshot = useCallback(() => {
-    const suggested = `Snapshot ${new Date().toLocaleString()}`;
-    const name = window.prompt("Snapshot name", suggested);
-    if (name === null) return;
-    const graph = toWorkflowGraph(nodes, edges);
-    const snap: Snapshot = { id: newSnapshotId(), name: name.trim() || suggested, t: Date.now(), graph };
-    setSnapshots((list) => addSnapshot(list, snap));
-    setMessage(`snapshot saved: ${snap.name}`);
-  }, [nodes, edges]);
+  // Persist the auto-snapshot preference.
+  useEffect(() => {
+    saveAutoSnapshotPref(autoSnapshot);
+  }, [autoSnapshot]);
 
   // Restore a snapshot into the editor (guarded by the unsaved-changes check).
   const restoreSnapshot = useCallback(
@@ -1346,6 +1397,8 @@ function Studio() {
           {showSnapshots && (
             <SnapshotsPanel
               snapshots={snapshots}
+              autoSnapshot={autoSnapshot}
+              onToggleAutoSnapshot={setAutoSnapshot}
               onCapture={captureSnapshot}
               onRestore={restoreSnapshot}
               onRename={renameSnapshotById}

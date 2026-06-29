@@ -11,6 +11,9 @@ function formatTaken(ms: number): string {
 export interface SnapshotsPanelProps {
   /** Saved snapshots, newest first. */
   snapshots: Snapshot[];
+  /** Whether a snapshot is captured automatically before each run. */
+  autoSnapshot: boolean;
+  onToggleAutoSnapshot: (on: boolean) => void;
   onCapture: () => void;
   onRestore: (id: string) => void;
   onRename: (id: string) => void;
@@ -25,6 +28,8 @@ export interface SnapshotsPanelProps {
  */
 export function SnapshotsPanel({
   snapshots,
+  autoSnapshot,
+  onToggleAutoSnapshot,
   onCapture,
   onRestore,
   onRename,
@@ -43,6 +48,15 @@ export function SnapshotsPanel({
       <button className="project-newfile" onClick={onCapture} title="save the current workflow as a named snapshot">
         + Take snapshot
       </button>
+
+      <label className="snapshot-auto" title="capture a snapshot automatically before each run">
+        <input
+          type="checkbox"
+          checked={autoSnapshot}
+          onChange={(e) => onToggleAutoSnapshot(e.target.checked)}
+        />
+        Auto-snapshot before run
+      </label>
 
       <div className="project-list">
         {snapshots.length === 0 ? (

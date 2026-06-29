@@ -1,5 +1,6 @@
 import type { Snapshot } from "./snapshots";
 import { isEmptyDiff, type GraphDiff } from "./snapshotdiff";
+import { useT } from "../i18n";
 
 function formatTaken(ms: number): string {
   try {
@@ -35,20 +36,21 @@ export interface SnapshotsPanelProps {
 }
 
 function DiffSummary({ view, onClear }: { view: SnapshotDiffView; onClear: () => void }) {
+  const t = useT();
   const { diff } = view;
   const empty = isEmptyDiff(diff);
   return (
     <div className="snapshot-diff">
       <div className="snapshot-diff-head">
         <span>
-          vs <strong>{view.name}</strong>
+          {t("snap.diffVs")} <strong>{view.name}</strong>
         </span>
-        <button onClick={onClear} title="close comparison">
+        <button onClick={onClear} title={t("snap.diffCloseTitle")}>
           ✕
         </button>
       </div>
       {empty ? (
-        <p className="snapshot-diff-same">identical to the current graph</p>
+        <p className="snapshot-diff-same">{t("snap.diffSame")}</p>
       ) : (
         <ul className="snapshot-diff-list">
           {diff.addedNodes.map((n) => (
@@ -93,33 +95,34 @@ export function SnapshotsPanel({
   onClearDiff,
   onClose,
 }: SnapshotsPanelProps) {
+  const t = useT();
   return (
     <aside className="project-panel snapshots-panel">
       <div className="project-head">
-        <h2>Snapshots</h2>
-        <button className="project-new" onClick={onClose} title="hide the snapshots panel">
-          Hide
+        <h2>{t("snap.heading")}</h2>
+        <button className="project-new" onClick={onClose} title={t("snap.hideTitle")}>
+          {t("snap.hide")}
         </button>
       </div>
 
-      <button className="project-newfile" onClick={onCapture} title="save the current workflow as a named snapshot">
-        + Take snapshot
+      <button className="project-newfile" onClick={onCapture} title={t("snap.takeTitle")}>
+        {t("snap.take")}
       </button>
 
-      <label className="snapshot-auto" title="capture a snapshot automatically before each run">
+      <label className="snapshot-auto" title={t("snap.autoTitle")}>
         <input
           type="checkbox"
           checked={autoSnapshot}
           onChange={(e) => onToggleAutoSnapshot(e.target.checked)}
         />
-        Auto-snapshot before run
+        {t("snap.auto")}
       </label>
 
       {diff ? <DiffSummary view={diff} onClear={onClearDiff} /> : null}
 
       <div className="project-list">
         {snapshots.length === 0 ? (
-          <p className="project-empty">no snapshots yet</p>
+          <p className="project-empty">{t("snap.empty")}</p>
         ) : (
           snapshots.map((s) => (
             <div key={s.id} className="project-row">
@@ -130,21 +133,22 @@ export function SnapshotsPanel({
               >
                 <span className="project-item-name">{s.name}</span>
                 <span className="project-item-meta">
-                  {formatTaken(s.t)} · {s.graph.nodes.length} node{s.graph.nodes.length === 1 ? "" : "s"}
+                  {formatTaken(s.t)} · {s.graph.nodes.length}{" "}
+                  {s.graph.nodes.length === 1 ? t("snap.nodeSuffix") : t("snap.nodesSuffix")}
                 </span>
               </button>
               <div className="project-actions">
                 <button
                   onClick={() => onDiff(s.id)}
-                  title="compare with the current graph"
+                  title={t("snap.diffTitle")}
                   aria-label={`compare ${s.name}`}
                 >
                   ⇄
                 </button>
-                <button onClick={() => onRename(s.id)} title="rename" aria-label={`rename ${s.name}`}>
+                <button onClick={() => onRename(s.id)} title={t("snap.renameTitle")} aria-label={`rename ${s.name}`}>
                   ✎
                 </button>
-                <button onClick={() => onDelete(s.id)} title="delete" aria-label={`delete ${s.name}`}>
+                <button onClick={() => onDelete(s.id)} title={t("snap.deleteTitle")} aria-label={`delete ${s.name}`}>
                   ✕
                 </button>
               </div>
@@ -153,10 +157,7 @@ export function SnapshotsPanel({
         )}
       </div>
 
-      <p className="project-hint muted">
-        Snapshots are stored in this browser and capture the whole graph. Restoring replaces the
-        current workflow.
-      </p>
+      <p className="project-hint muted">{t("snap.hint")}</p>
     </aside>
   );
 }

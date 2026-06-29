@@ -2,6 +2,7 @@ import { useEffect, useRef, useState } from "react";
 import type { Node } from "@xyflow/react";
 
 import { searchNodes } from "./nodesearch";
+import { useT } from "../i18n";
 
 export interface NodeSearchBoxProps {
   nodes: Node[];
@@ -14,6 +15,7 @@ export interface NodeSearchBoxProps {
  * to the chosen one. Enter jumps to the first match; Escape clears.
  */
 export function NodeSearchBox({ nodes, onJump }: NodeSearchBoxProps) {
+  const t = useT();
   const [query, setQuery] = useState("");
   const [open, setOpen] = useState(false);
   const boxRef = useRef<HTMLDivElement | null>(null);
@@ -39,9 +41,9 @@ export function NodeSearchBox({ nodes, onJump }: NodeSearchBoxProps) {
     <div className="node-search" ref={boxRef}>
       <input
         type="search"
-        placeholder="Find node…"
+        placeholder={t("search.placeholder")}
         value={query}
-        title="find a node by id, type or title"
+        title={t("search.title")}
         onChange={(e) => {
           setQuery(e.target.value);
           setOpen(true);
@@ -58,7 +60,7 @@ export function NodeSearchBox({ nodes, onJump }: NodeSearchBoxProps) {
       {open && query.trim() !== "" && (
         <ul className="node-search-results">
           {matches.length === 0 ? (
-            <li className="node-search-empty">no matches</li>
+            <li className="node-search-empty">{t("search.noMatch")}</li>
           ) : (
             matches.map((m) => (
               <li key={m.id}>

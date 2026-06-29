@@ -44,6 +44,7 @@ import {
 } from "./editor/runlog";
 import { SnapshotsPanel, type SnapshotDiffView } from "./editor/SnapshotsPanel";
 import { diffGraphs } from "./editor/snapshotdiff";
+import { LangContext, loadLang, saveLang, translate, type Lang } from "./i18n";
 import {
   addSnapshot,
   loadAutoSnapshotPref,
@@ -156,6 +157,15 @@ function Studio() {
   const [snapshotDiff, setSnapshotDiff] = useState<SnapshotDiffView | null>(null);
   const [autoSnapshot, setAutoSnapshot] = useState<boolean>(() => loadAutoSnapshotPref());
   const [snapToGrid, setSnapToGrid] = useState(false);
+  const [lang, setLang] = useState<Lang>(() => loadLang());
+  const t = useCallback((key: Parameters<typeof translate>[1]) => translate(lang, key), [lang]);
+  const toggleLang = useCallback(() => {
+    setLang((prev) => {
+      const next: Lang = prev === "en" ? "zh" : "en";
+      saveLang(next);
+      return next;
+    });
+  }, []);
   const [helperLines, setHelperLines] = useState<{ horizontal?: number; vertical?: number }>({});
   const [edgeType, setEdgeType] = useState<EdgeStyle>("default");
   const [showMinimap, setShowMinimap] = useState(true);
@@ -1296,124 +1306,124 @@ function Studio() {
   const editing = useMemo(() => ({ onParamChange }), [onParamChange]);
 
   return (
+    <LangContext.Provider value={lang}>
     <div className="app">
       <header className="toolbar">
         <strong>H-Gripe Studio</strong>
-        <span className="muted">node-graph (React Flow)</span>
+        <span className="muted">{t("brand.subtitle")}</span>
         <div className="spacer" />
         {issues.length > 0 && (
           <span className="issues" title={issues.map((i) => i.message).join("\n")}>
-            ⚠ {issues.length} issue{issues.length > 1 ? "s" : ""}
+            ⚠ {issues.length} {issues.length > 1 ? t("issues.many") : t("issues.one")}
           </span>
         )}
         {isDesktop && (
-          <span className="muted current-file" title={currentFile ?? "untitled (not yet saved to a file)"}>
-            {currentFile ? baseName(currentFile) : "untitled"}
+          <span className="muted current-file" title={currentFile ?? t("status.untitledTitle")}>
+            {currentFile ? baseName(currentFile) : t("status.untitled")}
             {fileDirty ? " *" : ""}
           </span>
         )}
-        <span className="muted autosave" title="this workflow is autosaved to the workspace and restored on next open">
-          {saved ? "● autosaved" : "○ saving…"}
+        <span className="muted autosave" title={t("status.autosaveTitle")}>
+          {saved ? t("status.autosaved") : t("status.saving")}
         </span>
-        <button onClick={undo} disabled={!history.canUndo} title="Undo (Ctrl+Z)">
-          Undo
+        <button onClick={toggleLang} title={t("label.langTitle")} className="lang-toggle">
+          {t("label.lang")}
         </button>
-        <button onClick={redo} disabled={!history.canRedo} title="Redo (Ctrl+Shift+Z)">
-          Redo
+        <button onClick={undo} disabled={!history.canUndo} title={t("btn.undoTitle")}>
+          {t("btn.undo")}
+        </button>
+        <button onClick={redo} disabled={!history.canRedo} title={t("btn.redoTitle")}>
+          {t("btn.redo")}
         </button>
         {isDesktop && (
           <button
             onClick={() => setShowProject((s) => !s)}
-            title="toggle the project folder browser"
+            title={t("btn.projectTitle")}
           >
-            {showProject ? "Hide Project" : "Project"}
+            {showProject ? t("btn.hideProject") : t("btn.project")}
           </button>
         )}
         <button
           onClick={() => setShowSnapshots((s) => !s)}
-          title="toggle the snapshots panel (named versions of the workflow)"
+          title={t("btn.snapshotsTitle")}
         >
-          {showSnapshots ? "Hide Snapshots" : "Snapshots"}
+          {showSnapshots ? t("btn.hideSnapshots") : t("btn.snapshots")}
           {snapshots.length > 0 ? ` (${snapshots.length})` : ""}
         </button>
         <NodeSearchBox nodes={nodes} onJump={jumpToNode} />
         {isDesktop && (
-          <button onClick={newWorkflow} title="start a new, empty workflow (Ctrl/Cmd+N)">
-            New
+          <button onClick={newWorkflow} title={t("btn.newTitle")}>
+            {t("btn.new")}
           </button>
         )}
         <button
           onClick={() => void handleOpen()}
-          title={isDesktop ? "open a workflow file (Ctrl/Cmd+O)" : "load workflow.json (Ctrl/Cmd+O)"}
+          title={isDesktop ? t("btn.openTitle") : t("btn.loadTitle")}
         >
-          {isDesktop ? "Open…" : "Load"}
+          {isDesktop ? t("btn.open") : t("btn.load")}
         </button>
         <button
           onClick={() => void handleSave()}
-          title={
-            isDesktop
-              ? "save to the current file (Save As… if none) — Ctrl/Cmd+S"
-              : "download workflow.json (Ctrl/Cmd+S)"
-          }
+          title={isDesktop ? t("btn.saveTitleDesktop") : t("btn.saveTitleWeb")}
         >
-          Save
+          {t("btn.save")}
         </button>
         {isDesktop && (
           <button
             onClick={() => void handleSaveAs()}
-            title="save to a new file via the native dialog (Ctrl/Cmd+Shift+S)"
+            title={t("btn.saveAsTitle")}
           >
-            Save As…
+            {t("btn.saveAs")}
           </button>
         )}
-        <button onClick={resetSample}>Reset</button>
-        <button onClick={clear}>Clear</button>
-        <label className="snap-toggle" title="snap node positions to a 16px grid while dragging">
+        <button onClick={resetSample}>{t("btn.reset")}</button>
+        <button onClick={clear}>{t("btn.clear")}</button>
+        <label className="snap-toggle" title={t("label.snapTitle")}>
           <input type="checkbox" checked={snapToGrid} onChange={(e) => setSnapToGrid(e.target.checked)} />
-          Snap
+          {t("label.snap")}
         </label>
-        <button onClick={tidyLayout} title="arrange nodes on a grid by DAG depth">
-          Tidy
+        <button onClick={tidyLayout} title={t("btn.tidyTitle")}>
+          {t("btn.tidy")}
         </button>
-        <label className="snap-toggle" title="edge rendering style">
-          Edges
+        <label className="snap-toggle" title={t("label.edgesTitle")}>
+          {t("label.edges")}
           <select value={edgeType} onChange={(e) => changeEdgeType(e.target.value as EdgeStyle)}>
-            <option value="default">curved</option>
-            <option value="smoothstep">orthogonal</option>
-            <option value="smart">avoid</option>
+            <option value="default">{t("label.edgesCurved")}</option>
+            <option value="smoothstep">{t("label.edgesOrthogonal")}</option>
+            <option value="smart">{t("label.edgesAvoid")}</option>
           </select>
         </label>
-        <label className="snap-toggle" title="toggle the minimap">
+        <label className="snap-toggle" title={t("label.mapTitle")}>
           <input type="checkbox" checked={showMinimap} onChange={(e) => setShowMinimap(e.target.checked)} />
-          Map
+          {t("label.map")}
         </label>
         <button
           onClick={() => setShowLog((s) => !s)}
-          title="toggle the run log (per-node status, timing and errors)"
+          title={t("btn.logTitle")}
         >
-          {showLog ? "Hide Log" : "Log"}
+          {showLog ? t("btn.hideLog") : t("btn.log")}
           {runLog.length > 0 ? ` (${runLog.length})` : ""}
         </button>
         <button
           className="primary"
           onClick={run}
           disabled={running || issues.length > 0}
-          title="execute the graph (Ctrl/Cmd+Enter)"
+          title={t("btn.runTitle")}
         >
-          {running ? "Running…" : "Run"}
+          {running ? t("btn.running") : t("btn.run")}
         </button>
         {running && currentRunId && (
-          <button onClick={cancelRun} title="request cancellation before the next node starts">
-            Cancel
+          <button onClick={cancelRun} title={t("btn.cancelTitle")}>
+            {t("btn.cancel")}
           </button>
         )}
         {batchNode && (
           <button
             onClick={runBatch}
             disabled={running || issues.length > 0 || batchCount === 0}
-            title="run the graph once per batch item"
+            title={t("btn.runBatchTitle")}
           >
-            Run ×{batchCount}
+            {t("btn.run")} ×{batchCount}
           </button>
         )}
         <span className="muted">{message}</span>
@@ -1502,6 +1512,7 @@ function Studio() {
         <ContextMenu x={menu.x} y={menu.y} items={menuItems} onClose={() => setMenu(null)} />
       )}
     </div>
+    </LangContext.Provider>
   );
 }
 

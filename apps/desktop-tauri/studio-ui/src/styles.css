@@ -97,6 +97,8 @@ button:disabled { opacity: 0.6; cursor: default; }
 .run-log-line.level-error .run-log-msg { color: var(--err); }
 .run-log-line.level-warn .run-log-msg { color: var(--running); }
 
+.snapshots-panel .project-item-meta { white-space: normal; }
+
 .inspector {
   width: 300px;
   border-left: 1px solid var(--border);

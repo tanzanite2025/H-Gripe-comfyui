@@ -39,6 +39,16 @@ import {
   type LogLevel,
   type RunLogEntry,
 } from "./editor/runlog";
+import { SnapshotsPanel } from "./editor/SnapshotsPanel";
+import {
+  addSnapshot,
+  loadSnapshots,
+  newSnapshotId,
+  removeSnapshot,
+  renameSnapshot,
+  saveSnapshots,
+  type Snapshot,
+} from "./editor/snapshots";
 import { clearPersistedGraph, loadPersistedGraph, persistGraph } from "./editor/persist";
 import { defaultParams } from "./graph/nodeSpecs";
 import { deserializeGraph, serializeGraph, type WorkflowGraph } from "./graph/model";
@@ -135,6 +145,8 @@ function Studio() {
   const [currentRunId, setCurrentRunId] = useState<string | null>(null);
   const [runLog, setRunLog] = useState<RunLogEntry[]>([]);
   const [showLog, setShowLog] = useState(false);
+  const [snapshots, setSnapshots] = useState<Snapshot[]>(() => loadSnapshots());
+  const [showSnapshots, setShowSnapshots] = useState(false);
   const [snapToGrid, setSnapToGrid] = useState(false);
   const [helperLines, setHelperLines] = useState<{ horizontal?: number; vertical?: number }>({});
   const [edgeType, setEdgeType] = useState<EdgeStyle>("default");
@@ -730,6 +742,53 @@ function Studio() {
     [fileDirty, currentFile],
   );
 
+  // Persist snapshots to localStorage whenever the list changes.
+  useEffect(() => {
+    saveSnapshots(snapshots);
+  }, [snapshots]);
+
+  // Capture the current graph as a named snapshot.
+  const captureSnapshot = useCallback(() => {
+    const suggested = `Snapshot ${new Date().toLocaleString()}`;
+    const name = window.prompt("Snapshot name", suggested);
+    if (name === null) return;
+    const graph = toWorkflowGraph(nodes, edges);
+    const snap: Snapshot = { id: newSnapshotId(), name: name.trim() || suggested, t: Date.now(), graph };
+    setSnapshots((list) => addSnapshot(list, snap));
+    setMessage(`snapshot saved: ${snap.name}`);
+  }, [nodes, edges]);
+
+  // Restore a snapshot into the editor (guarded by the unsaved-changes check).
+  const restoreSnapshot = useCallback(
+    (id: string) => {
+      const snap = snapshots.find((s) => s.id === id);
+      if (!snap) return;
+      if (!confirmDiscard(`restore ${snap.name}`)) return;
+      takeSnapshot();
+      loadGraphIntoEditor(snap.graph);
+      setFileDirty(true);
+      setMessage(`restored snapshot: ${snap.name}`);
+    },
+    [snapshots, confirmDiscard, takeSnapshot, loadGraphIntoEditor],
+  );
+
+  const renameSnapshotById = useCallback((id: string) => {
+    setSnapshots((list) => {
+      const snap = list.find((s) => s.id === id);
+      const name = window.prompt("Rename snapshot", snap?.name ?? "");
+      if (name === null) return list;
+      return renameSnapshot(list, id, name);
+    });
+  }, []);
+
+  const deleteSnapshot = useCallback((id: string) => {
+    setSnapshots((list) => {
+      const snap = list.find((s) => s.id === id);
+      if (snap && !window.confirm(`Delete snapshot "${snap.name}"?`)) return list;
+      return removeSnapshot(list, id);
+    });
+  }, []);
+
   // Browser-preview upload (the hidden file input). Desktop uses native dialogs.
   const load = useCallback(
     async (file: File) => {
@@ -1137,6 +1196,13 @@ function Studio() {
             {showProject ? "Hide Project" : "Project"}
           </button>
         )}
+        <button
+          onClick={() => setShowSnapshots((s) => !s)}
+          title="toggle the snapshots panel (named versions of the workflow)"
+        >
+          {showSnapshots ? "Hide Snapshots" : "Snapshots"}
+          {snapshots.length > 0 ? ` (${snapshots.length})` : ""}
+        </button>
         {isDesktop && (
           <button onClick={newWorkflow} title="start a new, empty workflow (Ctrl/Cmd+N)">
             New
@@ -1242,6 +1308,16 @@ function Studio() {
               onRenameFile={(path) => void handleRenameFile(path)}
               onDuplicateFile={(path) => void handleDuplicateFile(path)}
               onDeleteFile={(path) => void handleDeleteFile(path)}
+            />
+          )}
+          {showSnapshots && (
+            <SnapshotsPanel
+              snapshots={snapshots}
+              onCapture={captureSnapshot}
+              onRestore={restoreSnapshot}
+              onRename={renameSnapshotById}
+              onDelete={deleteSnapshot}
+              onClose={() => setShowSnapshots(false)}
             />
           )}
           <Palette onAdd={addNode} />

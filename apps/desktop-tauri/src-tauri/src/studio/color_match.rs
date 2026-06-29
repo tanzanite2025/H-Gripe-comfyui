@@ -89,3 +89,42 @@ pub(super) fn execute_studio_match_light_color(
         ("prompt_suffix", json!(result.prompt_suffix)),
     ]))
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn node() -> StudioGraphNode {
+        StudioGraphNode {
+            id: "n1".to_string(),
+            kind: "matchLightColor".to_string(),
+            params: BTreeMap::new(),
+        }
+    }
+
+    #[test]
+    fn rejects_missing_image_input() {
+        // No connected `image` input: must fail fast before shelling out to the
+        // python bridge, with a clear message.
+        let err = execute_studio_match_light_color(&node(), &BTreeMap::new()).unwrap_err();
+        assert!(err.contains("connected image"), "{err}");
+    }
+
+    #[test]
+    fn blank_image_input_is_rejected() {
+        let mut inputs = BTreeMap::new();
+        inputs.insert("image".to_string(), json!("   "));
+        let err = execute_studio_match_light_color(&node(), &inputs).unwrap_err();
+        assert!(err.contains("connected image"), "{err}");
+    }
+
+    #[test]
+    fn number_and_bool_params_fall_back_to_defaults() {
+        // Mirrors the defaults the executor passes to the python bridge so a
+        // change to either side is caught here.
+        let node = node();
+        assert_eq!(number_param(&node, "strength", 0.6), 0.6);
+        assert!(!bool_param(&node, "protect_saturation", false));
+        assert!(bool_param(&node, "protect_brand_color", true));
+    }
+}

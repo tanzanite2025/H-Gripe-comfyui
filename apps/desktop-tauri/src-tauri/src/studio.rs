@@ -468,6 +468,137 @@ async fn execute_studio_generate(
     ]))
 }
 
+/// Booster tags appended (deduped) per local preset. Mirrors the TS
+/// `PRESET_TAGS` in `runtime/promptOptimize.ts`; keep both in sync.
+fn studio_preset_tags(preset: &str) -> &'static [&'static str] {
+    match preset {
+        "photographic" => &[
+            "photorealistic",
+            "high detail",
+            "sharp focus",
+            "natural lighting",
+            "8k",
+        ],
+        "anime" => &["anime style", "vibrant colors", "clean lineart", "highly detailed"],
+        "cinematic" => &[
+            "cinematic lighting",
+            "dramatic composition",
+            "depth of field",
+            "film grain",
+        ],
+        "detailed" => &["highly detailed", "intricate", "ultra quality", "masterpiece"],
+        _ => &[],
+    }
+}
+
+/// Model-free prompt optimisation for the `local` mode. Mirrors the TS
+/// `optimizePromptLocally`: collapse whitespace, split on commas, drop empties,
+/// case-insensitively dedupe (keeping first occurrence), then append the
+/// preset's booster tags (also deduped). An empty input yields an empty string.
+fn studio_optimize_prompt_locally(text: &str, preset: &str) -> String {
+    let collapsed = text.split_whitespace().collect::<Vec<_>>().join(" ");
+    let mut segments: Vec<String> = collapsed
+        .split(',')
+        .map(|segment| segment.trim().to_string())
+        .filter(|segment| !segment.is_empty())
+        .collect();
+    if !segments.is_empty() {
+        for tag in studio_preset_tags(preset) {
+            segments.push((*tag).to_string());
+        }
+    }
+
+    let mut out: Vec<String> = Vec::new();
+    let mut seen: HashSet<String> = HashSet::new();
+    for segment in segments {
+        if seen.insert(segment.to_lowercase()) {
+            out.push(segment);
+        }
+    }
+    out.join(", ")
+}
+
+async fn execute_studio_prompt_optimize(
+    node: &StudioGraphNode,
+    inputs: &BTreeMap<String, Value>,
+    cancels: &tauri::State<'_, StudioRunCancels>,
+    run_id: &str,
+) -> Result<BTreeMap<String, Value>, String> {
+    let raw = if inputs.contains_key("text") {
+        studio_value_to_string(inputs.get("text"))
+    } else {
+        studio_value_to_string(node.params.get("text"))
+    };
+    let mode = studio_value_to_string(node.params.get("mode"));
+
+    match mode.as_str() {
+        "local" => {
+            let preset = studio_value_to_string(node.params.get("preset"));
+            let optimized = studio_optimize_prompt_locally(&raw, preset.trim());
+            Ok(studio_output_map([("text", json!(optimized))]))
+        }
+        "api" => {
+            if raw.trim().is_empty() {
+                return Ok(studio_output_map([("text", json!(raw))]));
+            }
+            let mut provider = studio_value_to_string(node.params.get("provider"))
+                .trim()
+                .to_string();
+            if provider.is_empty() {
+                provider = "openai_compatible".to_string();
+            }
+            let mut task = ApiTask::new(provider, "text.generate".to_string());
+            task.id = studio_task_id(&node.id);
+            task.output_type = OutputType::Text;
+            task.cache_policy.enabled = false;
+            task.retry_policy.max_attempts = 1;
+            task.retry_policy.backoff_ms = 200;
+            task.retry_policy.timeout_ms = Some(60_000);
+            task.inputs.insert("prompt".to_string(), json!(raw));
+
+            let model = studio_value_to_string(node.params.get("model"));
+            if !model.trim().is_empty() {
+                task.params.insert("model".to_string(), json!(model));
+            }
+            let instruction = studio_value_to_string(node.params.get("instruction"));
+            if !instruction.trim().is_empty() {
+                task.params
+                    .insert("system_prompt".to_string(), json!(instruction));
+            }
+            let credentials_ref = studio_value_to_string(node.params.get("credentials_ref"));
+            if !credentials_ref.is_empty() {
+                task.credentials_ref = Some(credentials_ref);
+            }
+
+            let result = execute_and_record_cancellable(task, cancels, run_id).await?;
+            if !matches!(result.status, ApiStatus::Succeeded | ApiStatus::Cached) {
+                let message = result
+                    .error
+                    .as_ref()
+                    .map(|error| error.message.clone())
+                    .unwrap_or_else(|| "prompt optimization failed".to_string());
+                return Err(message);
+            }
+            let optimized = result
+                .output_json
+                .as_ref()
+                .and_then(|value| value.get("text"))
+                .and_then(Value::as_str)
+                .map(str::trim)
+                .filter(|text| !text.is_empty())
+                .map(str::to_string)
+                .unwrap_or_else(|| raw.clone());
+            let result_json = serde_json::to_value(result)
+                .map_err(|err| format!("failed to encode ApiResult: {err}"))?;
+            Ok(studio_output_map([
+                ("text", json!(optimized)),
+                ("result", result_json),
+            ]))
+        }
+        _ => Ok(studio_output_map([("text", json!(raw))])),
+    }
+}
+
 fn execute_studio_psd_export(
     node: &StudioGraphNode,
     inputs: &BTreeMap<String, Value>,
@@ -639,6 +770,7 @@ async fn execute_studio_node(
                 inputs.get("value").cloned().unwrap_or(Value::Null),
             )]))
         }
+        "promptOptimize" => execute_studio_prompt_optimize(node, &inputs, cancels, run_id).await,
         "generate" => execute_studio_generate(node, &inputs, cancels, run_id).await,
         "preview" => Ok(studio_output_map([(
             "image",
@@ -1280,5 +1412,35 @@ mod tests {
         assert!(studio_reject_unsafe_basename("..\\evil").is_err());
         assert!(studio_reject_unsafe_basename("sub/dir").is_err());
         assert!(studio_reject_unsafe_basename("/etc/passwd").is_err());
+    }
+
+    #[test]
+    fn optimize_prompt_locally_normalises_and_dedupes() {
+        assert_eq!(
+            studio_optimize_prompt_locally("  a fox ,   running  \n , river ", "cleanup"),
+            "a fox, running, river"
+        );
+        assert_eq!(
+            studio_optimize_prompt_locally("Fox, fox, FOX, river", "cleanup"),
+            "Fox, river"
+        );
+    }
+
+    #[test]
+    fn optimize_prompt_locally_appends_preset_tags_deduped() {
+        assert_eq!(
+            studio_optimize_prompt_locally("a cat", "photographic"),
+            "a cat, photorealistic, high detail, sharp focus, natural lighting, 8k"
+        );
+        assert_eq!(
+            studio_optimize_prompt_locally("a cat, masterpiece", "detailed"),
+            "a cat, masterpiece, highly detailed, intricate, ultra quality"
+        );
+    }
+
+    #[test]
+    fn optimize_prompt_locally_empty_stays_empty() {
+        assert_eq!(studio_optimize_prompt_locally("   ", "photographic"), "");
+        assert_eq!(studio_optimize_prompt_locally("", "cleanup"), "");
     }
 }

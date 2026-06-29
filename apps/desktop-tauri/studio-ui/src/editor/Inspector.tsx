@@ -51,7 +51,7 @@ export function Inspector({ node, onParamChange }: InspectorProps) {
       <h2>{spec.title}</h2>
       <p className="muted">{spec.description}</p>
 
-      {spec.kind === "generate" && (
+      {(spec.kind === "generate" || spec.kind === "promptOptimize") && (
         <ProfilePicker
           onApply={(profile) => {
             if (profile.provider) onParamChange(node.id, "provider", profile.provider);

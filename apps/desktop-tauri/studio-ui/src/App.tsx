@@ -1155,8 +1155,9 @@ function Studio() {
     return () => window.removeEventListener("keydown", onKey);
   }, [undo, redo, copySelection, pasteClipboard, setNodes, setEdges]);
 
-  // File shortcuts: Ctrl/Cmd+S save, +Shift+S save as, +O open, +N new. These
-  // intentionally fire even while editing a field so a quick Ctrl+S always saves.
+  // File + run shortcuts: Ctrl/Cmd+S save, +Shift+S save as, +O open, +N new,
+  // +Enter run. These intentionally fire even while editing a field so a quick
+  // Ctrl+S always saves.
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
       if (!(e.ctrlKey || e.metaKey) || e.altKey) return;
@@ -1176,11 +1177,15 @@ function Studio() {
           e.preventDefault();
           newWorkflow();
           break;
+        case "enter":
+          e.preventDefault();
+          if (!running && issues.length === 0) void run();
+          break;
       }
     };
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
-  }, [handleSave, handleSaveAs, handleOpen, newWorkflow]);
+  }, [handleSave, handleSaveAs, handleOpen, newWorkflow, run, running, issues]);
 
   // Stable context value so memoized node cards can edit their own params.
   const editing = useMemo(() => ({ onParamChange }), [onParamChange]);
@@ -1283,7 +1288,12 @@ function Studio() {
           {showLog ? "Hide Log" : "Log"}
           {runLog.length > 0 ? ` (${runLog.length})` : ""}
         </button>
-        <button className="primary" onClick={run} disabled={running || issues.length > 0}>
+        <button
+          className="primary"
+          onClick={run}
+          disabled={running || issues.length > 0}
+          title="execute the graph (Ctrl/Cmd+Enter)"
+        >
           {running ? "Running…" : "Run"}
         </button>
         {running && currentRunId && (

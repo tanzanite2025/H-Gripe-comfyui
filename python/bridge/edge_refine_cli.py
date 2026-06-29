@@ -31,6 +31,7 @@ a single message on stderr.
 from __future__ import annotations
 
 import argparse
+import io
 import json
 import sys
 from pathlib import Path
@@ -39,6 +40,12 @@ from typing import Any
 import numpy as np
 
 _EPS = 1e-6
+
+# Refuse to decode an input larger than this many pixels (decompression-bomb
+# guard). 0 disables the check.
+_DEFAULT_MAX_DECODE_PIXELS = 96_000_000
+_ALPHA_MODES = {"RGBA", "LA", "La", "PA"}
+_HIGHBIT_MODES = {"I", "I;16", "I;16B", "I;16L", "I;16N", "F"}
 
 # Resolved (erode_px, dilate_px, feather_px, guided_radius, decontaminate,
 # background_blend_strength) for each named preset. ``custom`` is handled by
@@ -78,14 +85,94 @@ def _safe_stem(image_path: str) -> str:
     return cleaned or "image"
 
 
-def _load_rgb_alpha(path: str) -> tuple["np.ndarray", "np.ndarray"]:
-    """Load an image as (H,W,3 uint8 RGB, H,W float alpha in 0..1)."""
+def _cmyk_to_rgb(img: Any) -> Any:
+    """Convert CMYK to sRGB, honouring an embedded ICC profile when present.
+
+    A bare ``convert("RGB")`` uses a naive transform that visibly shifts colour;
+    with an embedded CMYK profile we run a real profile-to-profile transform
+    into sRGB instead, falling back to the naive path on any error.
+    """
+    icc = img.info.get("icc_profile")
+    if icc:
+        try:
+            from PIL import ImageCms
+
+            src = ImageCms.ImageCmsProfile(io.BytesIO(icc))
+            dst = ImageCms.createProfile("sRGB")
+            return ImageCms.profileToProfile(img, src, dst, outputMode="RGB")
+        except Exception:  # noqa: BLE001 - fall back to the naive conversion
+            pass
+    return img.convert("RGB")
+
+
+def _highbit_to_rgb(img: Any) -> Any:
+    """Normalise a 16-bit / 32-bit / float image down to 8-bit RGB.
+
+    ``convert("RGB")`` on an ``I;16`` image clips to 0..255 and destroys the
+    tonal range, so we scale the actual data range into 8 bits first.
+    """
+    arr = np.asarray(img).astype(np.float64)
+    if arr.size == 0:
+        return img.convert("RGB")
+    peak = float(arr.max())
+    if peak > 255.0:
+        arr = arr * (255.0 / peak)
+    arr = np.clip(arr, 0.0, 255.0).astype(np.uint8)
     from PIL import Image
 
-    arr = np.asarray(Image.open(path).convert("RGBA"), dtype=np.uint8)
-    rgb = arr[..., :3].copy()
-    alpha = arr[..., 3].astype(np.float32) / 255.0
-    return rgb, alpha
+    return Image.fromarray(arr, mode="L").convert("RGB")
+
+
+def _load_rgb_alpha(
+    path: str, max_decode_pixels: int = _DEFAULT_MAX_DECODE_PIXELS
+) -> tuple["np.ndarray", "np.ndarray", str, bool]:
+    """Load an image as (H,W,3 uint8 RGB, H,W float alpha in 0..1, source_mode, exif_transposed).
+
+    Refuses oversized inputs before decoding, normalises EXIF orientation, and
+    maps CMYK / high-bit / palette / grayscale sources into an 8-bit RGB working
+    space so edge decontamination / background blend sample honest colour. The
+    alpha channel is taken from the source when present, else a fully-opaque
+    plane.
+    """
+    from PIL import Image, ImageOps
+
+    img = Image.open(path)
+    width, height = img.size
+    if max_decode_pixels > 0 and width * height > max_decode_pixels:
+        raise ValueError(
+            f"input image too large to decode safely: {width}x{height} "
+            f"({width * height} px > max {max_decode_pixels})"
+        )
+    img.load()
+
+    transposed = False
+    try:
+        fixed = ImageOps.exif_transpose(img)
+    except Exception:  # noqa: BLE001 - a broken EXIF block must not abort refinement
+        fixed = img
+    if fixed is not img:
+        transposed = True
+    img = fixed
+
+    source_mode = img.mode
+    had_alpha = source_mode in _ALPHA_MODES or (
+        source_mode == "P" and "transparency" in img.info
+    )
+
+    if had_alpha:
+        rgba = img.convert("RGBA")
+        alpha = np.asarray(rgba.getchannel("A"), dtype=np.float32) / 255.0
+        rgb = np.asarray(rgba.convert("RGB"), dtype=np.uint8).copy()
+    else:
+        if source_mode == "CMYK":
+            rgb_img = _cmyk_to_rgb(img)
+        elif source_mode in _HIGHBIT_MODES:
+            rgb_img = _highbit_to_rgb(img)
+        else:
+            rgb_img = img.convert("RGB")
+        rgb = np.asarray(rgb_img, dtype=np.uint8).copy()
+        alpha = np.ones(rgb.shape[:2], dtype=np.float32)
+    return rgb, alpha, source_mode, transposed
 
 
 def _load_mask(path: str | None, shape: tuple[int, int]) -> "np.ndarray | None":
@@ -96,7 +183,9 @@ def _load_mask(path: str | None, shape: tuple[int, int]) -> "np.ndarray | None":
 
     mask = Image.open(path).convert("L")
     if mask.size != (shape[1], shape[0]):
-        mask = mask.resize((shape[1], shape[0]))
+        # Bilinear, not the default bicubic: a matte must not overshoot past
+        # 0..255 and ring at the very edge we are about to refine.
+        mask = mask.resize((shape[1], shape[0]), Image.BILINEAR)
     return np.asarray(mask, dtype=np.float32) / 255.0
 
 
@@ -219,7 +308,8 @@ def refine(args: argparse.Namespace) -> dict[str, Any]:
         decontaminate = bool(p["edge_decontaminate"])
         blend_strength = float(p["background_blend_strength"])
 
-    rgb, alpha = _load_rgb_alpha(image_path)
+    max_decode_pixels = int(getattr(args, "max_decode_pixels", _DEFAULT_MAX_DECODE_PIXELS))
+    rgb, alpha, source_mode, exif_transposed = _load_rgb_alpha(image_path, max_decode_pixels)
     height, width = rgb.shape[:2]
 
     # Prefer an explicit matte; otherwise refine the subject's own alpha. A fully
@@ -233,11 +323,13 @@ def refine(args: argparse.Namespace) -> dict[str, Any]:
     if bg_path:
         if not Path(bg_path).is_file():
             raise FileNotFoundError(f"background image not found: {bg_path}")
-        background_rgb, _ = _load_rgb_alpha(bg_path)
+        background_rgb, _, _, _ = _load_rgb_alpha(bg_path, max_decode_pixels)
         if background_rgb.shape[:2] != (height, width):
             from PIL import Image
 
-            resized = Image.fromarray(background_rgb, "RGB").resize((width, height))
+            resized = Image.fromarray(background_rgb, "RGB").resize(
+                (width, height), Image.BILINEAR
+            )
             background_rgb = np.asarray(resized, dtype=np.uint8)
 
     coverage_before = _coverage(mask)
@@ -281,9 +373,23 @@ def refine(args: argparse.Namespace) -> dict[str, Any]:
     Image.fromarray(rgba, "RGBA").save(str(image_out), format="PNG")
     Image.fromarray(refined_u8, "L").save(str(mask_out), format="PNG")
 
+    # Surface the "nothing to refine" case: a solidly opaque (or solidly empty)
+    # matte has no transitional band, so the caller knows the pass was a no-op
+    # rather than silently returning the input.
+    edge_band_px = int(round(float((band > 0.05).sum())))
+    note = None
+    if edge_band_px == 0:
+        note = (
+            "no transitional edge found (matte is fully opaque or empty); "
+            "refinement was a no-op"
+        )
+
     edge_report = {
         "preset": preset,
         "source_mask": source_mask,
+        "source_mode": source_mode,
+        "exif_transposed": exif_transposed,
+        "max_decode_pixels": max_decode_pixels,
         "erode_px": erode_px,
         "dilate_px": dilate_px,
         "feather_px": round(feather_px, 2),
@@ -291,11 +397,13 @@ def refine(args: argparse.Namespace) -> dict[str, Any]:
         "edge_decontaminate": decontaminate,
         "background_blend_strength": round(blend_strength, 4),
         "background_applied": background_rgb is not None and blend_strength > 0.0,
-        "edge_band_px": int(round(float((band > 0.05).sum()))),
+        "edge_band_px": edge_band_px,
         "coverage_before": coverage_before,
         "coverage_after": _coverage(refined),
         "output_size": [width, height],
     }
+    if note is not None:
+        edge_report["note"] = note
 
     return {
         "refined_image": str(image_out),
@@ -368,6 +476,13 @@ def build_parser() -> argparse.ArgumentParser:
         dest="output_name",
         default="",
         help="base name for the PNGs (default: <image>_refined)",
+    )
+    parser.add_argument(
+        "--max-decode-pixels",
+        dest="max_decode_pixels",
+        type=int,
+        default=_DEFAULT_MAX_DECODE_PIXELS,
+        help="refuse inputs larger than this many pixels before decoding (0 disables)",
     )
     return parser
 

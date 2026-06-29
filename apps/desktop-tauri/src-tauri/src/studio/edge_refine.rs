@@ -80,3 +80,45 @@ pub(super) fn execute_studio_refine_mask_edge(
         ("edge_report", report),
     ]))
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn node() -> StudioGraphNode {
+        StudioGraphNode {
+            id: "n1".to_string(),
+            kind: "refineMaskEdge".to_string(),
+            params: BTreeMap::new(),
+        }
+    }
+
+    #[test]
+    fn rejects_missing_image_input() {
+        // No connected `image` input: must fail fast before shelling out to the
+        // python bridge, with a clear message.
+        let err = execute_studio_refine_mask_edge(&node(), &BTreeMap::new()).unwrap_err();
+        assert!(err.contains("connected image input"), "{err}");
+    }
+
+    #[test]
+    fn blank_image_input_is_rejected() {
+        let mut inputs = BTreeMap::new();
+        inputs.insert("image".to_string(), json!("   "));
+        let err = execute_studio_refine_mask_edge(&node(), &inputs).unwrap_err();
+        assert!(err.contains("connected image input"), "{err}");
+    }
+
+    #[test]
+    fn param_defaults_match_python_bridge() {
+        // The defaults wired here must mirror edge_refine_cli.py's argparse
+        // defaults so an unconfigured node behaves identically to the CLI.
+        let n = node();
+        assert_eq!(number_param(&n, "erode_px", 1.0), 1.0);
+        assert_eq!(number_param(&n, "dilate_px", 0.0), 0.0);
+        assert_eq!(number_param(&n, "feather_px", 4.0), 4.0);
+        assert_eq!(number_param(&n, "guided_radius", 8.0), 8.0);
+        assert!(bool_param(&n, "edge_decontaminate", true));
+        assert_eq!(number_param(&n, "background_blend_strength", 0.4), 0.4);
+    }
+}

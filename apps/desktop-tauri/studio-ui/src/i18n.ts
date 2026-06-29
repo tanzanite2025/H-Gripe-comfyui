@@ -14,7 +14,7 @@ const LANG_KEY = "hgripe.studio.lang.v1";
 
 /** Translatable UI strings. Keys are stable ids; values hold both languages. */
 export const messages = {
-  "brand.subtitle": { en: "node-graph (React Flow)", zh: "节点图 (React Flow)" },
+  "brand.subtitle": { en: "API-first control shell", zh: "API 优先控制台" },
   "status.autosaved": { en: "● autosaved", zh: "● 已自动保存" },
   "status.saving": { en: "○ saving…", zh: "○ 保存中…" },
   "status.untitled": { en: "untitled", zh: "未命名" },
@@ -116,14 +116,172 @@ export const messages = {
     en: "Snapshots are stored in this browser and capture the whole graph. Restoring replaces the current workflow.",
     zh: "快照存储在本浏览器中并捕获整个图。恢复将替换当前工作流。",
   },
+
+  // ---- desktop shell (Dashboard / PSD Studio / Credentials / Profiles / Run /
+  // History / PSD tabs), merged in from the former dependency-free shell-ui. ----
+  "brand.title": { en: "H-Gripe Desktop", zh: "H-Gripe 桌面端" },
+
+  "tab.dashboard": { en: "Dashboard", zh: "仪表盘" },
+  "tab.studio": { en: "PSD Studio", zh: "PSD 工作室" },
+  "tab.credentials": { en: "Credentials", zh: "凭据" },
+  "tab.profiles": { en: "Profiles", zh: "配置档案" },
+  "tab.run": { en: "Run Task", zh: "运行任务" },
+  "tab.history": { en: "History", zh: "历史" },
+  "tab.psd": { en: "PSD", zh: "PSD" },
+  "tab.nodeEditor": { en: "Node Editor", zh: "节点编辑器" },
+
+  "lang.toggle": { en: "中文", zh: "EN" },
+  "lang.toggleTitle": { en: "switch to Chinese", zh: "切换到英文" },
+
+  "dashboard.runtime": { en: "Runtime", zh: "运行环境" },
+  "dashboard.doctor": { en: "Doctor", zh: "诊断" },
+  "btn.refresh": { en: "Refresh", zh: "刷新" },
+  "btn.validate": { en: "Validate", zh: "校验" },
+  "btn.reload": { en: "Reload", zh: "重新加载" },
+
+  "common.loading": { en: "Loading…", zh: "加载中…" },
+  "common.loadingShort": { en: "loading…", zh: "加载中…" },
+  "common.noEntries": { en: "no entries", zh: "无条目" },
+  "common.error": { en: "error", zh: "错误" },
+  "common.found": { en: "found", zh: "存在" },
+  "common.missing": { en: "missing", zh: "缺失" },
+
+  "studio.heading": { en: "PSD Studio", zh: "PSD 工作室" },
+  "studio.hint": {
+    en: "Compose a production job — pick a provider profile, add a prompt / reference image / PSD template, and generate.",
+    zh: "组装一个生产任务——选择一个提供方档案，填写提示词 / 参考图 / PSD 模板，然后生成。",
+  },
+  "studio.providerProfile": { en: "Provider profile", zh: "提供方档案" },
+  "studio.optionNone": { en: "— none (use provider below) —", zh: "— 无（使用下方提供方）—" },
+  "studio.provider": { en: "Provider", zh: "提供方" },
+  "studio.providerPh": { en: "mock / openai_compatible / custom_http / replicate", zh: "mock / openai_compatible / custom_http / replicate" },
+  "studio.operation": { en: "Operation", zh: "操作" },
+  "studio.outputType": { en: "Output type", zh: "输出类型" },
+  "studio.prompt": { en: "Prompt", zh: "提示词" },
+  "studio.promptPh": { en: "Describe what to generate…", zh: "描述要生成的内容…" },
+  "studio.psdTemplate": { en: "PSD template (path)", zh: "PSD 模板（路径）" },
+  "studio.psdTemplatePh": { en: "path to .psd template (optional)", zh: ".psd 模板路径（可选）" },
+  "studio.pickFromPsd": { en: "Pick from PSD outputs", zh: "从 PSD 输出中选取" },
+  "studio.reference": { en: "Reference image (path)", zh: "参考图（路径）" },
+  "studio.referencePh": { en: "path to a reference image (optional)", zh: "参考图路径（可选）" },
+  "studio.referenceHint": {
+    en: "sent as image_path (used by image.edit)",
+    zh: "作为 image_path 发送（用于 image.edit）",
+  },
+  "studio.params": { en: "Params (JSON)", zh: "参数 (JSON)" },
+  "studio.previewTask": { en: "Preview task JSON", zh: "预览任务 JSON" },
+  "studio.generate": { en: "Generate", zh: "生成" },
+  "studio.task": { en: "Task", zh: "任务" },
+  "studio.result": { en: "Result", zh: "结果" },
+  "studio.taskReady": { en: "task ready", zh: "任务就绪" },
+  "studio.generating": { en: "generating…", zh: "生成中…" },
+  "studio.outputN": { en: "output {n}", zh: "输出 {n}" },
+  "studio.open": { en: "Open", zh: "打开" },
+  "studio.preview": { en: "Preview", zh: "预览" },
+  "studio.openedOutput": { en: "opened output", zh: "已打开输出" },
+  "studio.noPsdInOutput": { en: "no PSD files in output dir", zh: "输出目录中没有 PSD 文件" },
+  "studio.pickedPsd": { en: "picked {name}.psd ({count} found)", zh: "已选取 {name}.psd（共 {count} 个）" },
+
+  "creds.heading": { en: "Credentials", zh: "凭据" },
+  "creds.file": { en: "credentials.json", zh: "credentials.json" },
+  "creds.keyEnv": { en: "env:", zh: "环境变量:" },
+  "creds.keySet": { en: "set", zh: "已设置" },
+  "creds.keyNone": { en: "none", zh: "无" },
+  "profiles.heading": { en: "Provider Profiles", zh: "提供方档案" },
+  "profiles.file": { en: "provider_profiles.json", zh: "provider_profiles.json" },
+
+  "status.saved": { en: "saved", zh: "已保存" },
+  "toast.savedKind": { en: "{kind} saved", zh: "{kind} 已保存" },
+  "validation.valid": { en: "valid", zh: "有效" },
+  "validation.issues": { en: "{count} issue(s)", zh: "{count} 个问题" },
+
+  "field.provider": { en: "provider", zh: "提供方" },
+  "field.model": { en: "model", zh: "模型" },
+  "field.creds": { en: "creds", zh: "凭据" },
+  "field.key": { en: "key", zh: "密钥" },
+  "field.headers": { en: "headers", zh: "请求头" },
+  "field.params": { en: "params", zh: "参数" },
+
+  "run.heading": { en: "Run API Task", zh: "运行 API 任务" },
+  "run.hint": {
+    en: "Paste an ApiTask JSON payload and submit it to the broker.",
+    zh: "粘贴一个 ApiTask JSON 负载并提交给 broker。",
+  },
+  "run.insertTemplate": { en: "Insert mock template", zh: "插入 mock 模板" },
+  "run.runTask": { en: "Run task", zh: "运行任务" },
+  "run.running": { en: "running…", zh: "运行中…" },
+
+  "history.heading": { en: "Task History", zh: "任务历史" },
+  "history.providerFilter": { en: "provider filter", zh: "按提供方过滤" },
+  "history.anyStatus": { en: "any status", zh: "任意状态" },
+  "history.statusSucceeded": { en: "succeeded", zh: "成功" },
+  "history.statusFailed": { en: "failed", zh: "失败" },
+  "history.statusCached": { en: "cached", zh: "已缓存" },
+  "history.statusCancelled": { en: "cancelled", zh: "已取消" },
+  "history.colTime": { en: "Time", zh: "时间" },
+  "history.colProvider": { en: "Provider", zh: "提供方" },
+  "history.colOperation": { en: "Operation", zh: "操作" },
+  "history.colStatus": { en: "Status", zh: "状态" },
+  "history.colFiles": { en: "Files", zh: "文件" },
+  "history.detail": { en: "Detail", zh: "详情" },
+  "history.cleanup": { en: "Cleanup", zh: "清理" },
+  "history.view": { en: "view", zh: "查看" },
+  "history.rerun": { en: "rerun", zh: "重跑" },
+  "history.noRecords": { en: "no records", zh: "无记录" },
+  "history.rerunning": { en: "rerunning {id}", zh: "正在重跑 {id}" },
+  "history.rerunDone": { en: "rerun {status}", zh: "重跑 {status}" },
+  "cleanup.keepLatest": { en: "keep latest", zh: "保留最新" },
+  "cleanup.deleteFiles": { en: "delete output files", zh: "删除输出文件" },
+  "cleanup.preview": { en: "Preview", zh: "预览" },
+  "cleanup.apply": { en: "Apply", zh: "应用" },
+  "cleanup.applied": { en: "cleanup applied", zh: "清理已应用" },
+
+  "psd.heading": { en: "PSD Outputs", zh: "PSD 输出" },
+  "psd.dirPh": { en: "output directory", zh: "输出目录" },
+  "psd.useOutput": { en: "Use output dir", zh: "使用输出目录" },
+  "psd.scanHint": {
+    en: "Scans a folder for PSD exports (<name>.psd with matching _preview.png / _metadata.json) produced by the H-Gripe PSD Export node.",
+    zh: "扫描文件夹中的 PSD 导出（<name>.psd 及配套的 _preview.png / _metadata.json），由 H-Gripe PSD Export 节点生成。",
+  },
+  "psd.openPsd": { en: "Open PSD", zh: "打开 PSD" },
+  "psd.openFolder": { en: "Open folder", zh: "打开文件夹" },
+  "psd.smartObject": { en: "smart object", zh: "智能对象" },
+  "psd.smartObjectNote": {
+    en: "Generated image was written inside the template's smart object (editable in Photoshop).",
+    zh: "生成的图像被写入模板的智能对象内部（可在 Photoshop 中编辑）。",
+  },
+  "psd.metadata": { en: "metadata.json", zh: "metadata.json" },
+  "psd.enterDir": { en: "enter an output directory", zh: "请输入输出目录" },
+  "psd.noFiles": { en: "no PSD files found", zh: "未找到 PSD 文件" },
+  "psd.loadingPreview": { en: "loading preview…", zh: "预览加载中…" },
+  "psd.noMetadata": { en: "(no metadata.json)", zh: "(无 metadata.json)" },
+  "psd.openedFolder": { en: "opened folder", zh: "已打开文件夹" },
+  "psd.openedPsd": { en: "opened PSD", zh: "已打开 PSD" },
+  "psd.preview": { en: "preview", zh: "原始预览" },
+  "psd.tagPreview": { en: "preview", zh: "预览" },
+  "psd.tagMetadata": { en: "metadata", zh: "元数据" },
 } satisfies Record<string, { en: string; zh: string }>;
 
 export type MsgKey = keyof typeof messages;
 
-/** Translate a key into the given language, falling back to the key itself. */
-export function translate(lang: Lang, key: MsgKey): string {
+/**
+ * Translate a key into the given language, falling back to the key itself.
+ * Interpolates `{name}` placeholders from `vars` (matches the former shell-ui
+ * `t(key, vars)` behaviour).
+ */
+export function translate(
+  lang: Lang,
+  key: MsgKey,
+  vars?: Record<string, string | number>,
+): string {
   const m = messages[key];
-  return m ? m[lang] : key;
+  let text = m ? m[lang] : (key as string);
+  if (vars) {
+    text = text.replace(/\{(\w+)\}/g, (match, name: string) =>
+      Object.prototype.hasOwnProperty.call(vars, name) ? String(vars[name]) : match,
+    );
+  }
+  return text;
 }
 
 /** Read the persisted language, defaulting to the browser language (zh / en). */
@@ -152,8 +310,8 @@ export function saveLang(lang: Lang): void {
 /** Active language, provided at the app root and read by child panels. */
 export const LangContext = createContext<Lang>("en");
 
-/** Hook returning a `t(key)` translator bound to the current language. */
-export function useT(): (key: MsgKey) => string {
+/** Hook returning a `t(key, vars?)` translator bound to the current language. */
+export function useT(): (key: MsgKey, vars?: Record<string, string | number>) => string {
   const lang = useContext(LangContext);
-  return (key: MsgKey) => translate(lang, key);
+  return (key: MsgKey, vars?: Record<string, string | number>) => translate(lang, key, vars);
 }

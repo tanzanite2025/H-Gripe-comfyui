@@ -1,25 +1,17 @@
-// Typed wrapper around the Tauri IPC bridge.
+// Typed wrapper around the Tauri IPC bridge for the desktop *shell* commands
+// (Dashboard / Credentials / Profiles / Run / History / PSD / PSD Studio tabs).
 //
-// The shell previously called `window.__TAURI__.core.invoke("cmd", args)` with
-// bare string command names and untyped results, which drifts silently from the
-// Rust command signatures in `src-tauri`. This module is the single place that
-// touches `invoke`: every backend command has an explicit argument + return
-// type derived from the Rust structs (see `src-tauri/src/*.rs` and the
-// `hgripe-api` crate), so a rename or shape change surfaces as a `tsc` error.
+// This is the single place that touches `invoke` for these commands: every
+// backend command has an explicit argument + return type derived from the Rust
+// structs (see `src-tauri/src/*.rs` and the `hgripe-api` crate), so a rename or
+// shape change surfaces as a `tsc` error instead of a silent runtime drift.
+//
+// IPC plumbing (and the outside-Tauri detection) is shared with the rest of the
+// bridge via `./core`. When running outside Tauri (e.g. `vite dev` in a plain
+// browser) there is no backend, so each command rejects with a clear error and
+// the calling panel renders that message.
 
-interface TauriCore {
-  invoke: <T>(command: string, args?: Record<string, unknown>) => Promise<T>;
-}
-
-interface TauriGlobal {
-  core: TauriCore;
-}
-
-declare global {
-  interface Window {
-    __TAURI__: TauriGlobal;
-  }
-}
+import { tauriInvoke } from "./core";
 
 // ---- backend payload shapes (mirror the Rust serde structs) ----
 
@@ -140,7 +132,13 @@ export interface CleanupOptions {
 }
 
 function invoke<T>(command: string, args?: Record<string, unknown>): Promise<T> {
-  return window.__TAURI__.core.invoke<T>(command, args);
+  const fn = tauriInvoke();
+  if (!fn) {
+    return Promise.reject(
+      new Error("desktop backend unavailable (run inside H-Gripe Desktop)"),
+    );
+  }
+  return fn(command, args) as Promise<T>;
 }
 
 // ---- typed command surface ----
@@ -175,3 +173,8 @@ export const commands = {
   openPath: (path: string) => invoke<void>("open_path", { path }),
   openUrl: (url: string) => invoke<void>("open_url", { url }),
 };
+
+/** Pretty-print a value as 2-space-indented JSON (shared by the shell panels). */
+export function pretty(value: unknown): string {
+  return JSON.stringify(value, null, 2);
+}

@@ -1,15 +1,14 @@
 import { defineConfig } from "vite";
 import react from "@vitejs/plugin-react";
 
-// Built into the desktop shell's frontendDist under `/studio` so the shell can
-// embed it as the "Node Editor" tab (iframe -> studio/index.html). The build
-// output (../dist/studio) is gitignored and produced by tauri before* hooks.
+// The single H-Gripe Desktop front end. Builds to the Tauri `frontendDist`
+// (../dist); the output is gitignored and produced by the Tauri before* hooks.
 export default defineConfig({
   plugins: [react()],
-  // Relative base so assets resolve correctly when served from /studio/.
+  // Relative base so assets resolve correctly when served via tauri://localhost.
   base: "./",
   build: {
-    outDir: "../dist/studio",
+    outDir: "../dist",
     emptyOutDir: true,
   },
   test: {

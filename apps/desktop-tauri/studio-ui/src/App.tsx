@@ -31,6 +31,30 @@ import { layeredPositions } from "./editor/layout";
 import type { HgripeNodeData } from "./editor/HgripeNode";
 import { fromWorkflowGraph, toWorkflowGraph } from "./editor/adapter";
 import { ProjectPanel, baseName } from "./editor/ProjectPanel";
+import { NodeSearchBox } from "./editor/NodeSearchBox";
+import { validatePsdChain } from "./editor/psdcheck";
+import { RunLog } from "./editor/RunLogPanel";
+import {
+  appendLog,
+  describeNodeStatus,
+  formatLogText,
+  levelForStatus,
+  type LogLevel,
+  type RunLogEntry,
+} from "./editor/runlog";
+import { SnapshotsPanel, type SnapshotDiffView } from "./editor/SnapshotsPanel";
+import { diffGraphs } from "./editor/snapshotdiff";
+import {
+  addSnapshot,
+  loadAutoSnapshotPref,
+  loadSnapshots,
+  newSnapshotId,
+  removeSnapshot,
+  renameSnapshot,
+  saveAutoSnapshotPref,
+  saveSnapshots,
+  type Snapshot,
+} from "./editor/snapshots";
 import { clearPersistedGraph, loadPersistedGraph, persistGraph } from "./editor/persist";
 import { defaultParams } from "./graph/nodeSpecs";
 import { deserializeGraph, serializeGraph, type WorkflowGraph } from "./graph/model";
@@ -125,6 +149,12 @@ function Studio() {
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const [running, setRunning] = useState(false);
   const [currentRunId, setCurrentRunId] = useState<string | null>(null);
+  const [runLog, setRunLog] = useState<RunLogEntry[]>([]);
+  const [showLog, setShowLog] = useState(false);
+  const [snapshots, setSnapshots] = useState<Snapshot[]>(() => loadSnapshots());
+  const [showSnapshots, setShowSnapshots] = useState(false);
+  const [snapshotDiff, setSnapshotDiff] = useState<SnapshotDiffView | null>(null);
+  const [autoSnapshot, setAutoSnapshot] = useState<boolean>(() => loadAutoSnapshotPref());
   const [snapToGrid, setSnapToGrid] = useState(false);
   const [helperLines, setHelperLines] = useState<{ horizontal?: number; vertical?: number }>({});
   const [edgeType, setEdgeType] = useState<EdgeStyle>("default");
@@ -158,6 +188,9 @@ function Studio() {
   const skipDirty = useRef(true);
 
   const idSeq = useRef(0);
+  const logSeq = useRef(0);
+  // Node ids that reported "failed" during the in-flight run, in first-seen order.
+  const runFailures = useRef<string[]>([]);
   const currentRunIdRef = useRef<string | null>(null);
   const fileInput = useRef<HTMLInputElement | null>(null);
   const clipboard = useRef<Clip | null>(null);
@@ -341,11 +374,92 @@ function Studio() {
     [patchNode],
   );
 
+  // Append a line to the run log (capped, never mutating the previous array).
+  const pushLog = useCallback((level: LogLevel, message: string, node?: string) => {
+    setRunLog((log) => appendLog(log, { id: logSeq.current++, t: Date.now(), level, message, node }));
+  }, []);
+
+  // Download the run log as a plain-text file (browser + desktop webview).
+  const exportLog = useCallback(() => {
+    const blob = new Blob([formatLogText(runLog)], { type: "text/plain" });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement("a");
+    a.href = url;
+    a.download = "run-log.txt";
+    a.click();
+    URL.revokeObjectURL(url);
+  }, [runLog]);
+
+  // Select/focus a node in the editor (e.g. from a run-log line). Programmatic,
+  // so it must not flag the file dirty.
+  const focusNode = useCallback(
+    (nodeId: string) => {
+      skipDirty.current = true;
+      setNodes((ns) => ns.map((n) => ({ ...n, selected: n.id === nodeId })));
+      setSelectedId(nodeId);
+    },
+    [setNodes],
+  );
+
+  // Select a node and pan/zoom the viewport to center it (used by node search).
+  const jumpToNode = useCallback(
+    (id: string) => {
+      focusNode(id);
+      void fitView({ nodes: [{ id }], duration: 400, maxZoom: 1.5 });
+    },
+    [focusNode, fitView],
+  );
+
+  // After a run settles, surface any failed nodes: select/focus the first one
+  // and summarise them in the log. Returns the number of failed nodes.
+  const highlightFailures = useCallback(() => {
+    const failed = runFailures.current;
+    if (failed.length === 0) return 0;
+    focusNode(failed[0]);
+    pushLog("error", `⚠ ${failed.length} node(s) failed: ${failed.join(", ")}`);
+    return failed.length;
+  }, [focusNode, pushLog]);
+
+  // Capture the current graph under a given name (no prompt).
+  const captureNamed = useCallback(
+    (name: string) => {
+      const graph = toWorkflowGraph(nodes, edges);
+      const snap: Snapshot = { id: newSnapshotId(), name, t: Date.now(), graph };
+      setSnapshots((list) => addSnapshot(list, snap));
+      return snap;
+    },
+    [nodes, edges],
+  );
+
+  // Capture the current graph as a named snapshot (prompts for a name).
+  const captureSnapshot = useCallback(() => {
+    const suggested = `Snapshot ${new Date().toLocaleString()}`;
+    const name = window.prompt("Snapshot name", suggested);
+    if (name === null) return;
+    const snap = captureNamed(name.trim() || suggested);
+    setMessage(`snapshot saved: ${snap.name}`);
+  }, [captureNamed]);
+
+  // Auto-capture before a run (when enabled and the graph is non-empty).
+  const autoSnapshotBeforeRun = useCallback(() => {
+    if (!autoSnapshot || nodes.length === 0) return;
+    captureNamed(`Auto · ${new Date().toLocaleTimeString()}`);
+  }, [autoSnapshot, nodes.length, captureNamed]);
+
   // Per-node run telemetry (duration / error) for node-level logs/progress.
   const recordRun = useCallback(
-    (id: string, info: NodeRunInfo) =>
-      patchNode(id, { durationMs: info.durationMs, error: info.error ?? null }),
-    [patchNode],
+    (id: string, info: NodeRunInfo) => {
+      patchNode(id, { durationMs: info.durationMs, error: info.error ?? null });
+      if (info.status === "failed" && !runFailures.current.includes(id)) {
+        runFailures.current.push(id);
+      }
+      pushLog(
+        levelForStatus(info.status),
+        describeNodeStatus(info.status, { durationMs: info.durationMs, error: info.error }),
+        id,
+      );
+    },
+    [patchNode, pushLog],
   );
   // Clear the previous run's duration/error before a fresh run.
   const clearRunInfo = useCallback(
@@ -381,8 +495,19 @@ function Studio() {
 
   const applyStudioRunEvent = useCallback(
     (event: StudioGraphRunEvent) => {
-      if (!event.node_id) return;
+      if (!event.node_id) {
+        if (event.message) pushLog("info", event.message);
+        return;
+      }
       const status = toNodeStatus(event.status);
+      if (status === "failed" && !runFailures.current.includes(event.node_id)) {
+        runFailures.current.push(event.node_id);
+      }
+      pushLog(
+        levelForStatus(status),
+        describeNodeStatus(status, { durationMs: event.duration_ms, error: event.error }),
+        event.node_id,
+      );
       setNodes((ns) =>
         ns.map((n) => {
           if (n.id !== event.node_id) return n;
@@ -400,7 +525,7 @@ function Studio() {
         }),
       );
     },
-    [setNodes],
+    [setNodes, pushLog],
   );
 
   const beginRustRun = useCallback(() => {
@@ -420,33 +545,66 @@ function Studio() {
     const runId = currentRunIdRef.current;
     if (!runId) return;
     setMessage("cancelling…");
+    pushLog("warn", "✋ cancellation requested");
     void cancelStudioRun(runId).catch((err) => setMessage(`cancel failed: ${String(err)}`));
-  }, []);
+  }, [pushLog]);
 
   // Surface output paths into preview nodes. The thumbnail itself is fetched
   // lazily by the node when it scrolls into view (see HgripeNode).
   const applyPreviews = useCallback(
     (graph: ReturnType<typeof toWorkflowGraph>, result: { outputs: Map<string, Record<string, unknown>> }) => {
       const paths: string[] = [];
+      const str = (v: unknown): string | null => (typeof v === "string" && v ? v : null);
       for (const node of graph.nodes) {
-        if (node.kind !== "preview") continue;
         const out = result.outputs.get(node.id);
-        const imagePath = (out?.image as string | null) ?? null;
-        patchNode(node.id, { imagePath });
-        if (imagePath) paths.push(imagePath);
+        if (node.kind === "preview") {
+          const imagePath = str(out?.image);
+          patchNode(node.id, { imagePath });
+          if (imagePath) paths.push(imagePath);
+        } else if (node.kind === "psdExport") {
+          // Surface the export triplet onto the card. Browser executors return
+          // camelCase; the Rust backend returns the raw snake_case fields.
+          const psdPath = str(out?.psdPath) ?? str(out?.psd_path);
+          const psdPreviewPath = str(out?.previewPath) ?? str(out?.preview_path);
+          const psdMetadataPath = str(out?.metadataPath) ?? str(out?.metadata_path);
+          patchNode(node.id, {
+            psdPath,
+            psdPreviewPath,
+            psdMetadataPath,
+            placeholderKind: str(out?.placeholderKind) ?? str(out?.placeholder_kind),
+            smartObjectMode: str(out?.smartObjectMode) ?? str(out?.smart_object_mode),
+          });
+          if (psdPreviewPath) paths.push(psdPreviewPath);
+        }
       }
       return paths;
     },
     [patchNode],
   );
 
+  // Surface PSD-chain problems (missing template path / unconnected inputs) in
+  // the run log before executing, so users do not have to wait for a mid-run
+  // failure to find them.
+  const warnPsdChain = useCallback(
+    (graph: WorkflowGraph) => {
+      for (const w of validatePsdChain(graph)) pushLog("warn", `⚠ ${w.node}: ${w.message}`);
+    },
+    [pushLog],
+  );
+
   const run = useCallback(async () => {
     setRunning(true);
+    setShowLog(true);
+    runFailures.current = [];
+    autoSnapshotBeforeRun();
     const useRustBackend = isTauri();
+    const backend = useRustBackend ? "Rust backend" : "browser preview";
     setMessage(useRustBackend ? "running Rust backend…" : "running browser preview…");
     clearRunInfo();
+    pushLog("info", `▶ run started (${backend})`);
     try {
       const graph = toWorkflowGraph(nodes, edges);
+      warnPsdChain(graph);
       if (useRustBackend) {
         const runId = beginRustRun();
         try {
@@ -462,11 +620,15 @@ function Studio() {
         applyPreviews(graph, result);
         setMessage("done (browser preview)");
       }
+      pushLog("success", `✔ run finished (${backend})`);
     } catch (err) {
       const message = String(err);
-      setMessage(message.toLowerCase().includes("cancel") ? "cancelled" : `error: ${message}`);
+      const cancelled = message.toLowerCase().includes("cancel");
+      setMessage(cancelled ? "cancelled" : `error: ${message}`);
+      pushLog(cancelled ? "warn" : "error", cancelled ? "run cancelled" : `run failed: ${message}`);
     } finally {
       setRunning(false);
+      highlightFailures();
     }
   }, [
     nodes,
@@ -478,6 +640,10 @@ function Studio() {
     applyStudioRunEvent,
     beginRustRun,
     endRustRun,
+    pushLog,
+    autoSnapshotBeforeRun,
+    highlightFailures,
+    warnPsdChain,
   ]);
 
   // Batch fan-out: run the graph once per item of the (first) batch node,
@@ -498,16 +664,23 @@ function Studio() {
       return;
     }
     setRunning(true);
+    setShowLog(true);
+    runFailures.current = [];
+    autoSnapshotBeforeRun();
     clearRunInfo();
     const useRustBackend = isTauri();
+    const backend = useRustBackend ? "Rust backend" : "browser preview";
     const rustRunId = useRustBackend ? beginRustRun() : null;
+    pushLog("info", `▶ batch started: ${batchCount} run(s) (${backend})`);
     try {
       const graph = toWorkflowGraph(nodes, edges);
+      warnPsdChain(graph);
       const collected: string[] = [];
       for (let i = 0; i < batchCount; i++) {
         setMessage(
           `batch ${i + 1}/${batchCount}${useRustBackend ? " (Rust backend)" : " (browser preview)"}…`,
         );
+        pushLog("info", `— batch item ${i + 1}/${batchCount}`);
         if (useRustBackend) {
           const graphForRun = graphWithParamOverrides(graph, batchNode.id, { index: i });
           const result = await runStudioGraph(graphForRun, applyStudioRunEvent, rustRunId ?? undefined);
@@ -524,12 +697,16 @@ function Studio() {
           useRustBackend ? " via Rust backend" : ""
         }`,
       );
+      pushLog("success", `✔ batch finished: ${batchCount} run(s), ${collected.length} output(s)`);
     } catch (err) {
       const message = String(err);
-      setMessage(message.toLowerCase().includes("cancel") ? "batch cancelled" : `batch error: ${message}`);
+      const cancelled = message.toLowerCase().includes("cancel");
+      setMessage(cancelled ? "batch cancelled" : `batch error: ${message}`);
+      pushLog(cancelled ? "warn" : "error", cancelled ? "batch cancelled" : `batch failed: ${message}`);
     } finally {
       if (rustRunId) endRustRun(rustRunId);
       setRunning(false);
+      highlightFailures();
     }
   }, [
     batchNode,
@@ -543,6 +720,10 @@ function Studio() {
     applyStudioRunEvent,
     beginRustRun,
     endRustRun,
+    pushLog,
+    autoSnapshotBeforeRun,
+    highlightFailures,
+    warnPsdChain,
   ]);
 
   // Switch the rendering style of all edges (and future ones).
@@ -683,6 +864,58 @@ function Studio() {
     },
     [fileDirty, currentFile],
   );
+
+  // Persist snapshots to localStorage whenever the list changes.
+  useEffect(() => {
+    saveSnapshots(snapshots);
+  }, [snapshots]);
+
+  // Persist the auto-snapshot preference.
+  useEffect(() => {
+    saveAutoSnapshotPref(autoSnapshot);
+  }, [autoSnapshot]);
+
+  // Restore a snapshot into the editor (guarded by the unsaved-changes check).
+  const restoreSnapshot = useCallback(
+    (id: string) => {
+      const snap = snapshots.find((s) => s.id === id);
+      if (!snap) return;
+      if (!confirmDiscard(`restore ${snap.name}`)) return;
+      takeSnapshot();
+      loadGraphIntoEditor(snap.graph);
+      setFileDirty(true);
+      setMessage(`restored snapshot: ${snap.name}`);
+    },
+    [snapshots, confirmDiscard, takeSnapshot, loadGraphIntoEditor],
+  );
+
+  // Compare a snapshot against the live graph (no mutation — read-only diff).
+  const diffSnapshot = useCallback(
+    (id: string) => {
+      const snap = snapshots.find((s) => s.id === id);
+      if (!snap) return;
+      const current = toWorkflowGraph(nodes, edges);
+      setSnapshotDiff({ id: snap.id, name: snap.name, diff: diffGraphs(snap.graph, current) });
+    },
+    [snapshots, nodes, edges],
+  );
+
+  const renameSnapshotById = useCallback((id: string) => {
+    setSnapshots((list) => {
+      const snap = list.find((s) => s.id === id);
+      const name = window.prompt("Rename snapshot", snap?.name ?? "");
+      if (name === null) return list;
+      return renameSnapshot(list, id, name);
+    });
+  }, []);
+
+  const deleteSnapshot = useCallback((id: string) => {
+    setSnapshots((list) => {
+      const snap = list.find((s) => s.id === id);
+      if (snap && !window.confirm(`Delete snapshot "${snap.name}"?`)) return list;
+      return removeSnapshot(list, id);
+    });
+  }, []);
 
   // Browser-preview upload (the hidden file input). Desktop uses native dialogs.
   const load = useCallback(
@@ -1027,6 +1260,38 @@ function Studio() {
     return () => window.removeEventListener("keydown", onKey);
   }, [undo, redo, copySelection, pasteClipboard, setNodes, setEdges]);
 
+  // File + run shortcuts: Ctrl/Cmd+S save, +Shift+S save as, +O open, +N new,
+  // +Enter run. These intentionally fire even while editing a field so a quick
+  // Ctrl+S always saves.
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => {
+      if (!(e.ctrlKey || e.metaKey) || e.altKey) return;
+      switch (e.key.toLowerCase()) {
+        case "s":
+          e.preventDefault();
+          if (e.shiftKey) void handleSaveAs();
+          else void handleSave();
+          break;
+        case "o":
+          if (e.shiftKey) return;
+          e.preventDefault();
+          void handleOpen();
+          break;
+        case "n":
+          if (e.shiftKey) return;
+          e.preventDefault();
+          newWorkflow();
+          break;
+        case "enter":
+          e.preventDefault();
+          if (!running && issues.length === 0) void run();
+          break;
+      }
+    };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [handleSave, handleSaveAs, handleOpen, newWorkflow, run, running, issues]);
+
   // Stable context value so memoized node cards can edit their own params.
   const editing = useMemo(() => ({ onParamChange }), [onParamChange]);
 
@@ -1064,13 +1329,40 @@ function Studio() {
             {showProject ? "Hide Project" : "Project"}
           </button>
         )}
-        {isDesktop && <button onClick={newWorkflow} title="start a new, empty workflow">New</button>}
-        <button onClick={() => void handleOpen()}>{isDesktop ? "Open…" : "Load"}</button>
-        <button onClick={() => void handleSave()} title={isDesktop ? "save to the current file (Save As… if none)" : "download workflow.json"}>
+        <button
+          onClick={() => setShowSnapshots((s) => !s)}
+          title="toggle the snapshots panel (named versions of the workflow)"
+        >
+          {showSnapshots ? "Hide Snapshots" : "Snapshots"}
+          {snapshots.length > 0 ? ` (${snapshots.length})` : ""}
+        </button>
+        <NodeSearchBox nodes={nodes} onJump={jumpToNode} />
+        {isDesktop && (
+          <button onClick={newWorkflow} title="start a new, empty workflow (Ctrl/Cmd+N)">
+            New
+          </button>
+        )}
+        <button
+          onClick={() => void handleOpen()}
+          title={isDesktop ? "open a workflow file (Ctrl/Cmd+O)" : "load workflow.json (Ctrl/Cmd+O)"}
+        >
+          {isDesktop ? "Open…" : "Load"}
+        </button>
+        <button
+          onClick={() => void handleSave()}
+          title={
+            isDesktop
+              ? "save to the current file (Save As… if none) — Ctrl/Cmd+S"
+              : "download workflow.json (Ctrl/Cmd+S)"
+          }
+        >
           Save
         </button>
         {isDesktop && (
-          <button onClick={() => void handleSaveAs()} title="save to a new file via the native dialog">
+          <button
+            onClick={() => void handleSaveAs()}
+            title="save to a new file via the native dialog (Ctrl/Cmd+Shift+S)"
+          >
             Save As…
           </button>
         )}
@@ -1095,7 +1387,19 @@ function Studio() {
           <input type="checkbox" checked={showMinimap} onChange={(e) => setShowMinimap(e.target.checked)} />
           Map
         </label>
-        <button className="primary" onClick={run} disabled={running || issues.length > 0}>
+        <button
+          onClick={() => setShowLog((s) => !s)}
+          title="toggle the run log (per-node status, timing and errors)"
+        >
+          {showLog ? "Hide Log" : "Log"}
+          {runLog.length > 0 ? ` (${runLog.length})` : ""}
+        </button>
+        <button
+          className="primary"
+          onClick={run}
+          disabled={running || issues.length > 0}
+          title="execute the graph (Ctrl/Cmd+Enter)"
+        >
           {running ? "Running…" : "Run"}
         </button>
         {running && currentRunId && (
@@ -1145,25 +1449,51 @@ function Studio() {
               onDeleteFile={(path) => void handleDeleteFile(path)}
             />
           )}
+          {showSnapshots && (
+            <SnapshotsPanel
+              snapshots={snapshots}
+              autoSnapshot={autoSnapshot}
+              onToggleAutoSnapshot={setAutoSnapshot}
+              onCapture={captureSnapshot}
+              onRestore={restoreSnapshot}
+              onRename={renameSnapshotById}
+              onDelete={deleteSnapshot}
+              onDiff={diffSnapshot}
+              diff={snapshotDiff}
+              onClearDiff={() => setSnapshotDiff(null)}
+              onClose={() => setShowSnapshots(false)}
+            />
+          )}
           <Palette onAdd={addNode} />
           <div className="canvas">
-            <FlowCanvas
-              nodes={nodes}
-              edges={edges}
-              onNodesChange={handleNodesChange}
-              onEdgesChange={handleEdgesChange}
-              setEdges={setEdges}
-              onSelect={setSelectedId}
-              onAddNode={addNode}
-              onBeforeConnect={takeSnapshot}
-              onNodeDragStop={handleNodeDragStop}
-              snapToGrid={snapToGrid}
-              helperLines={helperLines}
-              edgeType={edgeType}
-              showMinimap={showMinimap}
-              onNodeContextMenu={openNodeMenu}
-              onPaneContextMenu={openPaneMenu}
-            />
+            <div className="canvas-flow">
+              <FlowCanvas
+                nodes={nodes}
+                edges={edges}
+                onNodesChange={handleNodesChange}
+                onEdgesChange={handleEdgesChange}
+                setEdges={setEdges}
+                onSelect={setSelectedId}
+                onAddNode={addNode}
+                onBeforeConnect={takeSnapshot}
+                onNodeDragStop={handleNodeDragStop}
+                snapToGrid={snapToGrid}
+                helperLines={helperLines}
+                edgeType={edgeType}
+                showMinimap={showMinimap}
+                onNodeContextMenu={openNodeMenu}
+                onPaneContextMenu={openPaneMenu}
+              />
+            </div>
+            {showLog && (
+              <RunLog
+                entries={runLog}
+                onClear={() => setRunLog([])}
+                onClose={() => setShowLog(false)}
+                onExport={exportLog}
+                onSelectNode={focusNode}
+              />
+            )}
           </div>
           <Inspector node={selectedNode} onParamChange={onParamChange} />
         </div>

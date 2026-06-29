@@ -27,7 +27,7 @@ use hgripe_api::{
 };
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
-use tauri::Emitter;
+use tauri::{Emitter, Manager};
 
 const STUDIO_GRAPH_RUN_EVENT: &str = "studio:graph-run";
 
@@ -1907,13 +1907,20 @@ runpy.run_path(os.path.join(d, 'main.py'), run_name='__main__')";
     Ok(format!("started ComfyUI on port {port}"))
 }
 
-#[tauri::command]
-fn stop_comfyui(state: tauri::State<'_, ComfyServer>) -> Result<(), String> {
+/// Terminate the locally spawned ComfyUI process, if one is tracked. Shared by
+/// the `stop_comfyui` command and the app-exit cleanup so the launched server
+/// never outlives the desktop shell as an orphan.
+fn kill_comfy_child(state: &ComfyServer) {
     let mut guard = state.0.lock().unwrap();
     if let Some(mut child) = guard.take() {
         let _ = child.kill();
         let _ = child.wait();
     }
+}
+
+#[tauri::command]
+fn stop_comfyui(state: tauri::State<'_, ComfyServer>) -> Result<(), String> {
+    kill_comfy_child(&state);
     Ok(())
 }
 
@@ -2156,8 +2163,15 @@ fn main() {
             compose_psd,
             inspect_psd
         ])
-        .run(tauri::generate_context!())
-        .expect("error while running H-Gripe Desktop");
+        .build(tauri::generate_context!())
+        .expect("error while running H-Gripe Desktop")
+        .run(|app_handle, event| {
+            // Best-effort cleanup: when the shell exits, terminate any ComfyUI
+            // we launched so it doesn't linger as an orphaned process.
+            if let tauri::RunEvent::Exit = event {
+                kill_comfy_child(&app_handle.state::<ComfyServer>());
+            }
+        });
 }
 
 #[cfg(test)]

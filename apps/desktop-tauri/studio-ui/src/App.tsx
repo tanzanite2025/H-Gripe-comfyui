@@ -31,7 +31,7 @@ import { layeredPositions } from "./editor/layout";
 import type { HgripeNodeData } from "./editor/HgripeNode";
 import { fromWorkflowGraph, toWorkflowGraph } from "./editor/adapter";
 import { ProjectPanel, baseName } from "./editor/ProjectPanel";
-import { NodeSearchBox } from "./editor/NodeSearchBox";
+import { Toolbar } from "./editor/Toolbar";
 import { psdExportTargets, psdTemplatePaths, validatePsdChain } from "./editor/psdcheck";
 import { RunLog } from "./editor/RunLogPanel";
 import {
@@ -57,7 +57,7 @@ import {
 import { diffGraphs } from "./editor/snapshotdiff";
 import { useProjectScopedStore } from "./editor/useProjectScopedStore";
 import { useKeyboardShortcuts } from "./editor/useKeyboardShortcuts";
-import { LangContext, loadLang, saveLang, translate, type Lang } from "./i18n";
+import { LangContext, loadLang, saveLang, type Lang } from "./i18n";
 import {
   addSnapshot,
   loadAutoSnapshotPref,
@@ -179,7 +179,6 @@ function Studio() {
   const [autoSnapshot, setAutoSnapshot] = useState<boolean>(() => loadAutoSnapshotPref());
   const [snapToGrid, setSnapToGrid] = useState(false);
   const [lang, setLang] = useState<Lang>(() => loadLang());
-  const t = useCallback((key: Parameters<typeof translate>[1]) => translate(lang, key), [lang]);
   const toggleLang = useCallback(() => {
     setLang((prev) => {
       const next: Lang = prev === "en" ? "zh" : "en";
@@ -1375,144 +1374,54 @@ function Studio() {
   return (
     <LangContext.Provider value={lang}>
     <div className="app">
-      <header className="toolbar">
-        <strong>H-Gripe Studio</strong>
-        <span className="muted">{t("brand.subtitle")}</span>
-        <div className="spacer" />
-        {issues.length > 0 && (
-          <span className="issues" title={issues.map((i) => i.message).join("\n")}>
-            ⚠ {issues.length} {issues.length > 1 ? t("issues.many") : t("issues.one")}
-          </span>
-        )}
-        {isDesktop && (
-          <span className="muted current-file" title={currentFile ?? t("status.untitledTitle")}>
-            {currentFile ? baseName(currentFile) : t("status.untitled")}
-            {fileDirty ? " *" : ""}
-          </span>
-        )}
-        <span className="muted autosave" title={t("status.autosaveTitle")}>
-          {saved ? t("status.autosaved") : t("status.saving")}
-        </span>
-        <button onClick={toggleLang} title={t("label.langTitle")} className="lang-toggle">
-          {t("label.lang")}
-        </button>
-        <button onClick={undo} disabled={!history.canUndo} title={t("btn.undoTitle")}>
-          {t("btn.undo")}
-        </button>
-        <button onClick={redo} disabled={!history.canRedo} title={t("btn.redoTitle")}>
-          {t("btn.redo")}
-        </button>
-        {isDesktop && (
-          <button
-            onClick={() => setShowProject((s) => !s)}
-            title={t("btn.projectTitle")}
-          >
-            {showProject ? t("btn.hideProject") : t("btn.project")}
-          </button>
-        )}
-        <button
-          onClick={() => setShowSnapshots((s) => !s)}
-          title={t("btn.snapshotsTitle")}
-        >
-          {showSnapshots ? t("btn.hideSnapshots") : t("btn.snapshots")}
-          {snapshots.length > 0 ? ` (${snapshots.length})` : ""}
-        </button>
-        <NodeSearchBox nodes={nodes} onJump={jumpToNode} />
-        {isDesktop && (
-          <button onClick={newWorkflow} title={t("btn.newTitle")}>
-            {t("btn.new")}
-          </button>
-        )}
-        <button
-          onClick={() => void handleOpen()}
-          title={isDesktop ? t("btn.openTitle") : t("btn.loadTitle")}
-        >
-          {isDesktop ? t("btn.open") : t("btn.load")}
-        </button>
-        <button
-          onClick={() => void handleSave()}
-          title={isDesktop ? t("btn.saveTitleDesktop") : t("btn.saveTitleWeb")}
-        >
-          {t("btn.save")}
-        </button>
-        {isDesktop && (
-          <button
-            onClick={() => void handleSaveAs()}
-            title={t("btn.saveAsTitle")}
-          >
-            {t("btn.saveAs")}
-          </button>
-        )}
-        <button onClick={resetSample}>{t("btn.reset")}</button>
-        <button onClick={clear}>{t("btn.clear")}</button>
-        <label className="snap-toggle" title={t("label.snapTitle")}>
-          <input type="checkbox" checked={snapToGrid} onChange={(e) => setSnapToGrid(e.target.checked)} />
-          {t("label.snap")}
-        </label>
-        <button onClick={tidyLayout} title={t("btn.tidyTitle")}>
-          {t("btn.tidy")}
-        </button>
-        <label className="snap-toggle" title={t("label.edgesTitle")}>
-          {t("label.edges")}
-          <select value={edgeType} onChange={(e) => changeEdgeType(e.target.value as EdgeStyle)}>
-            <option value="default">{t("label.edgesCurved")}</option>
-            <option value="smoothstep">{t("label.edgesOrthogonal")}</option>
-            <option value="smart">{t("label.edgesAvoid")}</option>
-          </select>
-        </label>
-        <label className="snap-toggle" title={t("label.mapTitle")}>
-          <input type="checkbox" checked={showMinimap} onChange={(e) => setShowMinimap(e.target.checked)} />
-          {t("label.map")}
-        </label>
-        <button
-          onClick={() => setShowLog((s) => !s)}
-          title={t("btn.logTitle")}
-        >
-          {showLog ? t("btn.hideLog") : t("btn.log")}
-          {runLog.length > 0 ? ` (${runLog.length})` : ""}
-        </button>
-        <button
-          onClick={() => setShowHistory((s) => !s)}
-          title="show past runs (persisted with the project)"
-        >
-          {showHistory ? "Hide history" : "History"}
-          {runHistory.length > 0 ? ` (${runHistory.length})` : ""}
-        </button>
-        <button
-          className="primary"
-          onClick={run}
-          disabled={running || issues.length > 0}
-          title={t("btn.runTitle")}
-        >
-          {running ? t("btn.running") : t("btn.run")}
-        </button>
-        {running && currentRunId && (
-          <button onClick={cancelRun} title={t("btn.cancelTitle")}>
-            {t("btn.cancel")}
-          </button>
-        )}
-        {batchNode && (
-          <button
-            onClick={runBatch}
-            disabled={running || issues.length > 0 || batchCount === 0}
-            title={t("btn.runBatchTitle")}
-          >
-            {t("btn.run")} ×{batchCount}
-          </button>
-        )}
-        <span className="muted">{message}</span>
-        <input
-          ref={fileInput}
-          type="file"
-          accept="application/json,.json"
-          style={{ display: "none" }}
-          onChange={(e) => {
-            const f = e.target.files?.[0];
-            if (f) void load(f);
-            e.target.value = "";
-          }}
-        />
-      </header>
+      <Toolbar
+        issues={issues}
+        isDesktop={isDesktop}
+        currentFile={currentFile}
+        fileDirty={fileDirty}
+        saved={saved}
+        message={message}
+        canUndo={history.canUndo}
+        canRedo={history.canRedo}
+        onUndo={undo}
+        onRedo={redo}
+        onToggleLang={toggleLang}
+        showProject={showProject}
+        setShowProject={setShowProject}
+        showSnapshots={showSnapshots}
+        setShowSnapshots={setShowSnapshots}
+        showLog={showLog}
+        setShowLog={setShowLog}
+        showHistory={showHistory}
+        setShowHistory={setShowHistory}
+        snapshotCount={snapshots.length}
+        logCount={runLog.length}
+        historyCount={runHistory.length}
+        nodes={nodes}
+        onJumpToNode={jumpToNode}
+        onNew={newWorkflow}
+        onOpen={() => void handleOpen()}
+        onSave={() => void handleSave()}
+        onSaveAs={() => void handleSaveAs()}
+        onReset={resetSample}
+        onClear={clear}
+        fileInputRef={fileInput}
+        onFilePicked={(f) => void load(f)}
+        snapToGrid={snapToGrid}
+        setSnapToGrid={setSnapToGrid}
+        onTidyLayout={tidyLayout}
+        edgeType={edgeType}
+        onChangeEdgeType={changeEdgeType}
+        showMinimap={showMinimap}
+        setShowMinimap={setShowMinimap}
+        running={running}
+        currentRunId={currentRunId}
+        onRun={run}
+        onCancelRun={cancelRun}
+        hasBatch={!!batchNode}
+        batchCount={batchCount}
+        onRunBatch={runBatch}
+      />
 
       <NodeEditingContext.Provider value={editing}>
         <div className="workspace">

@@ -670,9 +670,21 @@ function Studio() {
     URL.revokeObjectURL(url);
   }, [nodes, edges, currentFile]);
 
+  // Guard destructive actions that would replace the current graph. Returns
+  // true when it is safe to proceed (no unsaved edits, or the user confirms).
+  const confirmDiscard = useCallback(
+    (action: string): boolean => {
+      if (!fileDirty) return true;
+      const label = currentFile ? baseName(currentFile) : "this workflow";
+      return window.confirm(`Discard unsaved changes to ${label}? (${action})`);
+    },
+    [fileDirty, currentFile],
+  );
+
   // Browser-preview upload (the hidden file input). Desktop uses native dialogs.
   const load = useCallback(
     async (file: File) => {
+      if (!confirmDiscard(`load ${file.name}`)) return;
       try {
         takeSnapshot();
         const graph = deserializeGraph(await file.text());
@@ -684,7 +696,7 @@ function Studio() {
         setMessage(`load failed: ${String(err)}`);
       }
     },
-    [takeSnapshot, loadGraphIntoEditor],
+    [takeSnapshot, loadGraphIntoEditor, confirmDiscard],
   );
 
   const refreshProjectFiles = useCallback(async (dir: string) => {
@@ -705,6 +717,7 @@ function Studio() {
 
   const openFromPath = useCallback(
     async (path: string) => {
+      if (!confirmDiscard(`open ${baseName(path)}`)) return;
       try {
         takeSnapshot();
         const graph = deserializeGraph(await readStudioWorkflow(path));
@@ -717,7 +730,7 @@ function Studio() {
         setMessage(`open failed: ${String(err)}`);
       }
     },
-    [takeSnapshot, loadGraphIntoEditor, rememberFile],
+    [takeSnapshot, loadGraphIntoEditor, rememberFile, confirmDiscard],
   );
 
   const saveToPath = useCallback(
@@ -773,6 +786,7 @@ function Studio() {
   }, [projectDir, refreshProjectFiles]);
 
   const newWorkflow = useCallback(() => {
+    if (!confirmDiscard("New")) return;
     takeSnapshot();
     skipDirty.current = true;
     setNodes([]);
@@ -781,9 +795,10 @@ function Studio() {
     setCurrentFile(null);
     setFileDirty(false);
     setMessage("new workflow");
-  }, [setNodes, setEdges, takeSnapshot]);
+  }, [setNodes, setEdges, takeSnapshot, confirmDiscard]);
 
   const clear = useCallback(() => {
+    if (!confirmDiscard("Clear")) return;
     takeSnapshot();
     skipDirty.current = true;
     setNodes([]);
@@ -793,9 +808,10 @@ function Studio() {
     setFileDirty(false);
     clearPersistedGraph();
     if (isTauri()) void clearStudioAutosave().catch((err) => setMessage(`clear autosave failed: ${String(err)}`));
-  }, [setNodes, setEdges, takeSnapshot]);
+  }, [setNodes, setEdges, takeSnapshot, confirmDiscard]);
 
   const resetSample = useCallback(() => {
+    if (!confirmDiscard("Reset")) return;
     takeSnapshot();
     skipDirty.current = true;
     setNodes(initialNodes);
@@ -804,7 +820,7 @@ function Studio() {
     setCurrentFile(null);
     setFileDirty(false);
     setMessage("reset to sample workflow");
-  }, [setNodes, setEdges, takeSnapshot]);
+  }, [setNodes, setEdges, takeSnapshot, confirmDiscard]);
 
   // Restore the persisted project folder + recent files on desktop start.
   useEffect(() => {
@@ -852,6 +868,17 @@ function Studio() {
     }
     setFileDirty(true);
   }, [nodes, edges]);
+
+  // Warn before closing the tab/window while there are unsaved file edits.
+  useEffect(() => {
+    if (!fileDirty) return;
+    const handler = (event: BeforeUnloadEvent) => {
+      event.preventDefault();
+      event.returnValue = "";
+    };
+    window.addEventListener("beforeunload", handler);
+    return () => window.removeEventListener("beforeunload", handler);
+  }, [fileDirty]);
 
   // Autosave to the workspace (debounced). Desktop builds persist through the
   // Rust backend; browser preview falls back to localStorage.

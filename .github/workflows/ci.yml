@@ -78,7 +78,7 @@ jobs:
           python-version: '3.x'
 
       - name: Install runtime + test deps
-        run: pip install Pillow numpy pytest
+        run: pip install Pillow numpy pytest attrs
 
       - name: Run bridge tests
         run: python -m pytest python/bridge/tests -q

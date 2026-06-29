@@ -90,3 +90,49 @@ pub(super) fn execute_studio_psd_context_analyze(
         ("placeholder_bounds", placeholder_bounds),
     ]))
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn node() -> StudioGraphNode {
+        StudioGraphNode {
+            id: "n1".to_string(),
+            kind: "psdContextAnalyze".to_string(),
+            params: BTreeMap::new(),
+        }
+    }
+
+    #[test]
+    fn rejects_missing_template() {
+        // Neither a connected `template` input nor a `psd_path` param: must fail
+        // fast with a clear message before shelling out to the python bridge.
+        let err = execute_studio_psd_context_analyze(&node(), &BTreeMap::new()).unwrap_err();
+        assert!(err.contains("needs a PSD template"), "{err}");
+    }
+
+    #[test]
+    fn blank_template_input_is_rejected() {
+        let mut inputs = BTreeMap::new();
+        inputs.insert("template".to_string(), json!("   "));
+        let err = execute_studio_psd_context_analyze(&node(), &inputs).unwrap_err();
+        assert!(err.contains("needs a PSD template"), "{err}");
+    }
+
+    #[test]
+    fn lines_trims_and_drops_blanks() {
+        // `reference_layers` is a newline-delimited param; parsing must trim and
+        // drop empty lines so a trailing newline does not inject a "" layer.
+        assert_eq!(
+            lines("  Sky \n\n  Wall  \n"),
+            vec!["Sky".to_string(), "Wall".to_string()]
+        );
+        assert!(lines("   \n  ").is_empty());
+    }
+
+    #[test]
+    fn optional_maps_blank_to_none() {
+        assert_eq!(optional("   ".to_string()), None);
+        assert_eq!(optional(" Layer 1 ".to_string()), Some("Layer 1".to_string()));
+    }
+}

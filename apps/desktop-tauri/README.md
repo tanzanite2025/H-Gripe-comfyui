@@ -45,13 +45,24 @@ it is a high-level canvas, not the final main UI. The app opens on
   web UI in an `<iframe>` inside the app (it also offers an "Open in browser"
   escape hatch). This replaces the earlier "open in the system browser" flow.
 
-The shell frontend is a dependency-free static page (`dist/`) using Tauri's
-global API (`window.__TAURI__`); the Rust backend lives in `src-tauri/`. The
-**Node Editor** is the one exception: it is a Vite + React + TypeScript sub-app
-in [`studio-ui/`](studio-ui/) whose build output is served at `dist/studio/`
-(gitignored). Its Tauri bridge reaches IPC via the parent window, so the
-embedded editor can call backend commands (e.g. `run_task_json`,
-`generate_thumbnail`).
+The shell frontend is a dependency-free Vite + TypeScript app in
+[`shell-ui/`](shell-ui/) (no runtime dependencies, no React) that builds to the
+Tauri `frontendDist` at `dist/` (gitignored); the Rust backend lives in
+`src-tauri/`. All Tauri IPC goes through a single typed wrapper
+([`shell-ui/src/tauri.ts`](shell-ui/src/tauri.ts)) whose command argument /
+return types mirror the Rust `#[tauri::command]` signatures, so a rename or
+shape change surfaces as a `tsc` error instead of a silent runtime drift. The
+**Node Editor** is a separate Vite + React + TypeScript sub-app in
+[`studio-ui/`](studio-ui/) whose build output is served at `dist/studio/` (also
+gitignored). Its Tauri bridge reaches IPC via the parent window, so the embedded
+editor can call backend commands (e.g. `run_task_json`, `generate_thumbnail`).
+
+> **`dist/` is a build artifact.** Both the shell (`shell-ui/` → `dist/`) and
+> the Node Editor (`studio-ui/` → `dist/studio/`) are generated and gitignored.
+> The Tauri before* hooks build the shell **first** (which empties `dist/`) and
+> studio-ui **second** (which writes `dist/studio/`), so the two coexist. A bare
+> `cargo run` does **not** run these hooks and will show a blank window; build
+> the frontends first (see below) or use the Tauri CLI.
 
 > **Security (CSP):** `tauri.conf.json` now sets an explicit
 > `app.security.csp` instead of `null`. It keeps `default-src 'self'` while
@@ -61,7 +72,8 @@ embedded editor can call backend commands (e.g. `run_task_json`,
 > `frame-src` for the embedded **Node Editor** (same origin) and **Advanced
 > Canvas** ComfyUI iframe on loopback (`http://127.0.0.1:*`/`http://localhost:*`,
 > so a user-chosen port still embeds). All dynamic data spliced into the shell's
-> `innerHTML` is HTML-escaped (`esc()` in `dist/app.js`).
+> `innerHTML` is HTML-escaped (`esc()` in `shell-ui/src/dom.ts`). The bundle is
+> loaded as an external module script (`script-src 'self'`, no inline scripts).
 >
 > **Still to validate before release:** confirm with a **release build** that
 > both iframes load and IPC works under this CSP (the dev box used to author it
@@ -79,20 +91,29 @@ embedded editor can call backend commands (e.g. `run_task_json`,
 ## Build & run
 
 ```sh
-# Build the Node Editor sub-app once (and after changing studio-ui).
-# A plain `cargo run` does NOT build it; the Node Editor tab shows a hint
-# until this has run. The Tauri CLI runs this automatically (before* hooks).
+# Build the frontends. A plain `cargo run` does NOT build them (the window
+# would be blank / the Node Editor tab shows a hint). The Tauri CLI runs these
+# automatically via the before* hooks. Build the shell FIRST (it empties
+# dist/), then studio-ui (it writes dist/studio/), so the two coexist.
+npm --prefix apps/desktop-tauri/shell-ui ci
+npm --prefix apps/desktop-tauri/shell-ui run build    # -> apps/desktop-tauri/dist
 npm --prefix apps/desktop-tauri/studio-ui ci
 npm --prefix apps/desktop-tauri/studio-ui run build   # -> apps/desktop-tauri/dist/studio
 
-# from the repository root
+# from the repository root (only after the frontends are built)
 cargo run -p hgripe-desktop          # debug run
 cargo build -p hgripe-desktop --release
 
-# or, with the Tauri CLI (npm i -g @tauri-apps/cli) — builds studio-ui for you
+# or, with the Tauri CLI (npm i -g @tauri-apps/cli) — builds both frontends
+# for you in the right order (before* hooks)
 cd apps/desktop-tauri
+tauri dev                            # debug, with the frontend build hooks
 tauri build
 ```
+
+For shell development you can also run the Vite dev server
+(`npm --prefix apps/desktop-tauri/shell-ui run dev`) or type-check in isolation
+(`npm --prefix apps/desktop-tauri/shell-ui run typecheck`).
 
 App icons are generated from `app-icon.png` via `tauri icon app-icon.png
 --output src-tauri/icons`.

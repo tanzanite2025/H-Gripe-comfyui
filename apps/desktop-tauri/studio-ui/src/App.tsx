@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useMemo, useRef, useState } from "react";
 import {
   ReactFlowProvider,
   useEdgesState,
@@ -30,52 +30,19 @@ import { getHelperLines } from "./editor/helperLines";
 import { layeredPositions } from "./editor/layout";
 import type { HgripeNodeData } from "./editor/HgripeNode";
 import { fromWorkflowGraph, toWorkflowGraph } from "./editor/adapter";
-import { ProjectPanel, baseName } from "./editor/ProjectPanel";
+import { ProjectPanel } from "./editor/ProjectPanel";
 import { Toolbar } from "./editor/Toolbar";
 import { RunLog } from "./editor/RunLogPanel";
-import { SnapshotsPanel, type SnapshotDiffView } from "./editor/SnapshotsPanel";
+import { SnapshotsPanel } from "./editor/SnapshotsPanel";
 import { RunHistoryPanel } from "./editor/RunHistoryPanel";
-import { diffGraphs } from "./editor/snapshotdiff";
-import { useProjectScopedStore } from "./editor/useProjectScopedStore";
 import { useKeyboardShortcuts } from "./editor/useKeyboardShortcuts";
 import { useStudioRunController } from "./editor/useStudioRunController";
+import { useStudioFileController } from "./editor/useStudioFileController";
 import { LangContext, loadLang, saveLang, type Lang } from "./i18n";
-import {
-  addSnapshot,
-  loadAutoSnapshotPref,
-  loadSnapshots,
-  newSnapshotId,
-  parseSnapshots,
-  removeSnapshot,
-  renameSnapshot,
-  saveAutoSnapshotPref,
-  saveSnapshots,
-  type Snapshot,
-} from "./editor/snapshots";
-import { clearPersistedGraph, loadPersistedGraph, persistGraph } from "./editor/persist";
+import { loadPersistedGraph } from "./editor/persist";
 import { defaultParams } from "./graph/nodeSpecs";
-import { deserializeGraph, serializeGraph, type WorkflowGraph } from "./graph/model";
 import { topoLevels, validateGraph } from "./runtime/dag";
-import {
-  clearStudioAutosave,
-  deleteStudioWorkflow,
-  duplicateStudioWorkflow,
-  isTauri,
-  listStudioWorkflows,
-  pickProjectFolder,
-  pickWorkflowOpenPath,
-  pickWorkflowSavePath,
-  readStudioAutosave,
-  readStudioRecents,
-  readStudioSnapshots,
-  readStudioWorkflow,
-  renameStudioWorkflow,
-  writeStudioAutosave,
-  writeStudioRecents,
-  writeStudioSnapshots,
-  writeStudioWorkflow,
-  type StudioWorkflowFile,
-} from "./bridge/tauri";
+import { isTauri } from "./bridge/tauri";
 
 function makeNode(id: string, kind: string, x: number, y: number, params?: Record<string, unknown>): Node {
   const data: HgripeNodeData = { kind, params: { ...defaultParams(kind), ...params }, status: "idle" };
@@ -106,10 +73,6 @@ function Studio() {
   const [nodes, setNodes, onNodesChange] = useNodesState(initial.nodes);
   const [edges, setEdges, onEdgesChange] = useEdgesState(initial.edges);
   const [selectedId, setSelectedId] = useState<string | null>(null);
-  const [snapshots, setSnapshots] = useState<Snapshot[]>(() => loadSnapshots());
-  const [showSnapshots, setShowSnapshots] = useState(false);
-  const [snapshotDiff, setSnapshotDiff] = useState<SnapshotDiffView | null>(null);
-  const [autoSnapshot, setAutoSnapshot] = useState<boolean>(() => loadAutoSnapshotPref());
   const [snapToGrid, setSnapToGrid] = useState(false);
   const [lang, setLang] = useState<Lang>(() => loadLang());
   const toggleLang = useCallback(() => {
@@ -124,34 +87,16 @@ function Studio() {
   const [showMinimap, setShowMinimap] = useState(true);
   const [menu, setMenu] = useState<{ x: number; y: number; nodeId: string | null } | null>(null);
   const { fitView } = useReactFlow();
-  const [saved, setSaved] = useState(restoredOnMount.current);
+  const isDesktop = isTauri();
   const [message, setMessage] = useState<string>(
-    isTauri()
+    isDesktop
       ? restoredOnMount.current
         ? "restored last workflow"
         : ""
       : "browser preview (backend mocked)",
   );
-  const [desktopAutosaveReady, setDesktopAutosaveReady] = useState(!isTauri());
-
-  // Explicit save/open + project folder. `currentFile` is the on-disk workflow
-  // backing the editor (null = untitled); `fileDirty` tracks unsaved edits
-  // against it (separate from the workspace autosave indicator).
-  const isDesktop = isTauri();
-  const [projectDir, setProjectDir] = useState<string | null>(null);
-  const [workflowFiles, setWorkflowFiles] = useState<StudioWorkflowFile[]>([]);
-  const [recentFiles, setRecentFiles] = useState<string[]>([]);
-  const [currentFile, setCurrentFile] = useState<string | null>(null);
-  const [fileDirty, setFileDirty] = useState(false);
-  const [showProject, setShowProject] = useState(false);
-  const [projectBusy, setProjectBusy] = useState(false);
-  const [recentsReady, setRecentsReady] = useState(!isTauri());
-  // Skips the next dirty-mark when the graph is swapped programmatically
-  // (mount restore, open, new) rather than by a user edit.
-  const skipDirty = useRef(true);
 
   const idSeq = useRef(0);
-  const fileInput = useRef<HTMLInputElement | null>(null);
   const clipboard = useRef<Clip | null>(null);
   // True while a node drag is in progress, so we snapshot only once per drag.
   const dragging = useRef(false);
@@ -168,37 +113,69 @@ function Studio() {
     [nodes, selectedId],
   );
 
-  useEffect(() => {
-    if (!isTauri()) return;
-    let cancelled = false;
-    void readStudioAutosave()
-      .then((raw) => {
-        if (cancelled || !raw) return;
-        const graph = deserializeGraph(raw);
-        const next = fromWorkflowGraph(graph);
-        skipDirty.current = true;
-        setNodes(next.nodes);
-        setEdges(next.edges);
-        setSelectedId(null);
-        setSaved(true);
-        setMessage("restored desktop workflow");
-      })
-      .catch((err) => {
-        if (!cancelled) setMessage(`desktop autosave restore failed: ${String(err)}`);
-      })
-      .finally(() => {
-        if (!cancelled) setDesktopAutosaveReady(true);
-      });
-    return () => {
-      cancelled = true;
-    };
-  }, [setNodes, setEdges]);
-
   // Static validation surfaced in the toolbar (type mismatches, cycles, …).
   const issues = useMemo(
     () => validateGraph(toWorkflowGraph(nodes, edges)),
     [nodes, edges],
   );
+
+  // File/persistence layer: workspace autosave, explicit save/open into a
+  // project folder, recent files, and the project-scoped snapshot history. The
+  // editor reaches it through the returned actions/state; graph mutation stays
+  // here. (Run/log/history live in useStudioRunController, below.)
+  const file = useStudioFileController({
+    nodes,
+    edges,
+    setNodes,
+    setEdges,
+    setSelectedId,
+    takeSnapshot,
+    setMessage,
+    sampleNodes: initialNodes,
+    sampleEdges: initialEdges,
+    restoredOnMount: restoredOnMount.current,
+  });
+  const {
+    saved,
+    currentFile,
+    fileDirty,
+    projectDir,
+    workflowFiles,
+    recentFiles,
+    showProject,
+    setShowProject,
+    projectBusy,
+    fileInputRef,
+    handleSave,
+    handleSaveAs,
+    handleOpen,
+    handlePickFolder,
+    handleNewInFolder,
+    handleRenameFile,
+    handleDuplicateFile,
+    handleDeleteFile,
+    openFromPath,
+    refreshProjectFiles,
+    load,
+    newWorkflow,
+    clear,
+    resetSample,
+    snapshots,
+    showSnapshots,
+    setShowSnapshots,
+    snapshotDiff,
+    clearSnapshotDiff,
+    autoSnapshot,
+    setAutoSnapshot,
+    captureSnapshot,
+    restoreSnapshot,
+    diffSnapshot,
+    renameSnapshotById,
+    deleteSnapshot,
+    projectStoreDir,
+    autoSnapshotBeforeRun,
+    suppressNextDirty,
+  } = file;
 
   const patchNode = useCallback(
     (id: string, patch: Partial<HgripeNodeData>) => {
@@ -332,11 +309,11 @@ function Studio() {
   // so it must not flag the file dirty.
   const focusNode = useCallback(
     (nodeId: string) => {
-      skipDirty.current = true;
+      suppressNextDirty();
       setNodes((ns) => ns.map((n) => ({ ...n, selected: n.id === nodeId })));
       setSelectedId(nodeId);
     },
-    [setNodes],
+    [setNodes, suppressNextDirty],
   );
 
   // Select a node and pan/zoom the viewport to center it (used by node search).
@@ -347,37 +324,6 @@ function Studio() {
     },
     [focusNode, fitView],
   );
-
-  // Capture the current graph under a given name (no prompt).
-  const captureNamed = useCallback(
-    (name: string) => {
-      const graph = toWorkflowGraph(nodes, edges);
-      const snap: Snapshot = { id: newSnapshotId(), name, t: Date.now(), graph };
-      setSnapshots((list) => addSnapshot(list, snap));
-      return snap;
-    },
-    [nodes, edges],
-  );
-
-  // Capture the current graph as a named snapshot (prompts for a name).
-  const captureSnapshot = useCallback(() => {
-    const suggested = `Snapshot ${new Date().toLocaleString()}`;
-    const name = window.prompt("Snapshot name", suggested);
-    if (name === null) return;
-    const snap = captureNamed(name.trim() || suggested);
-    setMessage(`snapshot saved: ${snap.name}`);
-  }, [captureNamed]);
-
-  // Auto-capture before a run (when enabled and the graph is non-empty).
-  const autoSnapshotBeforeRun = useCallback(() => {
-    if (!autoSnapshot || nodes.length === 0) return;
-    captureNamed(`Auto · ${new Date().toLocaleTimeString()}`);
-  }, [autoSnapshot, nodes.length, captureNamed]);
-
-  // Snapshots and run history are both project-scoped stores: persisted into
-  // the selected project folder on desktop (so they travel with the project),
-  // else to localStorage.
-  const projectStoreDir = isDesktop ? projectDir : null;
 
   // The run lifecycle, run log, and run history live in their own controller.
   // The editor reaches it through these callbacks and consumes the returned
@@ -513,410 +459,6 @@ function Studio() {
     ];
   }, [menu, edges, duplicateNode, disconnectNode, deleteNode, tidyLayout, fitView, pasteClipboard]);
 
-  // Swap the editor graph without flagging it as an unsaved user edit.
-  const loadGraphIntoEditor = useCallback(
-    (graph: WorkflowGraph) => {
-      skipDirty.current = true;
-      const next = fromWorkflowGraph(graph);
-      setNodes(next.nodes);
-      setEdges(next.edges);
-      setSelectedId(null);
-    },
-    [setNodes, setEdges],
-  );
-
-  // Browser-preview download: there is no native filesystem, so Save / Save As
-  // fall back to a JSON download.
-  const downloadWorkflow = useCallback(() => {
-    const json = serializeGraph(toWorkflowGraph(nodes, edges));
-    const blob = new Blob([json], { type: "application/json" });
-    const url = URL.createObjectURL(blob);
-    const a = document.createElement("a");
-    a.href = url;
-    a.download = currentFile ? baseName(currentFile) : "workflow.json";
-    a.click();
-    URL.revokeObjectURL(url);
-  }, [nodes, edges, currentFile]);
-
-  // Guard destructive actions that would replace the current graph. Returns
-  // true when it is safe to proceed (no unsaved edits, or the user confirms).
-  const confirmDiscard = useCallback(
-    (action: string): boolean => {
-      if (!fileDirty) return true;
-      const label = currentFile ? baseName(currentFile) : "this workflow";
-      return window.confirm(`Discard unsaved changes to ${label}? (${action})`);
-    },
-    [fileDirty, currentFile],
-  );
-
-  // Snapshots are a project-scoped store: persisted into the selected project
-  // folder on desktop (so they travel with the project), else to localStorage.
-  // The shared hook owns the load/persist effects. (Run history follows the
-  // same pattern, owned by useStudioRunController.)
-  useProjectScopedStore({
-    dir: projectStoreDir,
-    state: snapshots,
-    setState: setSnapshots,
-    parse: parseSnapshots,
-    read: readStudioSnapshots,
-    write: writeStudioSnapshots,
-    saveLocal: saveSnapshots,
-    label: "snapshots",
-    onError: setMessage,
-  });
-
-  // Persist the auto-snapshot preference.
-  useEffect(() => {
-    saveAutoSnapshotPref(autoSnapshot);
-  }, [autoSnapshot]);
-
-  // Restore a snapshot into the editor (guarded by the unsaved-changes check).
-  const restoreSnapshot = useCallback(
-    (id: string) => {
-      const snap = snapshots.find((s) => s.id === id);
-      if (!snap) return;
-      if (!confirmDiscard(`restore ${snap.name}`)) return;
-      takeSnapshot();
-      loadGraphIntoEditor(snap.graph);
-      setFileDirty(true);
-      setMessage(`restored snapshot: ${snap.name}`);
-    },
-    [snapshots, confirmDiscard, takeSnapshot, loadGraphIntoEditor],
-  );
-
-  // Compare a snapshot against the live graph (no mutation — read-only diff).
-  const diffSnapshot = useCallback(
-    (id: string) => {
-      const snap = snapshots.find((s) => s.id === id);
-      if (!snap) return;
-      const current = toWorkflowGraph(nodes, edges);
-      setSnapshotDiff({ id: snap.id, name: snap.name, diff: diffGraphs(snap.graph, current) });
-    },
-    [snapshots, nodes, edges],
-  );
-
-  const renameSnapshotById = useCallback((id: string) => {
-    setSnapshots((list) => {
-      const snap = list.find((s) => s.id === id);
-      const name = window.prompt("Rename snapshot", snap?.name ?? "");
-      if (name === null) return list;
-      return renameSnapshot(list, id, name);
-    });
-  }, []);
-
-  const deleteSnapshot = useCallback((id: string) => {
-    setSnapshots((list) => {
-      const snap = list.find((s) => s.id === id);
-      if (snap && !window.confirm(`Delete snapshot "${snap.name}"?`)) return list;
-      return removeSnapshot(list, id);
-    });
-  }, []);
-
-  // Browser-preview upload (the hidden file input). Desktop uses native dialogs.
-  const load = useCallback(
-    async (file: File) => {
-      if (!confirmDiscard(`load ${file.name}`)) return;
-      try {
-        takeSnapshot();
-        const graph = deserializeGraph(await file.text());
-        loadGraphIntoEditor(graph);
-        setCurrentFile(null);
-        setFileDirty(false);
-        setMessage(`loaded ${file.name}`);
-      } catch (err) {
-        setMessage(`load failed: ${String(err)}`);
-      }
-    },
-    [takeSnapshot, loadGraphIntoEditor, confirmDiscard],
-  );
-
-  const refreshProjectFiles = useCallback(async (dir: string) => {
-    setProjectBusy(true);
-    try {
-      setWorkflowFiles(await listStudioWorkflows(dir));
-    } catch (err) {
-      setMessage(`folder scan failed: ${String(err)}`);
-    } finally {
-      setProjectBusy(false);
-    }
-  }, []);
-
-  // Most-recent-first, de-duplicated, capped recent-files list.
-  const rememberFile = useCallback((path: string) => {
-    setRecentFiles((prev) => [path, ...prev.filter((p) => p !== path)].slice(0, 8));
-  }, []);
-
-  const openFromPath = useCallback(
-    async (path: string) => {
-      if (!confirmDiscard(`open ${baseName(path)}`)) return;
-      try {
-        takeSnapshot();
-        const graph = deserializeGraph(await readStudioWorkflow(path));
-        loadGraphIntoEditor(graph);
-        setCurrentFile(path);
-        setFileDirty(false);
-        rememberFile(path);
-        setMessage(`opened ${baseName(path)}`);
-      } catch (err) {
-        setMessage(`open failed: ${String(err)}`);
-      }
-    },
-    [takeSnapshot, loadGraphIntoEditor, rememberFile, confirmDiscard],
-  );
-
-  const saveToPath = useCallback(
-    async (path: string) => {
-      try {
-        await writeStudioWorkflow(path, toWorkflowGraph(nodes, edges));
-        setCurrentFile(path);
-        setFileDirty(false);
-        rememberFile(path);
-        if (projectDir && path.startsWith(projectDir)) void refreshProjectFiles(projectDir);
-        setMessage(`saved ${baseName(path)}`);
-      } catch (err) {
-        setMessage(`save failed: ${String(err)}`);
-      }
-    },
-    [nodes, edges, projectDir, rememberFile, refreshProjectFiles],
-  );
-
-  const handleSaveAs = useCallback(async () => {
-    if (!isDesktop) {
-      downloadWorkflow();
-      return;
-    }
-    const defaultName = currentFile ? baseName(currentFile) : "workflow.json";
-    const path = await pickWorkflowSavePath(defaultName, projectDir);
-    if (path) await saveToPath(path);
-  }, [isDesktop, currentFile, projectDir, saveToPath, downloadWorkflow]);
-
-  const handleSave = useCallback(async () => {
-    if (!isDesktop) {
-      downloadWorkflow();
-      return;
-    }
-    if (currentFile) await saveToPath(currentFile);
-    else await handleSaveAs();
-  }, [isDesktop, currentFile, saveToPath, handleSaveAs, downloadWorkflow]);
-
-  const handleOpen = useCallback(async () => {
-    if (!isDesktop) {
-      fileInput.current?.click();
-      return;
-    }
-    const path = await pickWorkflowOpenPath(projectDir);
-    if (path) await openFromPath(path);
-  }, [isDesktop, projectDir, openFromPath]);
-
-  const handlePickFolder = useCallback(async () => {
-    const dir = await pickProjectFolder(projectDir);
-    if (dir) {
-      setProjectDir(dir);
-      void refreshProjectFiles(dir);
-    }
-  }, [projectDir, refreshProjectFiles]);
-
-  // Create a new, empty workflow saved straight into the active project folder.
-  const handleNewInFolder = useCallback(async () => {
-    if (!projectDir) return;
-    if (!confirmDiscard("New file")) return;
-    const input = window.prompt("New workflow file name", "workflow.json");
-    if (!input) return;
-    const trimmed = input.trim();
-    if (!trimmed) return;
-    const fileName = /\.json$/i.test(trimmed) ? trimmed : `${trimmed}.json`;
-    const sep = projectDir.includes("\\") ? "\\" : "/";
-    const target = `${projectDir.replace(/[\\/]$/, "")}${sep}${fileName}`;
-    try {
-      await writeStudioWorkflow(target, toWorkflowGraph([], []));
-      skipDirty.current = true;
-      setNodes([]);
-      setEdges([]);
-      setSelectedId(null);
-      setCurrentFile(target);
-      setFileDirty(false);
-      rememberFile(target);
-      void refreshProjectFiles(projectDir);
-      setMessage(`created ${fileName}`);
-    } catch (err) {
-      setMessage(`create failed: ${String(err)}`);
-    }
-  }, [projectDir, confirmDiscard, setNodes, setEdges, rememberFile, refreshProjectFiles]);
-
-  const handleRenameFile = useCallback(
-    async (path: string) => {
-      const current = baseName(path);
-      const input = window.prompt("Rename workflow", current);
-      if (!input) return;
-      const next = input.trim();
-      if (!next || next === current) return;
-      try {
-        const newPath = await renameStudioWorkflow(path, next);
-        setCurrentFile((cur) => (cur === path ? newPath : cur));
-        setRecentFiles((prev) => prev.map((p) => (p === path ? newPath : p)));
-        if (projectDir) void refreshProjectFiles(projectDir);
-        setMessage(`renamed to ${baseName(newPath)}`);
-      } catch (err) {
-        setMessage(`rename failed: ${String(err)}`);
-      }
-    },
-    [projectDir, refreshProjectFiles],
-  );
-
-  const handleDuplicateFile = useCallback(
-    async (path: string) => {
-      try {
-        const newPath = await duplicateStudioWorkflow(path);
-        if (projectDir) void refreshProjectFiles(projectDir);
-        setMessage(`duplicated to ${baseName(newPath)}`);
-      } catch (err) {
-        setMessage(`duplicate failed: ${String(err)}`);
-      }
-    },
-    [projectDir, refreshProjectFiles],
-  );
-
-  const handleDeleteFile = useCallback(
-    async (path: string) => {
-      if (!window.confirm(`Delete ${baseName(path)}? This cannot be undone.`)) return;
-      try {
-        await deleteStudioWorkflow(path);
-        setCurrentFile((cur) => (cur === path ? null : cur));
-        setRecentFiles((prev) => prev.filter((p) => p !== path));
-        if (projectDir) void refreshProjectFiles(projectDir);
-        setMessage(`deleted ${baseName(path)}`);
-      } catch (err) {
-        setMessage(`delete failed: ${String(err)}`);
-      }
-    },
-    [projectDir, refreshProjectFiles],
-  );
-
-  const newWorkflow = useCallback(() => {
-    if (!confirmDiscard("New")) return;
-    takeSnapshot();
-    skipDirty.current = true;
-    setNodes([]);
-    setEdges([]);
-    setSelectedId(null);
-    setCurrentFile(null);
-    setFileDirty(false);
-    setMessage("new workflow");
-  }, [setNodes, setEdges, takeSnapshot, confirmDiscard]);
-
-  const clear = useCallback(() => {
-    if (!confirmDiscard("Clear")) return;
-    takeSnapshot();
-    skipDirty.current = true;
-    setNodes([]);
-    setEdges([]);
-    setSelectedId(null);
-    setCurrentFile(null);
-    setFileDirty(false);
-    clearPersistedGraph();
-    if (isTauri()) void clearStudioAutosave().catch((err) => setMessage(`clear autosave failed: ${String(err)}`));
-  }, [setNodes, setEdges, takeSnapshot, confirmDiscard]);
-
-  const resetSample = useCallback(() => {
-    if (!confirmDiscard("Reset")) return;
-    takeSnapshot();
-    skipDirty.current = true;
-    setNodes(initialNodes);
-    setEdges(initialEdges);
-    setSelectedId(null);
-    setCurrentFile(null);
-    setFileDirty(false);
-    setMessage("reset to sample workflow");
-  }, [setNodes, setEdges, takeSnapshot, confirmDiscard]);
-
-  // Restore the persisted project folder + recent files on desktop start.
-  useEffect(() => {
-    if (!isDesktop) return;
-    let cancelled = false;
-    void readStudioRecents()
-      .then((recents) => {
-        if (cancelled) return;
-        setProjectDir(recents.project_dir ?? null);
-        setCurrentFile(recents.current_file ?? null);
-        setRecentFiles(recents.files ?? []);
-        if (recents.project_dir) {
-          setShowProject(true);
-          void refreshProjectFiles(recents.project_dir);
-        }
-      })
-      .catch(() => {
-        /* no recents yet — start clean */
-      })
-      .finally(() => {
-        if (!cancelled) setRecentsReady(true);
-      });
-    return () => {
-      cancelled = true;
-    };
-  }, [isDesktop, refreshProjectFiles]);
-
-  // Persist project folder + recent files whenever they change (after restore).
-  useEffect(() => {
-    if (!isDesktop || !recentsReady) return;
-    void writeStudioRecents({
-      project_dir: projectDir,
-      current_file: currentFile,
-      files: recentFiles,
-    }).catch(() => {
-      /* best-effort */
-    });
-  }, [isDesktop, recentsReady, projectDir, currentFile, recentFiles]);
-
-  // Flag the current file dirty on user edits (programmatic swaps set skipDirty).
-  useEffect(() => {
-    if (skipDirty.current) {
-      skipDirty.current = false;
-      return;
-    }
-    setFileDirty(true);
-  }, [nodes, edges]);
-
-  // Warn before closing the tab/window while there are unsaved file edits.
-  useEffect(() => {
-    if (!fileDirty) return;
-    const handler = (event: BeforeUnloadEvent) => {
-      event.preventDefault();
-      event.returnValue = "";
-    };
-    window.addEventListener("beforeunload", handler);
-    return () => window.removeEventListener("beforeunload", handler);
-  }, [fileDirty]);
-
-  // Autosave to the workspace (debounced). Desktop builds persist through the
-  // Rust backend; browser preview falls back to localStorage.
-  useEffect(() => {
-    if (isTauri() && !desktopAutosaveReady) return;
-    setSaved(false);
-    let cancelled = false;
-    const t = setTimeout(() => {
-      const graph = toWorkflowGraph(nodes, edges);
-      if (isTauri()) {
-        void writeStudioAutosave(graph)
-          .then(() => {
-            if (!cancelled) setSaved(true);
-          })
-          .catch((err) => {
-            if (!cancelled) {
-              setSaved(false);
-              setMessage(`autosave failed: ${String(err)}`);
-            }
-          });
-      } else {
-        persistGraph(graph);
-        setSaved(true);
-      }
-    }, 500);
-    return () => {
-      cancelled = true;
-      clearTimeout(t);
-    };
-  }, [nodes, edges, desktopAutosaveReady]);
-
   // Select every node and edge (Ctrl/Cmd+A).
   const selectAll = useCallback(() => {
     setNodes((ns) => ns.map((n) => ({ ...n, selected: true })));
@@ -975,7 +517,7 @@ function Studio() {
         onSaveAs={() => void handleSaveAs()}
         onReset={resetSample}
         onClear={clear}
-        fileInputRef={fileInput}
+        fileInputRef={fileInputRef}
         onFilePicked={(f) => void load(f)}
         snapToGrid={snapToGrid}
         setSnapToGrid={setSnapToGrid}
@@ -1023,7 +565,7 @@ function Studio() {
               onDelete={deleteSnapshot}
               onDiff={diffSnapshot}
               diff={snapshotDiff}
-              onClearDiff={() => setSnapshotDiff(null)}
+              onClearDiff={clearSnapshotDiff}
               onClose={() => setShowSnapshots(false)}
             />
           )}

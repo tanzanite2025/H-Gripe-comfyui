@@ -1,0 +1,8 @@
+{
+  "name": "h-gripe-studio",
+  "marker": "h-gripe.project.root",
+  "description": "Marks the H-Gripe Studio project root. The Tauri desktop app (resolve_project_dir) uses this file to locate the python/bridge image/PSD runtime, decoupled from ComfyUI's main.py.",
+  "runtime": {
+    "python_bridge": "python/bridge"
+  }
+}

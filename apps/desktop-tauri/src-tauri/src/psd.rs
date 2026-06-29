@@ -15,8 +15,8 @@ use crate::modified_ms;
 use crate::studio::studio_reject_unsafe_basename;
 
 /// The Tauri resource directory captured at startup (see `set_resource_dir`).
-/// When the installer bundles the `main.py` + `python/bridge` +
-/// `custom_nodes/hgripe_psd_nodes` + `third_party` subtree under
+/// When the installer bundles the `h-gripe.project.json` marker together with
+/// the `python/bridge`, `custom_nodes` and `third_party` subtree under
 /// `bundle.resources`, this directory *is* a self-contained project root, so the
 /// PSD nodes keep working in a packaged build without the user pointing at a
 /// separate source checkout.
@@ -32,14 +32,23 @@ fn resource_dir() -> Option<PathBuf> {
     RESOURCE_DIR.get().cloned().flatten()
 }
 
-/// Accept `base` as the project root only if it actually hosts `main.py`,
+/// A directory is an H-Gripe project root when it holds the explicit
+/// `h-gripe.project.json` marker or the `python/bridge` runtime the PSD nodes
+/// invoke. This intentionally no longer depends on ComfyUI's `main.py`, so the
+/// ComfyUI main body can be removed without breaking the PSD nodes.
+fn is_project_root(base: &Path) -> bool {
+    base.join("h-gripe.project.json").is_file() || base.join("python").join("bridge").is_dir()
+}
+
+/// Accept `base` as the project root only if it looks like an H-Gripe project,
 /// otherwise fail fast with an actionable message.
 fn require_project_root(base: PathBuf) -> Result<PathBuf, String> {
-    if base.join("main.py").is_file() {
+    if is_project_root(&base) {
         Ok(base)
     } else {
         Err(format!(
-            "main.py not found in {} (set the project folder or HGRIPE_PROJECT_DIR)",
+            "not an H-Gripe project folder: {} (expected h-gripe.project.json or python/bridge; \
+             set the project folder or HGRIPE_PROJECT_DIR)",
             base.display()
         ))
     }
@@ -50,11 +59,12 @@ fn require_project_root(base: PathBuf) -> Result<PathBuf, String> {
 ///   1. the caller-provided path (the folder picked in the UI),
 ///   2. the `HGRIPE_PROJECT_DIR` environment variable (a packaging launcher can
 ///      point at the extracted project root without any UI),
-///   3. the process working directory when it holds `main.py` (the repo root in
-///      dev),
+///   3. the process working directory when it is a project root (the repo root
+///      in dev),
 ///   4. the bundled Tauri resource directory (a packaged install).
 ///
-/// Every branch requires `main.py` so a misconfigured folder fails fast.
+/// Every branch requires an H-Gripe project root (`is_project_root`) so a
+/// misconfigured folder fails fast.
 pub(crate) fn resolve_project_dir(dir: &Option<String>) -> Result<PathBuf, String> {
     if let Some(d) = dir.as_deref().map(str::trim).filter(|d| !d.is_empty()) {
         return require_project_root(PathBuf::from(d));
@@ -66,18 +76,19 @@ pub(crate) fn resolve_project_dir(dir: &Option<String>) -> Result<PathBuf, Strin
         return require_project_root(env_dir);
     }
     if let Ok(cwd) = std::env::current_dir() {
-        if cwd.join("main.py").is_file() {
+        if is_project_root(&cwd) {
             return Ok(cwd);
         }
     }
     if let Some(res) = resource_dir() {
-        if res.join("main.py").is_file() {
+        if is_project_root(&res) {
             return Ok(res);
         }
     }
     Err(
-        "main.py not found in the working directory or bundled resources \
-         (set the project folder or HGRIPE_PROJECT_DIR)"
+        "no H-Gripe project root found in the working directory or bundled resources \
+         (expected h-gripe.project.json or python/bridge; set the project folder or \
+         HGRIPE_PROJECT_DIR)"
             .to_string(),
     )
 }
@@ -1232,7 +1243,9 @@ pub(crate) fn composite_repaint(
 
 #[cfg(test)]
 mod tests {
-    use super::{reject_unsafe_output_name, require_project_root, resolve_project_dir};
+    use super::{
+        is_project_root, reject_unsafe_output_name, require_project_root, resolve_project_dir,
+    };
     use std::fs;
     use std::path::PathBuf;
 
@@ -1247,18 +1260,28 @@ mod tests {
     }
 
     #[test]
-    fn require_project_root_accepts_folder_with_main_py() {
-        let dir = unique_tmp_dir("root_ok");
-        fs::write(dir.join("main.py"), b"# stub\n").unwrap();
+    fn require_project_root_accepts_folder_with_marker() {
+        let dir = unique_tmp_dir("root_marker");
+        fs::write(dir.join("h-gripe.project.json"), b"{}\n").unwrap();
         assert_eq!(require_project_root(dir.clone()).unwrap(), dir);
         let _ = fs::remove_dir_all(&dir);
     }
 
     #[test]
-    fn require_project_root_rejects_folder_without_main_py() {
+    fn require_project_root_accepts_folder_with_python_bridge() {
+        let dir = unique_tmp_dir("root_bridge");
+        fs::create_dir_all(dir.join("python").join("bridge")).unwrap();
+        assert!(is_project_root(&dir));
+        assert_eq!(require_project_root(dir.clone()).unwrap(), dir);
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn require_project_root_rejects_unmarked_folder() {
         let dir = unique_tmp_dir("root_missing");
+        assert!(!is_project_root(&dir));
         let err = require_project_root(dir.clone()).unwrap_err();
-        assert!(err.contains("main.py not found"));
+        assert!(err.contains("not an H-Gripe project folder"));
         assert!(err.contains("HGRIPE_PROJECT_DIR"));
         let _ = fs::remove_dir_all(&dir);
     }
@@ -1266,17 +1289,17 @@ mod tests {
     #[test]
     fn resolve_project_dir_uses_explicit_folder_when_valid() {
         let dir = unique_tmp_dir("explicit");
-        fs::write(dir.join("main.py"), b"# stub\n").unwrap();
+        fs::write(dir.join("h-gripe.project.json"), b"{}\n").unwrap();
         let resolved = resolve_project_dir(&Some(dir.to_string_lossy().to_string())).unwrap();
         assert_eq!(resolved, dir);
         let _ = fs::remove_dir_all(&dir);
     }
 
     #[test]
-    fn resolve_project_dir_errors_on_explicit_folder_without_main_py() {
+    fn resolve_project_dir_errors_on_unmarked_explicit_folder() {
         let dir = unique_tmp_dir("explicit_bad");
         let err = resolve_project_dir(&Some(dir.to_string_lossy().to_string())).unwrap_err();
-        assert!(err.contains("main.py not found"));
+        assert!(err.contains("not an H-Gripe project folder"));
         let _ = fs::remove_dir_all(&dir);
     }
 

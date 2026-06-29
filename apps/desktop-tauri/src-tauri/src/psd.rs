@@ -9,7 +9,7 @@ use std::path::{Path, PathBuf};
 
 use serde::{Deserialize, Serialize};
 
-use crate::contracts::{QualityReport, VisualContext};
+use crate::contracts::{QualityReport, RepaintReport, VisualContext};
 use crate::modified_ms;
 use crate::studio::studio_reject_unsafe_basename;
 
@@ -942,6 +942,220 @@ pub(crate) fn detect_quality_issues(
     serde_json::from_str::<DetectQualityResult>(stdout.trim()).map_err(|err| {
         format!(
             "could not parse detect_quality_issues output: {err} (raw: {})",
+            stdout.trim()
+        )
+    })
+}
+
+/// One issue region prepared for repaint: the padded crop + same-size inpaint
+/// mask the orchestrator sends to the provider, plus the geometry the composite
+/// step needs to paste the result back. Fields are `snake_case` to match the
+/// `detail_repaint_cli.py` manifest; extra fields are tolerated.
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub(crate) struct PreparedRepaintRegion {
+    #[serde(default)]
+    pub(crate) index: u32,
+    #[serde(rename = "type", default)]
+    pub(crate) issue_type: Option<String>,
+    #[serde(default)]
+    pub(crate) confidence: f64,
+    #[serde(default)]
+    pub(crate) suggested_action: Option<String>,
+    #[serde(default)]
+    pub(crate) bbox: [i64; 4],
+    #[serde(default)]
+    pub(crate) crop_box: [i64; 4],
+    #[serde(default)]
+    pub(crate) inner_box: [i64; 4],
+    #[serde(default)]
+    pub(crate) size: [i64; 2],
+    /// Path to the padded crop PNG (the provider `image.edit` image input).
+    #[serde(default)]
+    pub(crate) crop_path: String,
+    /// Path to the same-size inpaint mask PNG (the provider mask input).
+    #[serde(default)]
+    pub(crate) mask_path: String,
+}
+
+/// Result of the **Detail Repaint** prepare step: the regions selected from the
+/// quality report (each with a crop + mask to send to the provider) and the
+/// issues that were skipped (with reasons).
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub(crate) struct PrepareRepaintResult {
+    #[serde(default)]
+    pub(crate) regions: Vec<PreparedRepaintRegion>,
+    #[serde(default)]
+    pub(crate) skipped: Vec<serde_json::Value>,
+    #[serde(default)]
+    pub(crate) image_size: [i64; 2],
+    #[serde(default)]
+    pub(crate) selected_count: u32,
+    /// `true` when the inpaint mask marks the edit area transparent (OpenAI
+    /// convention); `false` when inverted (opaque/white = edit).
+    #[serde(default)]
+    pub(crate) mask_edit_is_transparent: bool,
+}
+
+/// Result of the **Detail Repaint** composite step: the fixed image (issue
+/// cores repainted and edge-fused back in) and the per-region [`RepaintReport`].
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub(crate) struct CompositeRepaintResult {
+    #[serde(default)]
+    pub(crate) fixed_image: String,
+    #[serde(default)]
+    pub(crate) repaint_report: RepaintReport,
+}
+
+#[cfg(windows)]
+fn no_window(cmd: &mut std::process::Command) {
+    use std::os::windows::process::CommandExt;
+    // CREATE_NO_WINDOW: don't pop a console window for the child.
+    cmd.creation_flags(0x0800_0000);
+}
+
+#[cfg(not(windows))]
+fn no_window(_cmd: &mut std::process::Command) {}
+
+/// Resolve the project's `python/bridge/detail_repaint_cli.py`, erroring if the
+/// helper is missing from the checkout / bundle.
+fn detail_repaint_script(dir: &Path) -> Result<PathBuf, String> {
+    let script = dir
+        .join("python")
+        .join("bridge")
+        .join("detail_repaint_cli.py");
+    if !script.is_file() {
+        return Err(format!(
+            "detail_repaint_cli.py not found at {}",
+            script.display()
+        ));
+    }
+    Ok(script)
+}
+
+/// Crop each repaintable issue region out of a candidate image and write a
+/// same-size inpaint mask for it. This is the first half of the **Detail
+/// Repaint** node (the Phase-2 follow-up to Detail Watchdog): the orchestrator
+/// then sends each returned crop + mask + repaint prompt to a provider's
+/// `image.edit` operation before calling [`composite_repaint`] to paste the
+/// results back.
+///
+/// Shells out to `python/bridge/detail_repaint_cli.py prepare` using the
+/// project's bundled Python (Pillow + numpy; no OpenCV, no ML). Only issues
+/// whose `suggested_action` is in `repaint_actions` (default `detail_redraw`)
+/// and at/above `min_confidence` are selected, highest-confidence first, capped
+/// at `max_regions`.
+#[tauri::command]
+#[allow(clippy::too_many_arguments)]
+pub(crate) fn prepare_repaint_regions(
+    dir: Option<String>,
+    image: String,
+    quality_report: Option<String>,
+    repaint_actions: Option<String>,
+    min_confidence: Option<f64>,
+    padding: Option<i64>,
+    max_regions: Option<i64>,
+    invert_mask: Option<bool>,
+    output_dir: Option<String>,
+    output_name: Option<String>,
+) -> Result<PrepareRepaintResult, String> {
+    let dir = resolve_project_dir(&dir)?;
+    let python = project_python(&dir);
+    let script = detail_repaint_script(&dir)?;
+
+    let mut cmd = std::process::Command::new(&python);
+    cmd.arg(&script)
+        .arg("prepare")
+        .arg("--image")
+        .arg(&image)
+        .arg("--quality-report")
+        .arg(quality_report.as_deref().unwrap_or(""))
+        .arg("--repaint-actions")
+        .arg(repaint_actions.as_deref().unwrap_or(""))
+        .arg("--min-confidence")
+        .arg(min_confidence.unwrap_or(0.0).to_string())
+        .arg("--padding")
+        .arg(padding.unwrap_or(24).to_string())
+        .arg("--max-regions")
+        .arg(max_regions.unwrap_or(8).to_string())
+        .arg("--output-dir")
+        .arg(output_dir.as_deref().unwrap_or(""))
+        .arg("--output-name")
+        .arg(output_name.as_deref().unwrap_or(""))
+        .current_dir(&dir);
+    if invert_mask.unwrap_or(false) {
+        cmd.arg("--invert-mask");
+    }
+    no_window(&mut cmd);
+
+    let output = cmd
+        .output()
+        .map_err(|err| format!("failed to launch {}: {err}", python.display()))?;
+    if !output.status.success() {
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        return Err(format!("prepare_repaint_regions failed: {}", stderr.trim()));
+    }
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    serde_json::from_str::<PrepareRepaintResult>(stdout.trim()).map_err(|err| {
+        format!(
+            "could not parse prepare_repaint_regions output: {err} (raw: {})",
+            stdout.trim()
+        )
+    })
+}
+
+/// Paste the provider-repainted crops back into the candidate image, fusing
+/// each patch seam with a feathered alpha (the "secondary edge fusion"), and
+/// write the final fixed image. This is the second half of the **Detail
+/// Repaint** node.
+///
+/// `manifest` is the JSON returned by [`prepare_repaint_regions`]; `repainted`
+/// is a JSON list of `{index, path}` mapping each region to the crop the
+/// provider returned (regions with no entry stay unrepainted). Shells out to
+/// `python/bridge/detail_repaint_cli.py composite`.
+#[tauri::command]
+#[allow(clippy::too_many_arguments)]
+pub(crate) fn composite_repaint(
+    dir: Option<String>,
+    image: String,
+    manifest: String,
+    repainted: String,
+    feather_px: Option<f64>,
+    output_dir: Option<String>,
+    output_name: Option<String>,
+) -> Result<CompositeRepaintResult, String> {
+    let dir = resolve_project_dir(&dir)?;
+    let python = project_python(&dir);
+    let script = detail_repaint_script(&dir)?;
+
+    let mut cmd = std::process::Command::new(&python);
+    cmd.arg(&script)
+        .arg("composite")
+        .arg("--image")
+        .arg(&image)
+        .arg("--manifest")
+        .arg(&manifest)
+        .arg("--repainted")
+        .arg(&repainted)
+        .arg("--feather-px")
+        .arg(feather_px.unwrap_or(0.0).to_string())
+        .arg("--output-dir")
+        .arg(output_dir.as_deref().unwrap_or(""))
+        .arg("--output-name")
+        .arg(output_name.as_deref().unwrap_or(""))
+        .current_dir(&dir);
+    no_window(&mut cmd);
+
+    let output = cmd
+        .output()
+        .map_err(|err| format!("failed to launch {}: {err}", python.display()))?;
+    if !output.status.success() {
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        return Err(format!("composite_repaint failed: {}", stderr.trim()));
+    }
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    serde_json::from_str::<CompositeRepaintResult>(stdout.trim()).map_err(|err| {
+        format!(
+            "could not parse composite_repaint output: {err} (raw: {})",
             stdout.trim()
         )
     })

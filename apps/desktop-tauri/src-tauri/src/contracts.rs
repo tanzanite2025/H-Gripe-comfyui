@@ -10,8 +10,10 @@
 //! - [`VisualContext`]: machine-usable production context extracted from a PSD
 //!   template by the **PSD Context Analyze** node (background stats, lighting
 //!   heuristics, placeholder geometry, ready-to-append prompt suffix).
-//! - [`QualityReport`]: issue findings (face/hand/edge/colour/resolution) for
-//!   the future Detail Watchdog node.
+//! - [`QualityReport`]: issue findings (face/hand/edge/colour/resolution) from
+//!   the **Detail Watchdog** node.
+//! - [`RepaintReport`]: per-region outcome of the **Detail Repaint** node
+//!   (which issue regions were localized-repainted, skipped, or failed).
 //! - [`ProductionMetadata`]: end-to-end workflow tracking written alongside an
 //!   export.
 
@@ -130,6 +132,48 @@ pub(crate) struct QualityReport {
     pub(crate) status: String,
     #[serde(default)]
     pub(crate) issues: Vec<QualityIssue>,
+}
+
+/// Outcome of repainting a single issue region (Detail Repaint).
+#[allow(dead_code)]
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub(crate) struct RepaintRegionResult {
+    /// Index of the source issue in the [`QualityReport`].
+    #[serde(default)]
+    pub(crate) index: u32,
+    /// The issue type that was repainted, e.g. `face_blur`.
+    #[serde(rename = "type", default)]
+    pub(crate) issue_type: Option<String>,
+    /// `[x1, y1, x2, y2]` of the original issue, in canvas pixels.
+    #[serde(default)]
+    pub(crate) bbox: Option<[i64; 4]>,
+    /// `repainted | no_repaint | skipped | bad_geometry`.
+    #[serde(default)]
+    pub(crate) status: String,
+    /// Seam feather radius actually applied (only for `repainted`).
+    #[serde(default)]
+    pub(crate) feather_px: Option<f64>,
+}
+
+/// Per-region outcome of the **Detail Repaint** node: which issue regions were
+/// localized-repainted via the provider, pasted back, and edge-fused.
+#[allow(dead_code)]
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub(crate) struct RepaintReport {
+    /// `repainted | partial | unchanged`.
+    #[serde(default)]
+    pub(crate) status: String,
+    #[serde(default)]
+    pub(crate) regions: Vec<RepaintRegionResult>,
+    /// How many regions were actually repainted + pasted back.
+    #[serde(default)]
+    pub(crate) repainted_count: u32,
+    /// How many regions the composite step was asked to handle.
+    #[serde(default)]
+    pub(crate) requested_count: u32,
+    /// `[width, height]` of the fixed image.
+    #[serde(default)]
+    pub(crate) image_size: [i64; 2],
 }
 
 /// Exported artifact paths recorded for a finished workflow.

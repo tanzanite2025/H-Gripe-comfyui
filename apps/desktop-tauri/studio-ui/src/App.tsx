@@ -1027,6 +1027,33 @@ function Studio() {
     return () => window.removeEventListener("keydown", onKey);
   }, [undo, redo, copySelection, pasteClipboard, setNodes, setEdges]);
 
+  // File shortcuts: Ctrl/Cmd+S save, +Shift+S save as, +O open, +N new. These
+  // intentionally fire even while editing a field so a quick Ctrl+S always saves.
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => {
+      if (!(e.ctrlKey || e.metaKey) || e.altKey) return;
+      switch (e.key.toLowerCase()) {
+        case "s":
+          e.preventDefault();
+          if (e.shiftKey) void handleSaveAs();
+          else void handleSave();
+          break;
+        case "o":
+          if (e.shiftKey) return;
+          e.preventDefault();
+          void handleOpen();
+          break;
+        case "n":
+          if (e.shiftKey) return;
+          e.preventDefault();
+          newWorkflow();
+          break;
+      }
+    };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [handleSave, handleSaveAs, handleOpen, newWorkflow]);
+
   // Stable context value so memoized node cards can edit their own params.
   const editing = useMemo(() => ({ onParamChange }), [onParamChange]);
 
@@ -1064,13 +1091,32 @@ function Studio() {
             {showProject ? "Hide Project" : "Project"}
           </button>
         )}
-        {isDesktop && <button onClick={newWorkflow} title="start a new, empty workflow">New</button>}
-        <button onClick={() => void handleOpen()}>{isDesktop ? "Open…" : "Load"}</button>
-        <button onClick={() => void handleSave()} title={isDesktop ? "save to the current file (Save As… if none)" : "download workflow.json"}>
+        {isDesktop && (
+          <button onClick={newWorkflow} title="start a new, empty workflow (Ctrl/Cmd+N)">
+            New
+          </button>
+        )}
+        <button
+          onClick={() => void handleOpen()}
+          title={isDesktop ? "open a workflow file (Ctrl/Cmd+O)" : "load workflow.json (Ctrl/Cmd+O)"}
+        >
+          {isDesktop ? "Open…" : "Load"}
+        </button>
+        <button
+          onClick={() => void handleSave()}
+          title={
+            isDesktop
+              ? "save to the current file (Save As… if none) — Ctrl/Cmd+S"
+              : "download workflow.json (Ctrl/Cmd+S)"
+          }
+        >
           Save
         </button>
         {isDesktop && (
-          <button onClick={() => void handleSaveAs()} title="save to a new file via the native dialog">
+          <button
+            onClick={() => void handleSaveAs()}
+            title="save to a new file via the native dialog (Ctrl/Cmd+Shift+S)"
+          >
             Save As…
           </button>
         )}

@@ -30,6 +30,7 @@ import { getHelperLines } from "./editor/helperLines";
 import { layeredPositions } from "./editor/layout";
 import type { HgripeNodeData } from "./editor/HgripeNode";
 import { fromWorkflowGraph, toWorkflowGraph } from "./editor/adapter";
+import { ProjectPanel, baseName } from "./editor/ProjectPanel";
 import { clearPersistedGraph, loadPersistedGraph, persistGraph } from "./editor/persist";
 import { defaultParams } from "./graph/nodeSpecs";
 import { deserializeGraph, serializeGraph, type WorkflowGraph } from "./graph/model";
@@ -40,11 +41,20 @@ import {
   clearStudioAutosave,
   createStudioRunId,
   isTauri,
+  listStudioWorkflows,
+  pickProjectFolder,
+  pickWorkflowOpenPath,
+  pickWorkflowSavePath,
   readStudioAutosave,
+  readStudioRecents,
+  readStudioWorkflow,
   runStudioGraph,
   writeStudioAutosave,
+  writeStudioRecents,
+  writeStudioWorkflow,
   type StudioGraphRunEvent,
   type StudioGraphRunResult,
+  type StudioWorkflowFile,
 } from "./bridge/tauri";
 
 const NODE_STATUSES = new Set<NodeStatus>([
@@ -127,6 +137,23 @@ function Studio() {
       : "browser preview (backend mocked)",
   );
   const [desktopAutosaveReady, setDesktopAutosaveReady] = useState(!isTauri());
+
+  // Explicit save/open + project folder. `currentFile` is the on-disk workflow
+  // backing the editor (null = untitled); `fileDirty` tracks unsaved edits
+  // against it (separate from the workspace autosave indicator).
+  const isDesktop = isTauri();
+  const [projectDir, setProjectDir] = useState<string | null>(null);
+  const [workflowFiles, setWorkflowFiles] = useState<StudioWorkflowFile[]>([]);
+  const [recentFiles, setRecentFiles] = useState<string[]>([]);
+  const [currentFile, setCurrentFile] = useState<string | null>(null);
+  const [fileDirty, setFileDirty] = useState(false);
+  const [showProject, setShowProject] = useState(false);
+  const [projectBusy, setProjectBusy] = useState(false);
+  const [recentsReady, setRecentsReady] = useState(!isTauri());
+  // Skips the next dirty-mark when the graph is swapped programmatically
+  // (mount restore, open, new) rather than by a user edit.
+  const skipDirty = useRef(true);
+
   const idSeq = useRef(0);
   const currentRunIdRef = useRef<string | null>(null);
   const fileInput = useRef<HTMLInputElement | null>(null);
@@ -154,6 +181,7 @@ function Studio() {
         if (cancelled || !raw) return;
         const graph = deserializeGraph(raw);
         const next = fromWorkflowGraph(graph);
+        skipDirty.current = true;
         setNodes(next.nodes);
         setEdges(next.edges);
         setSelectedId(null);
@@ -617,50 +645,213 @@ function Studio() {
     ];
   }, [menu, edges, duplicateNode, disconnectNode, deleteNode, tidyLayout, fitView, pasteClipboard]);
 
-  const save = useCallback(() => {
+  // Swap the editor graph without flagging it as an unsaved user edit.
+  const loadGraphIntoEditor = useCallback(
+    (graph: WorkflowGraph) => {
+      skipDirty.current = true;
+      const next = fromWorkflowGraph(graph);
+      setNodes(next.nodes);
+      setEdges(next.edges);
+      setSelectedId(null);
+    },
+    [setNodes, setEdges],
+  );
+
+  // Browser-preview download: there is no native filesystem, so Save / Save As
+  // fall back to a JSON download.
+  const downloadWorkflow = useCallback(() => {
     const json = serializeGraph(toWorkflowGraph(nodes, edges));
     const blob = new Blob([json], { type: "application/json" });
     const url = URL.createObjectURL(blob);
     const a = document.createElement("a");
     a.href = url;
-    a.download = "workflow.json";
+    a.download = currentFile ? baseName(currentFile) : "workflow.json";
     a.click();
     URL.revokeObjectURL(url);
-  }, [nodes, edges]);
+  }, [nodes, edges, currentFile]);
 
+  // Browser-preview upload (the hidden file input). Desktop uses native dialogs.
   const load = useCallback(
     async (file: File) => {
       try {
         takeSnapshot();
         const graph = deserializeGraph(await file.text());
-        const next = fromWorkflowGraph(graph);
-        setNodes(next.nodes);
-        setEdges(next.edges);
-        setSelectedId(null);
+        loadGraphIntoEditor(graph);
+        setCurrentFile(null);
+        setFileDirty(false);
         setMessage(`loaded ${file.name}`);
       } catch (err) {
         setMessage(`load failed: ${String(err)}`);
       }
     },
-    [setNodes, setEdges, takeSnapshot],
+    [takeSnapshot, loadGraphIntoEditor],
   );
 
-  const clear = useCallback(() => {
+  const refreshProjectFiles = useCallback(async (dir: string) => {
+    setProjectBusy(true);
+    try {
+      setWorkflowFiles(await listStudioWorkflows(dir));
+    } catch (err) {
+      setMessage(`folder scan failed: ${String(err)}`);
+    } finally {
+      setProjectBusy(false);
+    }
+  }, []);
+
+  // Most-recent-first, de-duplicated, capped recent-files list.
+  const rememberFile = useCallback((path: string) => {
+    setRecentFiles((prev) => [path, ...prev.filter((p) => p !== path)].slice(0, 8));
+  }, []);
+
+  const openFromPath = useCallback(
+    async (path: string) => {
+      try {
+        takeSnapshot();
+        const graph = deserializeGraph(await readStudioWorkflow(path));
+        loadGraphIntoEditor(graph);
+        setCurrentFile(path);
+        setFileDirty(false);
+        rememberFile(path);
+        setMessage(`opened ${baseName(path)}`);
+      } catch (err) {
+        setMessage(`open failed: ${String(err)}`);
+      }
+    },
+    [takeSnapshot, loadGraphIntoEditor, rememberFile],
+  );
+
+  const saveToPath = useCallback(
+    async (path: string) => {
+      try {
+        await writeStudioWorkflow(path, toWorkflowGraph(nodes, edges));
+        setCurrentFile(path);
+        setFileDirty(false);
+        rememberFile(path);
+        if (projectDir && path.startsWith(projectDir)) void refreshProjectFiles(projectDir);
+        setMessage(`saved ${baseName(path)}`);
+      } catch (err) {
+        setMessage(`save failed: ${String(err)}`);
+      }
+    },
+    [nodes, edges, projectDir, rememberFile, refreshProjectFiles],
+  );
+
+  const handleSaveAs = useCallback(async () => {
+    if (!isDesktop) {
+      downloadWorkflow();
+      return;
+    }
+    const defaultName = currentFile ? baseName(currentFile) : "workflow.json";
+    const path = await pickWorkflowSavePath(defaultName, projectDir);
+    if (path) await saveToPath(path);
+  }, [isDesktop, currentFile, projectDir, saveToPath, downloadWorkflow]);
+
+  const handleSave = useCallback(async () => {
+    if (!isDesktop) {
+      downloadWorkflow();
+      return;
+    }
+    if (currentFile) await saveToPath(currentFile);
+    else await handleSaveAs();
+  }, [isDesktop, currentFile, saveToPath, handleSaveAs, downloadWorkflow]);
+
+  const handleOpen = useCallback(async () => {
+    if (!isDesktop) {
+      fileInput.current?.click();
+      return;
+    }
+    const path = await pickWorkflowOpenPath(projectDir);
+    if (path) await openFromPath(path);
+  }, [isDesktop, projectDir, openFromPath]);
+
+  const handlePickFolder = useCallback(async () => {
+    const dir = await pickProjectFolder(projectDir);
+    if (dir) {
+      setProjectDir(dir);
+      void refreshProjectFiles(dir);
+    }
+  }, [projectDir, refreshProjectFiles]);
+
+  const newWorkflow = useCallback(() => {
     takeSnapshot();
+    skipDirty.current = true;
     setNodes([]);
     setEdges([]);
     setSelectedId(null);
+    setCurrentFile(null);
+    setFileDirty(false);
+    setMessage("new workflow");
+  }, [setNodes, setEdges, takeSnapshot]);
+
+  const clear = useCallback(() => {
+    takeSnapshot();
+    skipDirty.current = true;
+    setNodes([]);
+    setEdges([]);
+    setSelectedId(null);
+    setCurrentFile(null);
+    setFileDirty(false);
     clearPersistedGraph();
     if (isTauri()) void clearStudioAutosave().catch((err) => setMessage(`clear autosave failed: ${String(err)}`));
   }, [setNodes, setEdges, takeSnapshot]);
 
   const resetSample = useCallback(() => {
     takeSnapshot();
+    skipDirty.current = true;
     setNodes(initialNodes);
     setEdges(initialEdges);
     setSelectedId(null);
+    setCurrentFile(null);
+    setFileDirty(false);
     setMessage("reset to sample workflow");
   }, [setNodes, setEdges, takeSnapshot]);
+
+  // Restore the persisted project folder + recent files on desktop start.
+  useEffect(() => {
+    if (!isDesktop) return;
+    let cancelled = false;
+    void readStudioRecents()
+      .then((recents) => {
+        if (cancelled) return;
+        setProjectDir(recents.project_dir ?? null);
+        setCurrentFile(recents.current_file ?? null);
+        setRecentFiles(recents.files ?? []);
+        if (recents.project_dir) {
+          setShowProject(true);
+          void refreshProjectFiles(recents.project_dir);
+        }
+      })
+      .catch(() => {
+        /* no recents yet — start clean */
+      })
+      .finally(() => {
+        if (!cancelled) setRecentsReady(true);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [isDesktop, refreshProjectFiles]);
+
+  // Persist project folder + recent files whenever they change (after restore).
+  useEffect(() => {
+    if (!isDesktop || !recentsReady) return;
+    void writeStudioRecents({
+      project_dir: projectDir,
+      current_file: currentFile,
+      files: recentFiles,
+    }).catch(() => {
+      /* best-effort */
+    });
+  }, [isDesktop, recentsReady, projectDir, currentFile, recentFiles]);
+
+  // Flag the current file dirty on user edits (programmatic swaps set skipDirty).
+  useEffect(() => {
+    if (skipDirty.current) {
+      skipDirty.current = false;
+      return;
+    }
+    setFileDirty(true);
+  }, [nodes, edges]);
 
   // Autosave to the workspace (debounced). Desktop builds persist through the
   // Rust backend; browser preview falls back to localStorage.
@@ -744,6 +935,12 @@ function Studio() {
             ⚠ {issues.length} issue{issues.length > 1 ? "s" : ""}
           </span>
         )}
+        {isDesktop && (
+          <span className="muted current-file" title={currentFile ?? "untitled (not yet saved to a file)"}>
+            {currentFile ? baseName(currentFile) : "untitled"}
+            {fileDirty ? " *" : ""}
+          </span>
+        )}
         <span className="muted autosave" title="this workflow is autosaved to the workspace and restored on next open">
           {saved ? "● autosaved" : "○ saving…"}
         </span>
@@ -753,8 +950,24 @@ function Studio() {
         <button onClick={redo} disabled={!history.canRedo} title="Redo (Ctrl+Shift+Z)">
           Redo
         </button>
-        <button onClick={save}>Save</button>
-        <button onClick={() => fileInput.current?.click()}>Load</button>
+        {isDesktop && (
+          <button
+            onClick={() => setShowProject((s) => !s)}
+            title="toggle the project folder browser"
+          >
+            {showProject ? "Hide Project" : "Project"}
+          </button>
+        )}
+        {isDesktop && <button onClick={newWorkflow} title="start a new, empty workflow">New</button>}
+        <button onClick={() => void handleOpen()}>{isDesktop ? "Open…" : "Load"}</button>
+        <button onClick={() => void handleSave()} title={isDesktop ? "save to the current file (Save As… if none)" : "download workflow.json"}>
+          Save
+        </button>
+        {isDesktop && (
+          <button onClick={() => void handleSaveAs()} title="save to a new file via the native dialog">
+            Save As…
+          </button>
+        )}
         <button onClick={resetSample}>Reset</button>
         <button onClick={clear}>Clear</button>
         <label className="snap-toggle" title="snap node positions to a 16px grid while dragging">
@@ -809,6 +1022,19 @@ function Studio() {
 
       <NodeEditingContext.Provider value={editing}>
         <div className="workspace">
+          {isDesktop && showProject && (
+            <ProjectPanel
+              projectDir={projectDir}
+              files={workflowFiles}
+              recentFiles={recentFiles}
+              currentFile={currentFile}
+              busy={projectBusy}
+              onPickFolder={() => void handlePickFolder()}
+              onRefresh={() => projectDir && void refreshProjectFiles(projectDir)}
+              onOpenFile={(path) => void openFromPath(path)}
+              onNew={newWorkflow}
+            />
+          )}
           <Palette onAdd={addNode} />
           <div className="canvas">
             <FlowCanvas

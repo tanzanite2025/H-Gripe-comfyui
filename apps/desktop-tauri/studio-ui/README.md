@@ -62,6 +62,11 @@ effects goes through Tauri/Rust:
 - Desktop workflow autosave uses `read_studio_autosave`,
   `write_studio_autosave`, and `clear_studio_autosave`; `localStorage` is only
   the browser-preview fallback.
+- Explicit workflow save/open and the project folder browser use native
+  commands: `pick_workflow_save_path`, `pick_workflow_open_path`,
+  `pick_project_folder`, `read_studio_workflow`, `write_studio_workflow`,
+  `list_studio_workflows`, and `read_studio_recents` / `write_studio_recents`
+  (which persist the active folder + recent files next to the autosave).
 - Credentials, provider profiles, output directories, history, cache indexes,
   local GPU service startup, and video export should live behind Rust commands.
 
@@ -78,11 +83,12 @@ before the next node starts and passes a cancellation token down into the Rust
 broker/provider layer for `generate` nodes. `custom_http async_job` can call a
 configured provider-native `cancel_url` / `cancel_url_path` / `urls.cancel`, and
 `replicate run` calls the prediction cancel endpoint. This is third-party
-provider/API remote job control, not an H-Gripe account/cloud system. Before the
-Node Editor becomes the primary production surface, the backend runner still
-needs durable workflow save/load beyond autosave, a media index/cache, richer
-logs, more complete error details, more provider-native cancellation adapters,
-and FFmpeg-backed video assembly/export.
+provider/API remote job control, not an H-Gripe account/cloud system. Durable
+workflow save/load beyond autosave now exists (explicit Save/Open + project
+folder, above). Before the Node Editor becomes the primary production surface,
+the backend runner still needs a media index/cache, richer logs, more complete
+error details, more provider-native cancellation adapters, and FFmpeg-backed
+video assembly/export.
 
 ## Editor features
 
@@ -109,13 +115,25 @@ and FFmpeg-backed video assembly/export.
   inputs carry `nodrag`/`nowheel` so editing never drags the node or pans the
   canvas. Edits flow through `NodeEditingContext` so memoized cards update
   their own params without putting callbacks in the serializable graph.
-- **Save / Load / Reset / Clear**: serialize the graph to `workflow.json` and
-  load it back (params are merged over the kind's current defaults). Reset
-  restores the sample workflow; Clear empties the canvas. Delete removes the
-  selected node/edge.
-- **Workspace autosave**: the graph is autosaved to `localStorage` (debounced,
-  structural fields only) and restored on next open, so work survives a reload
-  without a manual JSON download. See `editor/persist.ts`.
+- **Explicit Save / Save As / Open + project folder**: on desktop these use
+  native dialogs and write/read named workflow files anywhere on disk
+  (`pick_workflow_save_path`, `pick_workflow_open_path`, `write_studio_workflow`,
+  `read_studio_workflow`). **Save** writes to the current file (falling back to
+  **Save As…** when the workflow is untitled); the toolbar shows the current
+  file name with a `*` when there are unsaved edits. The **Project** panel
+  (left rail) picks a project folder (`pick_project_folder`), lists its workflow
+  files newest-first (`list_studio_workflows`), and reopens recent files. The
+  active folder + recent files persist between sessions
+  (`read_studio_recents` / `write_studio_recents`). In a plain browser there is
+  no filesystem, so Save/Save As download `workflow.json` and Open uses the file
+  input. **New** starts an empty untitled workflow; Reset restores the sample;
+  Clear empties the canvas and wipes the autosave. Delete removes the selected
+  node/edge.
+- **Workspace autosave**: independently of the explicit file, the graph is
+  autosaved (debounced, structural fields only) — through the Rust backend on
+  desktop, `localStorage` in browser preview — and restored on next open, so
+  in-progress work survives a reload even before it is saved to a file. See
+  `editor/persist.ts`.
 - **Lazy thumbnails**: preview nodes request `generate_thumbnail` only when they
   scroll into view (IntersectionObserver), so the graph data stays light (only
   the original path) and off-screen media is never decoded.

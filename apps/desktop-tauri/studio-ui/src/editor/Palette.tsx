@@ -14,6 +14,14 @@ const CATEGORY_LABEL: Record<NodeSpec["category"], string> = {
   output: "Outputs",
 };
 
+// Local vs API badge shown on palette items so the two kinds of card are
+// visually separated. Pure `graph` nodes carry no badge.
+const EXECUTOR_BADGE: Partial<Record<NodeSpec["executor"], string>> = {
+  local: "Local",
+  api: "API",
+  hybrid: "Local/API",
+};
+
 // MIME-ish key carried on drag so the canvas knows which node kind to create.
 export const DND_NODE_KIND = "application/hgripe-node-kind";
 
@@ -100,7 +108,12 @@ export function Palette({ onAdd }: PaletteProps) {
               onClick={() => onAdd(spec.kind)}
               title={spec.description}
             >
-              {spec.title}
+              <span className="palette-item-title">{spec.title}</span>
+              {EXECUTOR_BADGE[spec.executor] && (
+                <span className={`palette-badge palette-badge-${spec.executor}`}>
+                  {EXECUTOR_BADGE[spec.executor]}
+                </span>
+              )}
             </button>
           ))}
         </div>

@@ -43,6 +43,17 @@ import {
   type RunLogEntry,
 } from "./editor/runlog";
 import { SnapshotsPanel, type SnapshotDiffView } from "./editor/SnapshotsPanel";
+import { RunHistoryPanel } from "./editor/RunHistoryPanel";
+import {
+  addRunRecord,
+  loadRunHistory,
+  newRunRecordId,
+  parseRunHistory,
+  saveRunHistory,
+  type RunKind,
+  type RunOutcome,
+  type RunRecord,
+} from "./editor/runhistory";
 import { diffGraphs } from "./editor/snapshotdiff";
 import { LangContext, loadLang, saveLang, translate, type Lang } from "./i18n";
 import {
@@ -76,12 +87,14 @@ import {
   pickWorkflowSavePath,
   readStudioAutosave,
   readStudioRecents,
+  readStudioRunHistory,
   readStudioSnapshots,
   readStudioWorkflow,
   renameStudioWorkflow,
   runStudioGraph,
   writeStudioAutosave,
   writeStudioRecents,
+  writeStudioRunHistory,
   writeStudioSnapshots,
   writeStudioWorkflow,
   type StudioGraphRunEvent,
@@ -156,6 +169,8 @@ function Studio() {
   const [currentRunId, setCurrentRunId] = useState<string | null>(null);
   const [runLog, setRunLog] = useState<RunLogEntry[]>([]);
   const [showLog, setShowLog] = useState(false);
+  const [runHistory, setRunHistory] = useState<RunRecord[]>(() => loadRunHistory());
+  const [showHistory, setShowHistory] = useState(false);
   const [snapshots, setSnapshots] = useState<Snapshot[]>(() => loadSnapshots());
   const [showSnapshots, setShowSnapshots] = useState(false);
   const [snapshotDiff, setSnapshotDiff] = useState<SnapshotDiffView | null>(null);
@@ -205,6 +220,11 @@ function Studio() {
   // localStorage. `skipSnapshotPersist` avoids writing straight back to disk
   // right after loading a project's snapshots into state.
   const skipSnapshotPersist = useRef(false);
+  // Same scope contract for the run-history store as for snapshots.
+  const skipHistoryPersist = useRef(false);
+  // While a run is in flight this collects that run's log entries so they can
+  // be saved as a RunRecord when it ends; null when no run is active.
+  const runEntriesRef = useRef<RunLogEntry[] | null>(null);
 
   const idSeq = useRef(0);
   const logSeq = useRef(0);
@@ -395,8 +415,34 @@ function Studio() {
 
   // Append a line to the run log (capped, never mutating the previous array).
   const pushLog = useCallback((level: LogLevel, message: string, node?: string) => {
-    setRunLog((log) => appendLog(log, { id: logSeq.current++, t: Date.now(), level, message, node }));
+    const entry: RunLogEntry = { id: logSeq.current++, t: Date.now(), level, message, node };
+    setRunLog((log) => appendLog(log, entry));
+    if (runEntriesRef.current) runEntriesRef.current.push(entry);
   }, []);
+
+  // Finalize the in-flight run into a persisted history record. Promotes a
+  // nominal "succeeded" to "failed" when any node reported a failure.
+  const recordRunHistory = useCallback(
+    (kind: RunKind, startedAt: number, outcome: RunOutcome, backend: string) => {
+      const entries = runEntriesRef.current ?? [];
+      runEntriesRef.current = null;
+      const failedNodes = runFailures.current.length;
+      const finalOutcome: RunOutcome =
+        outcome === "succeeded" && failedNodes > 0 ? "failed" : outcome;
+      const record: RunRecord = {
+        id: newRunRecordId(),
+        kind,
+        startedAt,
+        endedAt: Date.now(),
+        outcome: finalOutcome,
+        backend,
+        failedNodes,
+        entries,
+      };
+      setRunHistory((h) => addRunRecord(h, record));
+    },
+    [],
+  );
 
   // Download the run log as a plain-text file (browser + desktop webview).
   const exportLog = useCallback(() => {
@@ -653,6 +699,9 @@ function Studio() {
     const backend = useRustBackend ? "Rust backend" : "browser preview";
     setMessage(useRustBackend ? "running Rust backend…" : "running browser preview…");
     clearRunInfo();
+    const startedAt = Date.now();
+    runEntriesRef.current = [];
+    let outcome: RunOutcome = "succeeded";
     pushLog("info", `▶ run started (${backend})`);
     try {
       const graph = toWorkflowGraph(nodes, edges);
@@ -676,11 +725,13 @@ function Studio() {
     } catch (err) {
       const message = String(err);
       const cancelled = message.toLowerCase().includes("cancel");
+      outcome = cancelled ? "cancelled" : "failed";
       setMessage(cancelled ? "cancelled" : `error: ${message}`);
       pushLog(cancelled ? "warn" : "error", cancelled ? "run cancelled" : `run failed: ${message}`);
     } finally {
       setRunning(false);
       highlightFailures();
+      recordRunHistory("run", startedAt, outcome, backend);
     }
   }, [
     nodes,
@@ -696,6 +747,7 @@ function Studio() {
     autoSnapshotBeforeRun,
     highlightFailures,
     warnPsdChain,
+    recordRunHistory,
   ]);
 
   // Batch fan-out: run the graph once per item of the (first) batch node,
@@ -723,6 +775,9 @@ function Studio() {
     const useRustBackend = isTauri();
     const backend = useRustBackend ? "Rust backend" : "browser preview";
     const rustRunId = useRustBackend ? beginRustRun() : null;
+    const startedAt = Date.now();
+    runEntriesRef.current = [];
+    let outcome: RunOutcome = "succeeded";
     pushLog("info", `▶ batch started: ${batchCount} run(s) (${backend})`);
     try {
       const graph = toWorkflowGraph(nodes, edges);
@@ -753,12 +808,14 @@ function Studio() {
     } catch (err) {
       const message = String(err);
       const cancelled = message.toLowerCase().includes("cancel");
+      outcome = cancelled ? "cancelled" : "failed";
       setMessage(cancelled ? "batch cancelled" : `batch error: ${message}`);
       pushLog(cancelled ? "warn" : "error", cancelled ? "batch cancelled" : `batch failed: ${message}`);
     } finally {
       if (rustRunId) endRustRun(rustRunId);
       setRunning(false);
       highlightFailures();
+      recordRunHistory("batch", startedAt, outcome, backend);
     }
   }, [
     batchNode,
@@ -962,6 +1019,47 @@ function Studio() {
       saveSnapshots(snapshots);
     }
   }, [snapshots]);
+
+  // Run history persists into the same project folder as snapshots (desktop),
+  // else to localStorage; mirrors the snapshot load/persist effects above.
+  const historyDirRef = useRef(snapshotDir);
+  historyDirRef.current = snapshotDir;
+  const loadedHistoryDir = useRef<string | null>(null);
+
+  useEffect(() => {
+    if (!snapshotDir) {
+      loadedHistoryDir.current = null;
+      return;
+    }
+    if (loadedHistoryDir.current === snapshotDir) return;
+    loadedHistoryDir.current = snapshotDir;
+    let cancelled = false;
+    void readStudioRunHistory(snapshotDir)
+      .then((raw) => {
+        if (cancelled || raw === null) return;
+        skipHistoryPersist.current = true;
+        setRunHistory(parseRunHistory(raw));
+      })
+      .catch((err) => setMessage(`load run history failed: ${String(err)}`));
+    return () => {
+      cancelled = true;
+    };
+  }, [snapshotDir]);
+
+  useEffect(() => {
+    if (skipHistoryPersist.current) {
+      skipHistoryPersist.current = false;
+      return;
+    }
+    const dir = historyDirRef.current;
+    if (dir) {
+      void writeStudioRunHistory(dir, runHistory).catch((err) =>
+        setMessage(`save run history failed: ${String(err)}`),
+      );
+    } else {
+      saveRunHistory(runHistory);
+    }
+  }, [runHistory]);
 
   // Persist the auto-snapshot preference.
   useEffect(() => {
@@ -1488,6 +1586,13 @@ function Studio() {
           {runLog.length > 0 ? ` (${runLog.length})` : ""}
         </button>
         <button
+          onClick={() => setShowHistory((s) => !s)}
+          title="show past runs (persisted with the project)"
+        >
+          {showHistory ? "Hide history" : "History"}
+          {runHistory.length > 0 ? ` (${runHistory.length})` : ""}
+        </button>
+        <button
           className="primary"
           onClick={run}
           disabled={running || issues.length > 0}
@@ -1555,6 +1660,17 @@ function Studio() {
               diff={snapshotDiff}
               onClearDiff={() => setSnapshotDiff(null)}
               onClose={() => setShowSnapshots(false)}
+            />
+          )}
+          {showHistory && (
+            <RunHistoryPanel
+              history={runHistory}
+              onClear={() => {
+                if (runHistory.length === 0 || window.confirm("Clear all run history?"))
+                  setRunHistory([]);
+              }}
+              onClose={() => setShowHistory(false)}
+              onSelectNode={focusNode}
             />
           )}
           <Palette onAdd={addNode} />

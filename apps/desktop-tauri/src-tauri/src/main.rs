@@ -1363,6 +1363,46 @@ fn write_studio_snapshots(dir: String, snapshots_json: String) -> Result<(), Str
         .map_err(|err| format!("failed to write {}: {err}", path.display()))
 }
 
+// --- Project-scoped run history ---------------------------------------------
+// Past Run/Batch executions can be persisted into the active project folder (as
+// `.hgripe-runhistory.json`) so they survive a refresh / machine change and can
+// be reviewed later, instead of the run log living only in memory. Same
+// renderer-owns-the-shape contract as the snapshots file.
+
+fn studio_run_history_path(dir: &str) -> Result<PathBuf, String> {
+    let dir = dir.trim();
+    if dir.is_empty() {
+        return Err("project folder is empty".to_string());
+    }
+    let path = Path::new(dir);
+    if !path.is_dir() {
+        return Err(format!("not a directory: {dir}"));
+    }
+    Ok(path.join(".hgripe-runhistory.json"))
+}
+
+/// Read the project folder's run-history file (raw JSON array text). Returns
+/// `"[]"` when the file does not exist yet.
+#[tauri::command]
+fn read_studio_run_history(dir: String) -> Result<String, String> {
+    let path = studio_run_history_path(&dir)?;
+    if !path.exists() {
+        return Ok("[]".to_string());
+    }
+    fs::read_to_string(&path).map_err(|err| format!("failed to read {}: {err}", path.display()))
+}
+
+/// Write the project folder's run-history file. `history_json` is the renderer's
+/// serialized array; it is validated as JSON before writing.
+#[tauri::command]
+fn write_studio_run_history(dir: String, history_json: String) -> Result<(), String> {
+    serde_json::from_str::<serde_json::Value>(&history_json)
+        .map_err(|err| format!("invalid run history JSON: {err}"))?;
+    let path = studio_run_history_path(&dir)?;
+    fs::write(&path, history_json)
+        .map_err(|err| format!("failed to write {}: {err}", path.display()))
+}
+
 #[tauri::command]
 fn cancel_studio_run(
     app: tauri::AppHandle,
@@ -2089,6 +2129,8 @@ fn main() {
             duplicate_studio_workflow,
             read_studio_snapshots,
             write_studio_snapshots,
+            read_studio_run_history,
+            write_studio_run_history,
             read_studio_recents,
             write_studio_recents,
             cancel_studio_run,

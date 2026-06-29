@@ -182,6 +182,23 @@ export async function writeStudioSnapshots(dir: string, snapshots: unknown): Pro
   await invoke("write_studio_snapshots", { dir, snapshotsJson: JSON.stringify(snapshots) });
 }
 
+/**
+ * Read the active project folder's run-history file (raw JSON array text), or
+ * `null` outside the desktop build. Returns `"[]"` when no file exists yet.
+ */
+export async function readStudioRunHistory(dir: string): Promise<string | null> {
+  const invoke = tauriInvoke();
+  if (!invoke) return null;
+  return (await invoke("read_studio_run_history", { dir })) as string;
+}
+
+/** Persist the run history into the active project folder (desktop only). */
+export async function writeStudioRunHistory(dir: string, history: unknown): Promise<void> {
+  const invoke = tauriInvoke();
+  if (!invoke) return;
+  await invoke("write_studio_run_history", { dir, historyJson: JSON.stringify(history) });
+}
+
 /** Clear the desktop-managed Studio autosave file. */
 export async function clearStudioAutosave(): Promise<void> {
   const invoke = tauriInvoke();

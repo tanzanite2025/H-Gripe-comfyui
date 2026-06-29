@@ -160,6 +160,60 @@ button:disabled { opacity: 0.6; cursor: default; }
 .node-search-title { font-size: 12px; }
 .node-search-id { font-size: 10px; color: var(--muted); font-family: ui-monospace, Menlo, Consolas, monospace; }
 
+.node-tag {
+  font-size: 9px;
+  font-weight: 600;
+  letter-spacing: 0.04em;
+  padding: 1px 5px;
+  border-radius: 999px;
+  background: #4b3a6b;
+  color: #d9c8ff;
+}
+.node-warn {
+  font-size: 11px;
+  color: var(--running);
+  background: rgba(210, 153, 34, 0.12);
+  border-radius: 4px;
+  padding: 3px 6px;
+  white-space: normal;
+}
+.psd-conn {
+  display: flex;
+  gap: 10px;
+  font-size: 10px;
+}
+.psd-conn .ok { color: var(--ok); }
+.psd-conn .warn { color: var(--err); }
+.psd-conn .muted { color: var(--muted); }
+.psd-export { display: flex; flex-direction: column; gap: 4px; }
+.psd-path-row {
+  display: flex;
+  gap: 6px;
+  align-items: baseline;
+  width: 100%;
+  padding: 2px 4px;
+  background: none;
+  border: none;
+  border-radius: 4px;
+  cursor: pointer;
+  text-align: left;
+}
+.psd-path-row:hover { background: var(--border); }
+.psd-path-label {
+  font-size: 9px;
+  text-transform: uppercase;
+  color: var(--muted);
+  min-width: 44px;
+}
+.psd-path-name {
+  font-size: 11px;
+  font-family: ui-monospace, Menlo, Consolas, monospace;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.psd-meta { font-size: 10px; color: var(--muted); }
+
 .inspector {
   width: 300px;
   border-left: 1px solid var(--border);

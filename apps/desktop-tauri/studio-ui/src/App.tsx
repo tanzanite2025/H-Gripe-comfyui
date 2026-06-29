@@ -32,6 +32,7 @@ import type { HgripeNodeData } from "./editor/HgripeNode";
 import { fromWorkflowGraph, toWorkflowGraph } from "./editor/adapter";
 import { ProjectPanel, baseName } from "./editor/ProjectPanel";
 import { NodeSearchBox } from "./editor/NodeSearchBox";
+import { validatePsdChain } from "./editor/psdcheck";
 import { RunLog } from "./editor/RunLogPanel";
 import {
   appendLog,
@@ -551,16 +552,42 @@ function Studio() {
   const applyPreviews = useCallback(
     (graph: ReturnType<typeof toWorkflowGraph>, result: { outputs: Map<string, Record<string, unknown>> }) => {
       const paths: string[] = [];
+      const str = (v: unknown): string | null => (typeof v === "string" && v ? v : null);
       for (const node of graph.nodes) {
-        if (node.kind !== "preview") continue;
         const out = result.outputs.get(node.id);
-        const imagePath = (out?.image as string | null) ?? null;
-        patchNode(node.id, { imagePath });
-        if (imagePath) paths.push(imagePath);
+        if (node.kind === "preview") {
+          const imagePath = str(out?.image);
+          patchNode(node.id, { imagePath });
+          if (imagePath) paths.push(imagePath);
+        } else if (node.kind === "psdExport") {
+          // Surface the export triplet onto the card. Browser executors return
+          // camelCase; the Rust backend returns the raw snake_case fields.
+          const psdPath = str(out?.psdPath) ?? str(out?.psd_path);
+          const psdPreviewPath = str(out?.previewPath) ?? str(out?.preview_path);
+          const psdMetadataPath = str(out?.metadataPath) ?? str(out?.metadata_path);
+          patchNode(node.id, {
+            psdPath,
+            psdPreviewPath,
+            psdMetadataPath,
+            placeholderKind: str(out?.placeholderKind) ?? str(out?.placeholder_kind),
+            smartObjectMode: str(out?.smartObjectMode) ?? str(out?.smart_object_mode),
+          });
+          if (psdPreviewPath) paths.push(psdPreviewPath);
+        }
       }
       return paths;
     },
     [patchNode],
+  );
+
+  // Surface PSD-chain problems (missing template path / unconnected inputs) in
+  // the run log before executing, so users do not have to wait for a mid-run
+  // failure to find them.
+  const warnPsdChain = useCallback(
+    (graph: WorkflowGraph) => {
+      for (const w of validatePsdChain(graph)) pushLog("warn", `⚠ ${w.node}: ${w.message}`);
+    },
+    [pushLog],
   );
 
   const run = useCallback(async () => {
@@ -575,6 +602,7 @@ function Studio() {
     pushLog("info", `▶ run started (${backend})`);
     try {
       const graph = toWorkflowGraph(nodes, edges);
+      warnPsdChain(graph);
       if (useRustBackend) {
         const runId = beginRustRun();
         try {
@@ -613,6 +641,7 @@ function Studio() {
     pushLog,
     autoSnapshotBeforeRun,
     highlightFailures,
+    warnPsdChain,
   ]);
 
   // Batch fan-out: run the graph once per item of the (first) batch node,
@@ -643,6 +672,7 @@ function Studio() {
     pushLog("info", `▶ batch started: ${batchCount} run(s) (${backend})`);
     try {
       const graph = toWorkflowGraph(nodes, edges);
+      warnPsdChain(graph);
       const collected: string[] = [];
       for (let i = 0; i < batchCount; i++) {
         setMessage(
@@ -691,6 +721,7 @@ function Studio() {
     pushLog,
     autoSnapshotBeforeRun,
     highlightFailures,
+    warnPsdChain,
   ]);
 
   // Switch the rendering style of all edges (and future ones).

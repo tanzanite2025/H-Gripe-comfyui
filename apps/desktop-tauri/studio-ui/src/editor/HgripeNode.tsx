@@ -6,6 +6,7 @@ import type { NodeStatus } from "../runtime/dag";
 import { generateThumbnail } from "../bridge/tauri";
 import { ParamField } from "./ParamField";
 import { useNodeEditing } from "./editingContext";
+import { psdTemplatePathWarning } from "./psdcheck";
 
 export interface HgripeNodeData extends Record<string, unknown> {
   kind: string;
@@ -19,6 +20,13 @@ export interface HgripeNodeData extends Record<string, unknown> {
   imagePath?: string | null;
   /** Backend-generated thumbnail data URL / path for display. */
   thumbnail?: string | null;
+  /** PSD Export results from the last run (psdExport node only). */
+  psdPath?: string | null;
+  psdPreviewPath?: string | null;
+  psdMetadataPath?: string | null;
+  /** Resolved placeholder kind / smart-object mode reported by the backend. */
+  placeholderKind?: string | null;
+  smartObjectMode?: string | null;
 }
 
 function basename(p: string): string {
@@ -78,6 +86,28 @@ function LazyThumb({ path }: { path: string }) {
   );
 }
 
+// A single export-artifact row: label + basename, click to copy the full path.
+function PathRow({ label, path }: { label: string; path: string }) {
+  const [copied, setCopied] = useState(false);
+  const copy = () => {
+    void navigator.clipboard
+      ?.writeText(path)
+      .then(() => {
+        setCopied(true);
+        window.setTimeout(() => setCopied(false), 1200);
+      })
+      .catch(() => {
+        /* clipboard may be unavailable */
+      });
+  };
+  return (
+    <button className="psd-path-row nodrag" onClick={copy} title={`click to copy: ${path}`}>
+      <span className="psd-path-label">{label}</span>
+      <span className="psd-path-name">{copied ? "copied!" : basename(path)}</span>
+    </button>
+  );
+}
+
 // Custom node is memoized (React Flow perf guidance): node drags must not
 // re-render every node. The node shows only a compact summary + a thumbnail;
 // full params live in the Inspector and full-res media is opened there.
@@ -89,15 +119,28 @@ function HgripeNodeImpl({ id, data, selected }: NodeProps) {
   // Collapse to a title-only card when zoomed far out. A boolean selector means
   // nodes only re-render when crossing the threshold, not on every zoom tick.
   const lod = useStore((s) => isLodActive(s.transform[2]));
+  // Which input ports of this node currently have an incoming edge — used to
+  // surface "image/template connected" hints on the PSD sink cards.
+  const connectedPorts = useStore((s) =>
+    s.edges
+      .filter((e) => e.target === id)
+      .map((e) => e.targetHandle ?? "")
+      .sort()
+      .join(","),
+  );
+  const isConnected = (port: string) => connectedPorts.split(",").includes(port);
   // Params flagged `inline` are edited directly on the card; the rest live in
   // the Inspector. `imageSource`/`psdTemplate` paths get a basename caption so
   // the card stays readable even with a long absolute path.
   const inlineParams = spec.params.filter((p) => p.inline);
+  const templateWarn =
+    spec.kind === "psdTemplate" ? psdTemplatePathWarning(String(d.params.path ?? "")) : null;
 
   return (
     <div className={`node ${selected ? "selected" : ""} status-${status} ${lod ? "lod" : ""}`}>
       <div className="node-header">
         <span className="node-title">{spec.title}</span>
+        {spec.kind === "psdTemplate" ? <span className="node-tag">PSD</span> : null}
         <span className={`badge badge-${status}`} title={fmtDuration(d.durationMs)}>
           {status}
           {d.durationMs != null && (status === "succeeded" || status === "failed" || status === "cancelled") ? (
@@ -133,6 +176,51 @@ function HgripeNodeImpl({ id, data, selected }: NodeProps) {
           ) : (
             <div className="node-thumb placeholder">no image</div>
           ))}
+
+        {spec.kind === "psdTemplate" && templateWarn ? (
+          <div className="node-warn nodrag" title={templateWarn}>
+            ⚠ {templateWarn}
+          </div>
+        ) : null}
+
+        {spec.kind === "save" ? (
+          <div className="psd-conn">
+            <span className={isConnected("image") ? "ok" : "warn"}>
+              image {isConnected("image") ? "✓" : "✕"}
+            </span>
+            <span className={isConnected("template") ? "ok" : "muted"}>
+              template {isConnected("template") ? "✓" : "—"}
+            </span>
+          </div>
+        ) : null}
+
+        {spec.kind === "psdExport" ? (
+          <div className="psd-export">
+            <div className="psd-conn">
+              <span className={isConnected("image") ? "ok" : "warn"}>
+                image {isConnected("image") ? "✓" : "✕"}
+              </span>
+              <span className={isConnected("template") ? "ok" : "warn"}>
+                template {isConnected("template") ? "✓" : "✕"}
+              </span>
+            </div>
+            {d.psdPreviewPath ? (
+              <LazyThumb path={d.psdPreviewPath} />
+            ) : (
+              <div className="node-thumb placeholder">no export yet</div>
+            )}
+            {d.psdPath ? <PathRow label="psd" path={d.psdPath} /> : null}
+            {d.psdPreviewPath ? <PathRow label="preview" path={d.psdPreviewPath} /> : null}
+            {d.psdMetadataPath ? <PathRow label="meta" path={d.psdMetadataPath} /> : null}
+            {d.placeholderKind || d.smartObjectMode ? (
+              <small className="psd-meta">
+                {d.placeholderKind ? `placeholder: ${d.placeholderKind}` : ""}
+                {d.placeholderKind && d.smartObjectMode ? " · " : ""}
+                {d.smartObjectMode ? `smart: ${d.smartObjectMode}` : ""}
+              </small>
+            ) : null}
+          </div>
+        ) : null}
       </div>}
 
       {spec.inputs.map((p, i) => (

@@ -6,8 +6,9 @@
 // sinks. This wires the renderer-agnostic DAG runtime to real backend
 // capability.
 
-import { analyzePsdContext, composePsd, detectQualityIssues, enhanceImage, getOutputDir, matchLightColor, refineMaskEdge, runTaskJson } from "../bridge/tauri";
-import type { Bounds, VisualContext } from "../types/production";
+import { analyzePsdContext, composePsd, compositeRepaint, detectQualityIssues, enhanceImage, getOutputDir, matchLightColor, prepareRepaintRegions, refineMaskEdge, runTaskJson } from "../bridge/tauri";
+import type { RepaintedCrop } from "../bridge/tauri";
+import type { Bounds, QualityReport, VisualContext } from "../types/production";
 import type { ExecutorRegistry } from "./dag";
 import {
   optimizePromptLocally,
@@ -18,6 +19,22 @@ import {
 // Params that are not forwarded into the broker task's `params` map; they are
 // top-level task fields instead.
 const GENERATE_RESERVED = new Set(["provider", "operation", "credentials_ref"]);
+
+// Detail Repaint params consumed by the node itself / forwarded as top-level
+// task fields, so they are not copied into each region's broker task `params`.
+const DETAIL_REPAINT_RESERVED = new Set([
+  "provider",
+  "operation",
+  "credentials_ref",
+  "repaint_prompt_base",
+  "repaint_actions",
+  "min_confidence",
+  "region_padding",
+  "max_regions",
+  "feather_px",
+  "output_dir",
+  "output_name",
+]);
 
 /** Non-empty, trimmed lines of a batch node's `items` param. */
 export function batchItems(items: unknown): string[] {
@@ -396,6 +413,88 @@ export const defaultExecutors: ExecutorRegistry = {
       quality_report: result.quality_report,
       issue_masks: result.issue_masks,
       watchdog_report: result.watchdog_report,
+    };
+  },
+
+  // Localized issue-region repaint built on a Detail Watchdog QualityReport.
+  // Crops each repaintable issue + writes an inpaint mask (`prepareRepaintRegions`),
+  // sends each crop + mask + repaint prompt through the broker's `image.edit`
+  // (same provider/credentials path as `generate`), then pastes the results back
+  // with a feathered seam (`compositeRepaint`). With no edit-capable provider
+  // (empty / `mock`) the broker loop is skipped and the image passes through.
+  detailRepaint: async (ctx) => {
+    const image = (ctx.inputs.image as string | undefined) ?? null;
+    if (!image) throw new Error("Detail Repaint needs a connected image input");
+
+    const outputDir = String(ctx.params.output_dir ?? "").trim() || (await getOutputDir());
+    const prepared = await prepareRepaintRegions({
+      image,
+      qualityReport: (ctx.inputs.quality_report as QualityReport | undefined) ?? undefined,
+      repaintActions: String(ctx.params.repaint_actions ?? "").trim() || undefined,
+      minConfidence: Number(ctx.params.min_confidence ?? 0),
+      padding: Number(ctx.params.region_padding ?? 24),
+      maxRegions: Number(ctx.params.max_regions ?? 8),
+      outputDir: outputDir || undefined,
+      outputName: String(ctx.params.output_name ?? "").trim() || undefined,
+    });
+
+    const provider = String(ctx.params.provider ?? "mock");
+    const operation = String(ctx.params.operation ?? "image.edit");
+    const credentialsRef = String(ctx.params.credentials_ref ?? "") || null;
+    const promptBase = String(ctx.params.repaint_prompt_base ?? "").trim();
+
+    // Forward every non-reserved, non-empty param into each region's task.
+    const params: Record<string, unknown> = {};
+    for (const [key, value] of Object.entries(ctx.params)) {
+      if (DETAIL_REPAINT_RESERVED.has(key)) continue;
+      if (value === "" || value === null || value === undefined) continue;
+      params[key] = value;
+    }
+
+    // mock / empty provider has no `image.edit` capability: leave every region
+    // unrepainted so the composite step passes the image through unchanged.
+    const providerCanEdit = provider.length > 0 && provider !== "mock";
+    const repainted: RepaintedCrop[] = [];
+    if (providerCanEdit) {
+      for (const region of prepared.regions) {
+        const issue = region.type ?? "";
+        const prompt = promptBase
+          ? issue
+            ? `${promptBase} (issue: ${issue})`
+            : promptBase
+          : `Repaint and restore this ${issue || "flagged"} region with clean, realistic detail; keep the style, lighting and colours consistent with the surroundings.`;
+        const task = {
+          id: `studio-${ctx.nodeId}-r${region.index}-${Date.now()}`,
+          provider,
+          operation,
+          inputs: { image_path: region.crop_path, mask_path: region.mask_path, prompt },
+          params: { ...params, save_outputs: true },
+          credentials_ref: credentialsRef,
+          output_type: "image",
+          cache_policy: { enabled: false, ttl_seconds: null, key: null },
+          retry_policy: { max_attempts: 1, backoff_ms: 200, timeout_ms: 120000 },
+        };
+        const result = await runTaskJson(task);
+        // A per-region provider failure leaves that region unrepainted rather
+        // than aborting the whole node.
+        if (result.status !== "failed") {
+          const path = result.output_files?.[0]?.path;
+          if (path) repainted.push({ index: region.index, path });
+        }
+      }
+    }
+
+    const composed = await compositeRepaint({
+      image,
+      manifest: prepared,
+      repainted,
+      featherPx: Number(ctx.params.feather_px ?? 0),
+      outputDir: outputDir || undefined,
+      outputName: String(ctx.params.output_name ?? "").trim() || undefined,
+    });
+    return {
+      fixed_image: composed.fixed_image,
+      repaint_report: composed.repaint_report,
     };
   },
 

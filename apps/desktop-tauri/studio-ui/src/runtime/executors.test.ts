@@ -1,4 +1,5 @@
-import { describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
+import * as bridge from "../bridge/tauri";
 import { GRAPH_VERSION, type WorkflowGraph } from "../graph/model";
 import { runGraph, validateGraph } from "./dag";
 import { batchItems, defaultExecutors } from "./executors";
@@ -517,6 +518,103 @@ describe("detailWatchdog", () => {
   it("requires a connected image input", async () => {
     await expect(
       defaultExecutors.detailWatchdog(ctx("detailWatchdog", {})),
+    ).rejects.toThrow(/connected image/);
+  });
+});
+
+describe("detailRepaint", () => {
+  afterEach(() => {
+    vi.restoreAllMocks();
+  });
+
+  const REPORT = {
+    status: "failed",
+    issues: [
+      { type: "face_blur", confidence: 0.9, bbox: [40, 40, 160, 200], suggested_action: "detail_redraw" },
+      { type: "hand_error", confidence: 0.4, bbox: [200, 300, 280, 380], suggested_action: "detail_redraw" },
+      { type: "color_mismatch", confidence: 0.95, bbox: [0, 0, 100, 100], suggested_action: "color_match" },
+    ],
+  };
+
+  // Outside Tauri (and with a mock provider) the broker loop is skipped, so the
+  // composite mock leaves every selected region unrepainted and passes through.
+  it("selects only repaintable, confident issues and passes through under a mock provider", async () => {
+    const out = (await defaultExecutors.detailRepaint(
+      ctx(
+        "detailRepaint",
+        { provider: "mock", repaint_actions: "detail_redraw", min_confidence: 0.5, output_dir: "/out" },
+        { image: "/cand.png", quality_report: REPORT },
+      ),
+    )) as Record<string, unknown>;
+    // mock provider => nothing repainted => image unchanged.
+    expect(out.fixed_image).toBe("/cand.png");
+    const report = out.repaint_report as {
+      status: string;
+      regions: { index: number; status: string }[];
+      requested_count: number;
+      repainted_count: number;
+    };
+    expect(report.status).toBe("unchanged");
+    expect(report.repainted_count).toBe(0);
+    // face_blur (0.9, detail_redraw) selected; hand_error below min_confidence,
+    // color_mismatch not a repaint action => both dropped.
+    expect(report.requested_count).toBe(1);
+    expect(report.regions.map((r) => r.index)).toEqual([0]);
+    expect(report.regions[0].status).toBe("no_repaint");
+  });
+
+  it("sends one image.edit task per region through the broker and reports repainted", async () => {
+    const tasks: Record<string, unknown>[] = [];
+    vi.spyOn(bridge, "runTaskJson").mockImplementation(async (task: unknown) => {
+      const t = task as Record<string, unknown>;
+      tasks.push(t);
+      return { id: String(t.id), status: "succeeded", output_files: [{ path: `${String(t.id)}.png` }] };
+    });
+
+    const out = (await defaultExecutors.detailRepaint(
+      ctx(
+        "detailRepaint",
+        {
+          provider: "openai_compatible",
+          operation: "image.edit",
+          credentials_ref: "openai-key",
+          repaint_prompt_base: "restore detail",
+          repaint_actions: "detail_redraw",
+          min_confidence: 0,
+          max_regions: 8,
+          model: "gpt-image-1",
+          output_dir: "/out",
+        },
+        { image: "/cand.png", quality_report: REPORT },
+      ),
+    )) as Record<string, unknown>;
+
+    // Two repaintable issues (face_blur, hand_error) => two broker tasks.
+    expect(tasks).toHaveLength(2);
+    const first = tasks[0];
+    expect(first.provider).toBe("openai_compatible");
+    expect(first.operation).toBe("image.edit");
+    expect(first.credentials_ref).toBe("openai-key");
+    const inputs = first.inputs as Record<string, unknown>;
+    expect(inputs.image_path).toBe("/out/candidate_repaint_region0.png");
+    expect(inputs.mask_path).toBe("/out/candidate_repaint_region0_mask.png");
+    expect(inputs.prompt).toBe("restore detail (issue: face_blur)");
+    const params = first.params as Record<string, unknown>;
+    // Non-reserved params are forwarded; node-config params are not.
+    expect(params.model).toBe("gpt-image-1");
+    expect(params.save_outputs).toBe(true);
+    expect(params.provider).toBeUndefined();
+    expect(params.repaint_prompt_base).toBeUndefined();
+
+    const report = out.repaint_report as { status: string; repainted_count: number };
+    expect(report.status).toBe("repainted");
+    expect(report.repainted_count).toBe(2);
+    expect(out.fixed_image).toBe("/out/candidate_repainted.png");
+  });
+
+  it("requires a connected image input", async () => {
+    await expect(
+      defaultExecutors.detailRepaint(ctx("detailRepaint", {})),
     ).rejects.toThrow(/connected image/);
   });
 });

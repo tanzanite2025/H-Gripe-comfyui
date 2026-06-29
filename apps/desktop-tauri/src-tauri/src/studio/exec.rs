@@ -25,6 +25,7 @@ use super::image_enhance::execute_studio_image_enhance;
 use super::psd_analyze::execute_studio_psd_context_analyze;
 use super::psd_export::execute_studio_psd_export;
 use crate::broker;
+use crate::psd::{composite_repaint, prepare_repaint_regions};
 
 const STUDIO_GRAPH_RUN_EVENT: &str = "studio:graph-run";
 
@@ -380,6 +381,195 @@ async fn execute_studio_generate(
     ]))
 }
 
+/// The `detailRepaint` node executor: localized issue-region repaint built on
+/// top of a Detail Watchdog `QualityReport`. Crops each repaintable issue (via
+/// `prepare_repaint_regions`), sends each crop + inpaint mask + repaint prompt
+/// through the broker's `image.edit` operation (the same provider/credentials
+/// path as `generate`), then pastes the results back with a feathered seam
+/// (`composite_repaint`). Outputs the fixed image and a `RepaintReport`.
+///
+/// When no `image.edit`-capable provider is configured (empty or `mock`), the
+/// provider loop is skipped and the node passes the image through unchanged
+/// (`repaint_report.status == "unchanged"`), mirroring the mock behaviour of
+/// the other production nodes.
+async fn execute_studio_detail_repaint(
+    node: &StudioGraphNode,
+    inputs: &BTreeMap<String, Value>,
+    cancels: &tauri::State<'_, StudioRunCancels>,
+    run_id: &str,
+) -> Result<BTreeMap<String, Value>, String> {
+    let image = studio_value_to_string(inputs.get("image"));
+    if image.trim().is_empty() {
+        return Err("Detail Repaint needs a connected image input".to_string());
+    }
+
+    // The QualityReport from Detail Watchdog, forwarded to the CLI as JSON.
+    let quality_report = match inputs.get("quality_report") {
+        Some(value) if !value.is_null() => Some(
+            serde_json::to_string(value)
+                .map_err(|err| format!("failed to encode quality_report input: {err}"))?,
+        ),
+        _ => None,
+    };
+
+    let output_dir = {
+        let configured = studio_value_to_string(node.params.get("output_dir"));
+        if configured.trim().is_empty() {
+            crate::runtime_paths()?
+                .output_dir
+                .to_string_lossy()
+                .to_string()
+        } else {
+            configured
+        }
+    };
+    let output_name = {
+        let configured = studio_value_to_string(node.params.get("output_name"));
+        let trimmed = configured.trim();
+        if trimmed.is_empty() {
+            None
+        } else {
+            Some(trimmed.to_string())
+        }
+    };
+
+    let repaint_actions = {
+        let configured = studio_value_to_string(node.params.get("repaint_actions"));
+        let trimmed = configured.trim();
+        if trimmed.is_empty() {
+            None
+        } else {
+            Some(trimmed.to_string())
+        }
+    };
+    let min_confidence = studio_param_f64(node, "min_confidence");
+    let padding = studio_param_i64(node, "region_padding");
+    let max_regions = studio_param_i64(node, "max_regions");
+    let feather_px = studio_param_f64(node, "feather_px");
+
+    let prepared = prepare_repaint_regions(
+        None,
+        image.clone(),
+        quality_report,
+        repaint_actions,
+        min_confidence,
+        padding,
+        max_regions,
+        Some(false),
+        Some(output_dir.clone()),
+        None,
+    )?;
+    let manifest = serde_json::to_string(&prepared)
+        .map_err(|err| format!("failed to encode repaint manifest: {err}"))?;
+
+    let provider = studio_value_to_string(node.params.get("provider"))
+        .trim()
+        .to_string();
+    let operation = {
+        let configured = studio_value_to_string(node.params.get("operation"));
+        let trimmed = configured.trim();
+        if trimmed.is_empty() {
+            "image.edit".to_string()
+        } else {
+            trimmed.to_string()
+        }
+    };
+    let credentials_ref = studio_value_to_string(node.params.get("credentials_ref"))
+        .trim()
+        .to_string();
+    let prompt_base = studio_value_to_string(node.params.get("repaint_prompt_base"))
+        .trim()
+        .to_string();
+
+    // Only call a real provider; mock/empty means no `image.edit` capability,
+    // so we leave every region unrepainted and pass the image through.
+    let provider_can_edit = !provider.is_empty() && provider != "mock";
+    let mut repainted: Vec<Value> = Vec::new();
+    if provider_can_edit {
+        for region in &prepared.regions {
+            let mut task = ApiTask::new(provider.clone(), operation.clone());
+            task.id = studio_task_id(&node.id);
+            task.output_type = OutputType::Image;
+            task.cache_policy.enabled = false;
+            task.retry_policy.max_attempts = 1;
+            task.retry_policy.backoff_ms = 200;
+            task.retry_policy.timeout_ms = Some(120_000);
+
+            task.inputs
+                .insert("image_path".to_string(), json!(region.crop_path));
+            task.inputs
+                .insert("mask_path".to_string(), json!(region.mask_path));
+            let issue = region.issue_type.clone().unwrap_or_default();
+            let prompt = if prompt_base.is_empty() {
+                let label = if issue.is_empty() { "flagged" } else { &issue };
+                format!(
+                    "Repaint and restore this {label} region with clean, realistic detail; \
+                     keep the style, lighting and colours consistent with the surroundings."
+                )
+            } else if issue.is_empty() {
+                prompt_base.clone()
+            } else {
+                format!("{prompt_base} (issue: {issue})")
+            };
+            task.inputs.insert("prompt".to_string(), json!(prompt));
+            task.params.insert("save_outputs".to_string(), json!(true));
+
+            for (key, value) in &node.params {
+                if matches!(
+                    key.as_str(),
+                    "provider"
+                        | "operation"
+                        | "credentials_ref"
+                        | "repaint_prompt_base"
+                        | "repaint_actions"
+                        | "min_confidence"
+                        | "region_padding"
+                        | "max_regions"
+                        | "feather_px"
+                        | "output_dir"
+                        | "output_name"
+                ) {
+                    continue;
+                }
+                if studio_non_empty(value) {
+                    task.params.insert(key.clone(), value.clone());
+                }
+            }
+            if !credentials_ref.is_empty() {
+                task.credentials_ref = Some(credentials_ref.clone());
+            }
+
+            let result = execute_and_record_cancellable(task, cancels, run_id).await?;
+            if matches!(result.status, ApiStatus::Succeeded | ApiStatus::Cached) {
+                if let Some(file) = result.output_files.first() {
+                    repainted.push(json!({ "index": region.index, "path": file.path.clone() }));
+                }
+            }
+            // A per-region provider failure leaves that region unrepainted
+            // rather than aborting the whole node.
+        }
+    }
+
+    let repainted_json = serde_json::to_string(&repainted)
+        .map_err(|err| format!("failed to encode repainted list: {err}"))?;
+    let composed = composite_repaint(
+        None,
+        image,
+        manifest,
+        repainted_json,
+        feather_px,
+        Some(output_dir),
+        output_name,
+    )?;
+
+    let report = serde_json::to_value(&composed.repaint_report)
+        .map_err(|err| format!("failed to encode RepaintReport: {err}"))?;
+    Ok(studio_output_map([
+        ("fixed_image", json!(composed.fixed_image)),
+        ("repaint_report", report),
+    ]))
+}
+
 /// Booster tags appended (deduped) per local preset. Mirrors the TS
 /// `PRESET_TAGS` in `runtime/promptOptimize.ts`; keep both in sync.
 fn studio_preset_tags(preset: &str) -> &'static [&'static str] {
@@ -686,6 +876,7 @@ async fn execute_studio_node(
         "refineMaskEdge" => execute_studio_refine_mask_edge(node, &inputs),
         "imageEnhance" => execute_studio_image_enhance(node, &inputs),
         "detailWatchdog" => execute_studio_detail_watchdog(node, &inputs),
+        "detailRepaint" => execute_studio_detail_repaint(node, &inputs, cancels, run_id).await,
         "psdExport" => execute_studio_psd_export(node, &inputs),
         other => Err(format!("unsupported Studio node kind: {other}")),
     }

@@ -83,6 +83,33 @@ export interface QualityReport {
   issues: QualityIssue[];
 }
 
+/** Per-region outcome of a Detail Repaint run (mirrors Rust `RepaintRegionResult`). */
+export interface RepaintRegionResult {
+  /** Index of the issue in the source QualityReport. */
+  index: number;
+  /** Issue type carried over from the QualityReport (e.g. `face_blur`). */
+  type?: string | null;
+  /** `[x1, y1, x2, y2]` issue box in canvas pixels. */
+  bbox?: [number, number, number, number] | null;
+  /** `repainted | no_repaint | bad_geometry | skipped`. */
+  status: string;
+  /** Seam feather radius actually used when the region was repainted. */
+  feather_px?: number | null;
+}
+
+/** Outcome of the Detail Repaint node (mirrors Rust `RepaintReport`). */
+export interface RepaintReport {
+  /** `unchanged | partial | repainted`. */
+  status: string;
+  regions: RepaintRegionResult[];
+  /** How many regions were actually repainted. */
+  repainted_count: number;
+  /** How many regions the composite step was asked to handle. */
+  requested_count: number;
+  /** `[width, height]` of the fixed image. */
+  image_size: [number, number];
+}
+
 /** Exported artifact paths recorded for a finished workflow. */
 export interface ExportedArtifacts {
   psd: string;

@@ -625,3 +625,16 @@ button:disabled { opacity: 0.6; cursor: default; }
 .context-menu button:hover:not(:disabled) { background: #2a2f3d; }
 .context-menu button:disabled { color: var(--muted); cursor: default; }
 .inline-field .path { margin-top: 1px; }
+
+/* Run history panel */
+.runhistory-row { flex-direction: column; gap: 0; }
+.runhistory-outcome-succeeded { color: #6fcf97; }
+.runhistory-outcome-failed { color: #eb5757; }
+.runhistory-outcome-cancelled { color: var(--muted); }
+.runhistory-log {
+  margin: 2px 0 6px 10px;
+  padding-left: 8px;
+  border-left: 1px solid var(--border, #333);
+  max-height: 200px;
+  overflow: auto;
+}

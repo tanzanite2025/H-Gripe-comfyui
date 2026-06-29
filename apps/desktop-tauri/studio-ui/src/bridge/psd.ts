@@ -4,6 +4,7 @@
 // re-implementing them.
 
 import { tauriInvoke } from "./core";
+import type { VisualContext } from "../types/production";
 
 // Fields are snake_case to match the Rust `ProviderProfileSummary`.
 export interface ProviderProfile {
@@ -166,4 +167,70 @@ export async function inspectPsd(
     template,
     names: names ?? null,
   })) as InspectPsdResult;
+}
+
+// --- PSD context analyze ----------------------------------------------------
+// Wraps the Rust `analyze_psd_context` command, which shells out to the
+// torch-free `analyze_psd_cli.py` helper to distil a PSD template into a
+// `VisualContext` (background/lighting heuristics, placeholder geometry, a
+// written mask + background preview, and a ready-to-append prompt suffix).
+
+export interface AnalyzePsdRequest {
+  /** Path to the `.psd` template. */
+  template: string;
+  /** Background layer name to sample (empty/omitted: composite the whole PSD). */
+  backgroundLayer?: string;
+  /** Placeholder layer name (empty/omitted: use the whole canvas). */
+  targetPlaceholder?: string;
+  /** Reference layer names (advisory in Phase 1). */
+  referenceLayers?: string[];
+  /** Directory for the written mask + background preview PNGs. */
+  outputDir?: string;
+}
+
+/**
+ * Analyze a PSD template into a {@link VisualContext} via the backend
+ * (`analyze_psd_context`). Reading a `.psd` and writing the mask/background
+ * previews requires the Python/psd-tools pipeline, which only exists in the
+ * desktop build, so outside Tauri this returns a plausible mock so the editor
+ * stays runnable in browser dev.
+ */
+export async function analyzePsdContext(req: AnalyzePsdRequest): Promise<VisualContext> {
+  const invoke = tauriInvoke();
+  if (!invoke) {
+    const base = `${(req.outputDir ?? "/mock/outputs").replace(/\/$/, "")}/template`;
+    return {
+      background: {
+        mean_color: [128, 116, 102],
+        dominant_palette: ["#c8b6a0", "#202025", "#f4eee7"],
+        brightness: 0.48,
+        contrast: 0.72,
+        histogram_path: null,
+        image_path: `${base}_background.png`,
+      },
+      lighting: {
+        direction: "top-left",
+        quality: "hard",
+        color_temperature: 5500,
+        description: "warm background with hard key light from top-left, color temperature 5500k",
+      },
+      placeholder: {
+        layer_name: req.targetPlaceholder ?? "",
+        bounds: { x: 320, y: 180, width: 1024, height: 1400 },
+        mask_path: `${base}_placeholder_mask.png`,
+        safe_area: { x: 371, y: 250, width: 922, height: 1260 },
+      },
+      prompt_suffix:
+        "matched with the PSD background lighting: hard key light from top-left, " +
+        "warm neutral background, color temperature 5500k, realistic contact shadow, " +
+        "consistent highlight direction, no floating object",
+    };
+  }
+  return (await invoke("analyze_psd_context", {
+    template: req.template,
+    backgroundLayer: req.backgroundLayer ?? null,
+    targetPlaceholder: req.targetPlaceholder ?? null,
+    referenceLayers: req.referenceLayers ?? null,
+    outputDir: req.outputDir ?? null,
+  })) as VisualContext;
 }

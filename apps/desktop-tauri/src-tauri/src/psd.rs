@@ -9,6 +9,7 @@ use std::path::{Path, PathBuf};
 
 use serde::{Deserialize, Serialize};
 
+use crate::contracts::VisualContext;
 use crate::modified_ms;
 use crate::studio::studio_reject_unsafe_basename;
 
@@ -286,7 +287,10 @@ pub(crate) fn inspect_psd(
     let python = project_python(&dir);
     let script = dir.join("python").join("bridge").join("inspect_psd_cli.py");
     if !script.is_file() {
-        return Err(format!("inspect_psd_cli.py not found at {}", script.display()));
+        return Err(format!(
+            "inspect_psd_cli.py not found at {}",
+            script.display()
+        ));
     }
     let names_json =
         serde_json::to_string(&names.unwrap_or_default()).map_err(|err| err.to_string())?;
@@ -316,6 +320,77 @@ pub(crate) fn inspect_psd(
     serde_json::from_str::<InspectPsdResult>(stdout.trim()).map_err(|err| {
         format!(
             "could not parse inspect_psd output: {err} (raw: {})",
+            stdout.trim()
+        )
+    })
+}
+
+/// Analyze a PSD template into a machine-usable [`VisualContext`]: background
+/// colour/lighting heuristics, the target placeholder's geometry, and a
+/// ready-to-append prompt suffix. This is the **PSD Context Analyze** node's
+/// backend (the first PSD production node): downstream nodes (Light & Color
+/// Match, etc.) consume the returned context so the user never hand-describes
+/// the template's lighting/colour.
+///
+/// Like `compose_psd` / `inspect_psd`, it shells out to
+/// `python/bridge/analyze_psd_cli.py` using the project's bundled Python,
+/// reusing the vendored psd-tools + Pillow pipeline. `background_layer` /
+/// `target_placeholder` may be empty (auto: whole-canvas placeholder, full
+/// composite background); `output_dir` is where the placeholder mask and
+/// background preview PNGs are written (defaults to the CLI's choice when
+/// omitted). `reference_layers` is currently advisory (Phase 1 is heuristic).
+#[tauri::command]
+pub(crate) fn analyze_psd_context(
+    dir: Option<String>,
+    template: String,
+    background_layer: Option<String>,
+    target_placeholder: Option<String>,
+    reference_layers: Option<Vec<String>>,
+    output_dir: Option<String>,
+) -> Result<VisualContext, String> {
+    let dir = resolve_project_dir(&dir)?;
+    let python = project_python(&dir);
+    let script = dir.join("python").join("bridge").join("analyze_psd_cli.py");
+    if !script.is_file() {
+        return Err(format!(
+            "analyze_psd_cli.py not found at {}",
+            script.display()
+        ));
+    }
+    let references_json = serde_json::to_string(&reference_layers.unwrap_or_default())
+        .map_err(|err| err.to_string())?;
+
+    let mut cmd = std::process::Command::new(&python);
+    cmd.arg(&script)
+        .arg("--template")
+        .arg(&template)
+        .arg("--background-layer")
+        .arg(background_layer.as_deref().unwrap_or(""))
+        .arg("--target-placeholder")
+        .arg(target_placeholder.as_deref().unwrap_or(""))
+        .arg("--reference-layers")
+        .arg(&references_json)
+        .arg("--output-dir")
+        .arg(output_dir.as_deref().unwrap_or(""))
+        .current_dir(&dir);
+    #[cfg(windows)]
+    {
+        use std::os::windows::process::CommandExt;
+        // CREATE_NO_WINDOW: don't pop a console window for the child.
+        cmd.creation_flags(0x0800_0000);
+    }
+
+    let output = cmd
+        .output()
+        .map_err(|err| format!("failed to launch {}: {err}", python.display()))?;
+    if !output.status.success() {
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        return Err(format!("analyze_psd_context failed: {}", stderr.trim()));
+    }
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    serde_json::from_str::<VisualContext>(stdout.trim()).map_err(|err| {
+        format!(
+            "could not parse analyze_psd_context output: {err} (raw: {})",
             stdout.trim()
         )
     })

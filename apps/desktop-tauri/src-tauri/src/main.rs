@@ -22,6 +22,7 @@ use hgripe_api::{
 };
 use serde::Serialize;
 
+mod contracts;
 mod psd;
 mod studio;
 
@@ -513,7 +514,8 @@ fn main() {
             read_text_file,
             open_path,
             psd::compose_psd,
-            psd::inspect_psd
+            psd::inspect_psd,
+            psd::analyze_psd_context
         ])
         .run(tauri::generate_context!())
         .expect("error while running H-Gripe Desktop");

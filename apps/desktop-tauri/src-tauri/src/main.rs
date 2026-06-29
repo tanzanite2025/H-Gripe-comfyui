@@ -516,7 +516,8 @@ fn main() {
             psd::compose_psd,
             psd::inspect_psd,
             psd::analyze_psd_context,
-            psd::match_light_color
+            psd::match_light_color,
+            psd::refine_mask_edge
         ])
         .run(tauri::generate_context!())
         .expect("error while running H-Gripe Desktop");

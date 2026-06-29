@@ -6,7 +6,7 @@
 // sinks. This wires the renderer-agnostic DAG runtime to real backend
 // capability.
 
-import { analyzePsdContext, composePsd, getOutputDir, matchLightColor, runTaskJson } from "../bridge/tauri";
+import { analyzePsdContext, composePsd, getOutputDir, matchLightColor, refineMaskEdge, runTaskJson } from "../bridge/tauri";
 import type { VisualContext } from "../types/production";
 import type { ExecutorRegistry } from "./dag";
 import {
@@ -307,6 +307,37 @@ export const defaultExecutors: ExecutorRegistry = {
       matched_image: result.matched_image,
       match_report: result.match_report,
       prompt_suffix: result.prompt_suffix,
+    };
+  },
+
+  // Cleans the upstream subject's matte (erode/dilate, guided-filter edge
+  // snapping, feather, colour decontamination) so it drops into a PSD
+  // placeholder without white halos via the backend `refine_mask_edge`
+  // command, exposing the refined image, refined mask, and an edge report.
+  refineMaskEdge: async (ctx) => {
+    const image = (ctx.inputs.image as string | undefined) ?? null;
+    if (!image) throw new Error("Mask Edge Refine needs a connected image input");
+
+    const outputDir = String(ctx.params.output_dir ?? "").trim() || (await getOutputDir());
+    const result = await refineMaskEdge({
+      image,
+      mask: (ctx.inputs.mask as string | undefined) || undefined,
+      background: (ctx.inputs.background as string | undefined) || undefined,
+      placeholderMask: (ctx.inputs.placeholder_mask as string | undefined) || undefined,
+      preset: String(ctx.params.preset ?? "natural") || undefined,
+      erodePx: Number(ctx.params.erode_px ?? 1),
+      dilatePx: Number(ctx.params.dilate_px ?? 0),
+      featherPx: Number(ctx.params.feather_px ?? 4),
+      guidedRadius: Number(ctx.params.guided_radius ?? 8),
+      edgeDecontaminate: Boolean(ctx.params.edge_decontaminate ?? true),
+      backgroundBlendStrength: Number(ctx.params.background_blend_strength ?? 0.4),
+      outputDir: outputDir || undefined,
+      outputName: String(ctx.params.output_name ?? "").trim() || undefined,
+    });
+    return {
+      refined_image: result.refined_image,
+      refined_mask: result.refined_mask,
+      edge_report: result.edge_report,
     };
   },
 

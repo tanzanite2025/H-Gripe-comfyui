@@ -470,6 +470,14 @@ fn main() {
     tauri::Builder::default()
         .plugin(tauri_plugin_dialog::init())
         .manage(StudioRunCancels::default())
+        .setup(|app| {
+            // Capture the bundled resource directory so the PSD nodes can fall
+            // back to the `main.py` + `python/bridge` subtree shipped via
+            // `bundle.resources` when running from a packaged install.
+            use tauri::Manager;
+            psd::set_resource_dir(app.path().resource_dir().ok());
+            Ok(())
+        })
         .invoke_handler(tauri::generate_handler![
             get_runtime_info,
             doctor,

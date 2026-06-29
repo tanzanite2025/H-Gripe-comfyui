@@ -18,7 +18,7 @@ import "@xyflow/react/dist/style.css";
 
 import { HgripeNode, type HgripeNodeData } from "./HgripeNode";
 import { GroupNode } from "./GroupNode";
-import { HelperLines } from "./HelperLines";
+import { HelperLineOverlay } from "./HelperLineOverlay";
 import { SmartEdge } from "./SmartEdge";
 import { miniMapColor } from "./minimap";
 import { DND_NODE_KIND } from "./Palette";
@@ -181,7 +181,7 @@ export function FlowCanvas({
       <Background />
       {showMinimap && <MiniMap pannable zoomable nodeColor={miniColor} nodeStrokeWidth={3} />}
       <Controls />
-      <HelperLines horizontal={helperLines?.horizontal} vertical={helperLines?.vertical} />
+      <HelperLineOverlay horizontal={helperLines?.horizontal} vertical={helperLines?.vertical} />
     </ReactFlow>
   );
 }

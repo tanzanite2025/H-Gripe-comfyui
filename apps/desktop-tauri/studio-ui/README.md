@@ -42,6 +42,34 @@ src/
   on. The adapter converts render state <-> `WorkflowGraph` (both directions:
   `toWorkflowGraph` / `fromWorkflowGraph` for save/load).
 
+## Backend boundary
+
+The editor is allowed to be frontend-heavy for interaction work: drag/drop,
+selection, grouping, reroute nodes, helper lines, minimap, context menus,
+viewport LOD, inline controls, undo/redo, and graph validation can all stay in
+TypeScript because they do not touch real files, credentials, provider APIs, GPU
+services, or long-running jobs.
+
+Production execution must not remain frontend-only. Anything with real side
+effects goes through Tauri/Rust:
+
+- API execution uses the existing broker via `run_task_json`.
+- PSD composition uses the desktop backend command `compose_psd`.
+- Thumbnails use `generate_thumbnail`, with the original media path remaining
+  the source of truth.
+- File access uses native commands such as `pick_file`, `list_psd_outputs`, and
+  runtime path/profile commands rather than browser-only state.
+- Credentials, provider profiles, output directories, history, cache indexes,
+  local GPU service startup, and video export should live behind Rust commands.
+
+Current limitation: `runtime/runGraph` is still the default TypeScript DAG
+runner in the UI. A first Rust-side `run_studio_graph` Tauri command now exists:
+it accepts the same renderer-agnostic `WorkflowGraph` JSON, executes pure/value
+nodes, and routes `generate` / `psdExport` through the backend broker and PSD
+pipeline. Before the Node Editor becomes the primary production surface, this
+backend runner still needs progress/event streaming, durable workflow save/load,
+a media index/cache, cancelable jobs, and FFmpeg-backed video assembly/export.
+
 ## Editor features
 
 - **Node palette** (left rail): drag a node kind onto the canvas (drop position

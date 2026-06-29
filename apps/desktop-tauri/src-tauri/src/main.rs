@@ -3,10 +3,12 @@
     windows_subsystem = "windows"
 )]
 
+use std::collections::{BTreeMap, HashMap, HashSet, VecDeque};
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::process::Child;
 use std::sync::Mutex;
+use std::time::{Instant, SystemTime, UNIX_EPOCH};
 
 use hgripe_api::providers::custom_http::CustomHttpProvider;
 use hgripe_api::providers::mock::MockProvider;
@@ -17,12 +19,13 @@ use hgripe_api::{
     credentials_file_path, get_history_detail, get_history_record, list_credential_summaries,
     list_provider_profile_summaries, plan_history_cleanup, provider_profiles_path,
     query_history_records, record_task_failure, record_task_result, validate_credentials,
-    validate_provider_profiles, ApiBroker, ApiResult, ApiTask, CredentialSummary,
+    validate_provider_profiles, ApiBroker, ApiResult, ApiStatus, ApiTask, CredentialSummary,
     CredentialsValidation, DoctorOptions, DoctorReport, HistoryCleanupOptions, HistoryCleanupPlan,
     HistoryCleanupResult, HistoryDetail, HistoryQuery, HistoryRecord, HistoryRerunOptions,
-    ProviderProfileSummary, ProviderProfilesValidation, RuntimePaths,
+    OutputType, ProviderProfileSummary, ProviderProfilesValidation, RuntimePaths,
 };
 use serde::{Deserialize, Serialize};
+use serde_json::{json, Value};
 
 fn broker() -> ApiBroker {
     let mut broker = ApiBroker::new();
@@ -182,6 +185,571 @@ async fn run_task_json(task_json: String) -> Result<ApiResult, String> {
     let task: ApiTask =
         serde_json::from_str(&task_json).map_err(|err| format!("invalid ApiTask JSON: {err}"))?;
     execute_and_record(task).await
+}
+
+#[derive(Debug, Deserialize)]
+struct StudioWorkflowGraph {
+    version: u32,
+    #[serde(default)]
+    nodes: Vec<StudioGraphNode>,
+    #[serde(default)]
+    edges: Vec<StudioGraphEdge>,
+}
+
+#[derive(Debug, Deserialize)]
+struct StudioGraphNode {
+    id: String,
+    kind: String,
+    #[serde(default)]
+    params: BTreeMap<String, Value>,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct StudioGraphEdge {
+    id: String,
+    source: String,
+    source_port: String,
+    target: String,
+    target_port: String,
+}
+
+#[derive(Debug, Serialize)]
+struct StudioGraphRunResult {
+    version: u32,
+    outputs: BTreeMap<String, BTreeMap<String, Value>>,
+    statuses: BTreeMap<String, String>,
+    node_runs: Vec<StudioNodeRun>,
+}
+
+#[derive(Debug, Serialize)]
+struct StudioNodeRun {
+    node_id: String,
+    kind: String,
+    status: String,
+    duration_ms: Option<u128>,
+    error: Option<String>,
+}
+
+fn studio_output_map<const N: usize>(entries: [(&str, Value); N]) -> BTreeMap<String, Value> {
+    entries
+        .into_iter()
+        .map(|(key, value)| (key.to_string(), value))
+        .collect()
+}
+
+fn studio_value_to_string(value: Option<&Value>) -> String {
+    match value {
+        Some(Value::String(value)) => value.clone(),
+        Some(Value::Null) | None => String::new(),
+        Some(value) => value.to_string(),
+    }
+}
+
+fn studio_value_to_number(value: Option<&Value>) -> f64 {
+    match value {
+        Some(Value::Number(number)) => number.as_f64().unwrap_or(0.0),
+        Some(Value::String(value)) => value.parse::<f64>().unwrap_or(0.0),
+        Some(Value::Bool(value)) => {
+            if *value {
+                1.0
+            } else {
+                0.0
+            }
+        }
+        _ => 0.0,
+    }
+}
+
+fn studio_truthy(value: &Value) -> bool {
+    match value {
+        Value::Null => false,
+        Value::Bool(value) => *value,
+        Value::Number(number) => number.as_f64().map(|n| n != 0.0).unwrap_or(false),
+        Value::String(value) => !value.is_empty(),
+        Value::Array(_) | Value::Object(_) => true,
+    }
+}
+
+fn studio_non_empty(value: &Value) -> bool {
+    match value {
+        Value::Null => false,
+        Value::String(value) => !value.is_empty(),
+        _ => true,
+    }
+}
+
+fn studio_task_id(node_id: &str) -> String {
+    let millis = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map(|duration| duration.as_millis())
+        .unwrap_or(0);
+    format!("studio-{node_id}-{millis}")
+}
+
+fn studio_topo_order(graph: &StudioWorkflowGraph) -> Result<Vec<String>, String> {
+    if graph.version != 1 {
+        return Err(format!(
+            "unsupported Studio graph version: {} (expected 1)",
+            graph.version
+        ));
+    }
+
+    let mut seen = HashSet::new();
+    let mut indegree: HashMap<String, usize> = HashMap::new();
+    let mut outgoing: HashMap<String, Vec<String>> = HashMap::new();
+    for node in &graph.nodes {
+        if !seen.insert(node.id.clone()) {
+            return Err(format!("duplicate node id: {}", node.id));
+        }
+        indegree.insert(node.id.clone(), 0);
+        outgoing.insert(node.id.clone(), Vec::new());
+    }
+
+    for edge in &graph.edges {
+        if !indegree.contains_key(&edge.source) {
+            return Err(format!(
+                "edge {} references missing source node {}",
+                edge.id, edge.source
+            ));
+        }
+        if !indegree.contains_key(&edge.target) {
+            return Err(format!(
+                "edge {} references missing target node {}",
+                edge.id, edge.target
+            ));
+        }
+        *indegree.entry(edge.target.clone()).or_insert(0) += 1;
+        outgoing
+            .entry(edge.source.clone())
+            .or_default()
+            .push(edge.target.clone());
+    }
+
+    let mut queue: VecDeque<String> = graph
+        .nodes
+        .iter()
+        .filter(|node| indegree.get(&node.id).copied().unwrap_or(0) == 0)
+        .map(|node| node.id.clone())
+        .collect();
+    let mut order = Vec::with_capacity(graph.nodes.len());
+
+    while let Some(id) = queue.pop_front() {
+        order.push(id.clone());
+        for target in outgoing.get(&id).into_iter().flatten() {
+            let degree = indegree
+                .get_mut(target)
+                .ok_or_else(|| format!("missing target node during topo sort: {target}"))?;
+            *degree = degree.saturating_sub(1);
+            if *degree == 0 {
+                queue.push_back(target.clone());
+            }
+        }
+    }
+
+    if order.len() != graph.nodes.len() {
+        return Err("graph contains a cycle".to_string());
+    }
+    Ok(order)
+}
+
+fn studio_node_inputs(
+    node_id: &str,
+    graph: &StudioWorkflowGraph,
+    outputs: &BTreeMap<String, BTreeMap<String, Value>>,
+) -> BTreeMap<String, Value> {
+    let mut inputs = BTreeMap::new();
+    for edge in graph.edges.iter().filter(|edge| edge.target == node_id) {
+        if let Some(value) = outputs
+            .get(&edge.source)
+            .and_then(|source_outputs| source_outputs.get(&edge.source_port))
+        {
+            inputs.insert(edge.target_port.clone(), value.clone());
+        }
+    }
+    inputs
+}
+
+fn studio_batch_items(items: Option<&Value>) -> Vec<String> {
+    studio_value_to_string(items)
+        .lines()
+        .map(str::trim)
+        .filter(|line| !line.is_empty())
+        .map(ToString::to_string)
+        .collect()
+}
+
+fn studio_compare_result(
+    params: &BTreeMap<String, Value>,
+    inputs: &BTreeMap<String, Value>,
+) -> bool {
+    let a = inputs.get("a");
+    let b = inputs.get("b");
+    let sa = studio_value_to_string(a);
+    let sb = studio_value_to_string(b);
+    let an = sa.parse::<f64>();
+    let bn = sb.parse::<f64>();
+    let numeric = !sa.is_empty() && !sb.is_empty() && an.is_ok() && bn.is_ok();
+    let op = studio_value_to_string(params.get("op"));
+
+    if numeric {
+        let a = an.unwrap_or(0.0);
+        let b = bn.unwrap_or(0.0);
+        match op.as_str() {
+            "==" => a == b,
+            "!=" => a != b,
+            ">" => a > b,
+            ">=" => a >= b,
+            "<" => a < b,
+            "<=" => a <= b,
+            _ => false,
+        }
+    } else {
+        match op.as_str() {
+            "==" => sa == sb,
+            "!=" => sa != sb,
+            ">" => sa > sb,
+            ">=" => sa >= sb,
+            "<" => sa < sb,
+            "<=" => sa <= sb,
+            _ => false,
+        }
+    }
+}
+
+fn studio_logic_result(params: &BTreeMap<String, Value>, inputs: &BTreeMap<String, Value>) -> bool {
+    let a = inputs.get("a").map(studio_truthy).unwrap_or(false);
+    let b = inputs.get("b").map(studio_truthy).unwrap_or(false);
+    match studio_value_to_string(params.get("op")).as_str() {
+        "and" => a && b,
+        "or" => a || b,
+        "xor" => a != b,
+        "not" => !a,
+        _ => false,
+    }
+}
+
+async fn execute_studio_generate(
+    node: &StudioGraphNode,
+    inputs: &BTreeMap<String, Value>,
+) -> Result<BTreeMap<String, Value>, String> {
+    let mut task = ApiTask::new(
+        studio_value_to_string(node.params.get("provider"))
+            .trim()
+            .to_string(),
+        studio_value_to_string(node.params.get("operation"))
+            .trim()
+            .to_string(),
+    );
+    if task.provider.is_empty() {
+        task.provider = "mock".to_string();
+    }
+    if task.operation.is_empty() {
+        task.operation = "image.generate".to_string();
+    }
+    task.id = studio_task_id(&node.id);
+    task.output_type = OutputType::Image;
+    task.cache_policy.enabled = false;
+    task.retry_policy.max_attempts = 1;
+    task.retry_policy.backoff_ms = 200;
+    task.retry_policy.timeout_ms = Some(60_000);
+
+    let prompt = studio_value_to_string(inputs.get("prompt"));
+    if !prompt.is_empty() {
+        task.inputs.insert("prompt".to_string(), json!(prompt));
+    }
+    let reference = studio_value_to_string(inputs.get("reference"));
+    if !reference.is_empty() {
+        task.inputs
+            .insert("image_path".to_string(), json!(reference));
+    }
+
+    for (key, value) in &node.params {
+        if matches!(key.as_str(), "provider" | "operation" | "credentials_ref") {
+            continue;
+        }
+        if studio_non_empty(value) {
+            task.params.insert(key.clone(), value.clone());
+        }
+    }
+    if let Some(seed) = inputs.get("seed") {
+        task.params.insert("seed".to_string(), seed.clone());
+    }
+
+    let credentials_ref = studio_value_to_string(node.params.get("credentials_ref"));
+    if !credentials_ref.is_empty() {
+        task.credentials_ref = Some(credentials_ref);
+    }
+
+    let result = execute_and_record(task).await?;
+    if !matches!(result.status, ApiStatus::Succeeded | ApiStatus::Cached) {
+        let message = result
+            .error
+            .as_ref()
+            .map(|error| error.message.clone())
+            .unwrap_or_else(|| "generation failed".to_string());
+        return Err(message);
+    }
+    let image = result
+        .output_files
+        .first()
+        .map(|file| json!(file.path.clone()))
+        .unwrap_or(Value::Null);
+    let result_json =
+        serde_json::to_value(result).map_err(|err| format!("failed to encode ApiResult: {err}"))?;
+    Ok(studio_output_map([
+        ("image", image),
+        ("result", result_json),
+    ]))
+}
+
+fn execute_studio_psd_export(
+    node: &StudioGraphNode,
+    inputs: &BTreeMap<String, Value>,
+) -> Result<BTreeMap<String, Value>, String> {
+    let image = studio_value_to_string(inputs.get("image"));
+    if image.is_empty() {
+        return Err("PSD Export needs a connected image input".to_string());
+    }
+    let template = studio_value_to_string(inputs.get("template"));
+    if template.is_empty() {
+        return Err("PSD Export needs a connected PSD template input".to_string());
+    }
+
+    let output_dir = {
+        let configured = studio_value_to_string(node.params.get("output_dir"));
+        if configured.trim().is_empty() {
+            runtime_paths()?.output_dir.to_string_lossy().to_string()
+        } else {
+            configured
+        }
+    };
+    let filename = {
+        let configured = studio_value_to_string(node.params.get("filename"));
+        if configured.trim().is_empty() {
+            "final".to_string()
+        } else {
+            configured
+        }
+    };
+    let placeholder_name = studio_value_to_string(node.params.get("placeholder"));
+    let placeholder = if placeholder_name.trim().is_empty() {
+        None
+    } else {
+        Some(json!({ "name": placeholder_name }).to_string())
+    };
+
+    let result = compose_psd(
+        None,
+        template,
+        image,
+        output_dir,
+        Some(filename),
+        placeholder,
+        Some(
+            studio_value_to_string(node.params.get("fit_mode"))
+                .trim()
+                .to_string(),
+        )
+        .filter(|value| !value.is_empty()),
+        None,
+        Some(
+            studio_value_to_string(node.params.get("smart_object_mode"))
+                .trim()
+                .to_string(),
+        )
+        .filter(|value| !value.is_empty()),
+        None,
+        None,
+        None,
+    )?;
+
+    if result.status != "succeeded" {
+        return Err(format!("PSD export failed: {}", result.status));
+    }
+
+    let result_json = serde_json::to_value(&result)
+        .map_err(|err| format!("failed to encode ComposePsdResult: {err}"))?;
+    Ok(studio_output_map([
+        ("psdPath", json!(result.psd_path)),
+        ("previewPath", json!(result.preview_path)),
+        ("metadataPath", json!(result.metadata_path)),
+        ("placeholderKind", json!(result.placeholder_kind)),
+        ("smartObjectMode", json!(result.smart_object_mode)),
+        ("result", result_json),
+    ]))
+}
+
+async fn execute_studio_node(
+    node: &StudioGraphNode,
+    inputs: BTreeMap<String, Value>,
+) -> Result<BTreeMap<String, Value>, String> {
+    match node.kind.as_str() {
+        "prompt" => Ok(studio_output_map([(
+            "text",
+            json!(studio_value_to_string(node.params.get("text"))),
+        )])),
+        "batch" => {
+            let items = studio_batch_items(node.params.get("items"));
+            let index = studio_value_to_number(node.params.get("index")).max(0.0) as usize;
+            Ok(studio_output_map([(
+                "item",
+                json!(items
+                    .get(index)
+                    .or_else(|| items.first())
+                    .cloned()
+                    .unwrap_or_default()),
+            )]))
+        }
+        "imageSource" => {
+            let path = studio_value_to_string(node.params.get("path"));
+            let image = if path.is_empty() {
+                Value::Null
+            } else {
+                json!(path)
+            };
+            Ok(studio_output_map([("image", image)]))
+        }
+        "psdTemplate" => {
+            let path = studio_value_to_string(node.params.get("path"));
+            let template = if path.is_empty() {
+                Value::Null
+            } else {
+                json!(path)
+            };
+            Ok(studio_output_map([("template", template)]))
+        }
+        "number" => Ok(studio_output_map([(
+            "value",
+            json!(studio_value_to_number(node.params.get("value"))),
+        )])),
+        "reroute" => Ok(studio_output_map([(
+            "out",
+            inputs.get("in").cloned().unwrap_or(Value::Null),
+        )])),
+        "group" => Ok(BTreeMap::new()),
+        "compare" => Ok(studio_output_map([(
+            "result",
+            json!(if studio_compare_result(&node.params, &inputs) {
+                1
+            } else {
+                0
+            }),
+        )])),
+        "logic" => Ok(studio_output_map([(
+            "result",
+            json!(if studio_logic_result(&node.params, &inputs) {
+                1
+            } else {
+                0
+            }),
+        )])),
+        "if" => {
+            let active = inputs
+                .get("cond")
+                .map(studio_truthy)
+                .unwrap_or_else(|| studio_value_to_string(node.params.get("cond")) == "true");
+            let port = if active { "true" } else { "false" };
+            Ok(studio_output_map([(
+                port,
+                inputs.get("value").cloned().unwrap_or(Value::Null),
+            )]))
+        }
+        "switch" => {
+            let index = inputs
+                .get("index")
+                .map(|value| studio_value_to_number(Some(value)))
+                .unwrap_or_else(|| studio_value_to_number(node.params.get("index")))
+                as i64;
+            let port = match index {
+                0 => "0",
+                1 => "1",
+                2 => "2",
+                _ => "default",
+            };
+            Ok(studio_output_map([(
+                port,
+                inputs.get("value").cloned().unwrap_or(Value::Null),
+            )]))
+        }
+        "generate" => execute_studio_generate(node, &inputs).await,
+        "preview" => Ok(studio_output_map([(
+            "image",
+            inputs.get("image").cloned().unwrap_or(Value::Null),
+        )])),
+        "save" => Ok(studio_output_map([
+            ("image", inputs.get("image").cloned().unwrap_or(Value::Null)),
+            (
+                "template",
+                inputs.get("template").cloned().unwrap_or(Value::Null),
+            ),
+            (
+                "filename",
+                json!(studio_value_to_string(node.params.get("filename"))),
+            ),
+        ])),
+        "psdExport" => execute_studio_psd_export(node, &inputs),
+        other => Err(format!("unsupported Studio node kind: {other}")),
+    }
+}
+
+#[tauri::command]
+async fn run_studio_graph(graph_json: String) -> Result<StudioGraphRunResult, String> {
+    let graph: StudioWorkflowGraph = serde_json::from_str(&graph_json)
+        .map_err(|err| format!("invalid Studio graph JSON: {err}"))?;
+    let order = studio_topo_order(&graph)?;
+    let nodes_by_id: HashMap<String, &StudioGraphNode> = graph
+        .nodes
+        .iter()
+        .map(|node| (node.id.clone(), node))
+        .collect();
+    let mut outputs = BTreeMap::new();
+    let mut statuses = BTreeMap::new();
+    let mut node_runs = Vec::new();
+
+    for node in &graph.nodes {
+        statuses.insert(node.id.clone(), "queued".to_string());
+    }
+
+    for node_id in order {
+        let node = nodes_by_id
+            .get(&node_id)
+            .ok_or_else(|| format!("missing node during run: {node_id}"))?;
+        statuses.insert(node.id.clone(), "running".to_string());
+        let started_at = Instant::now();
+        let inputs = studio_node_inputs(&node.id, &graph, &outputs);
+        match execute_studio_node(node, inputs).await {
+            Ok(node_outputs) => {
+                outputs.insert(node.id.clone(), node_outputs);
+                statuses.insert(node.id.clone(), "succeeded".to_string());
+                node_runs.push(StudioNodeRun {
+                    node_id: node.id.clone(),
+                    kind: node.kind.clone(),
+                    status: "succeeded".to_string(),
+                    duration_ms: Some(started_at.elapsed().as_millis()),
+                    error: None,
+                });
+            }
+            Err(error) => {
+                statuses.insert(node.id.clone(), "failed".to_string());
+                node_runs.push(StudioNodeRun {
+                    node_id: node.id.clone(),
+                    kind: node.kind.clone(),
+                    status: "failed".to_string(),
+                    duration_ms: Some(started_at.elapsed().as_millis()),
+                    error: Some(error.clone()),
+                });
+                return Err(format!("Studio node {} failed: {error}", node.id));
+            }
+        }
+    }
+
+    Ok(StudioGraphRunResult {
+        version: graph.version,
+        outputs,
+        statuses,
+        node_runs,
+    })
 }
 
 #[tauri::command]
@@ -414,7 +982,11 @@ struct ThumbnailResult {
 /// original `path` is never downscaled in the webview and remains the source of
 /// truth for execution/export.
 #[tauri::command]
-fn generate_thumbnail(path: String, size: u32, dpr: Option<f64>) -> Result<ThumbnailResult, String> {
+fn generate_thumbnail(
+    path: String,
+    size: u32,
+    dpr: Option<f64>,
+) -> Result<ThumbnailResult, String> {
     let trimmed = path.trim();
     if trimmed.is_empty() {
         return Err("path is empty".to_string());
@@ -426,12 +998,15 @@ fn generate_thumbnail(path: String, size: u32, dpr: Option<f64>) -> Result<Thumb
 
     // Target edge in physical pixels, clamped to a sane range.
     let dpr = dpr.unwrap_or(1.0);
-    let dpr = if dpr.is_finite() && dpr > 0.0 { dpr } else { 1.0 };
+    let dpr = if dpr.is_finite() && dpr > 0.0 {
+        dpr
+    } else {
+        1.0
+    };
     let target = ((size as f64) * dpr).round() as u32;
     let target = target.clamp(16, 4096);
 
-    let bytes =
-        fs::read(src).map_err(|err| format!("failed to read {}: {err}", src.display()))?;
+    let bytes = fs::read(src).map_err(|err| format!("failed to read {}: {err}", src.display()))?;
     let source_hash = fnv1a_hex(&bytes);
 
     let cache_dir = runtime_paths()?.output_dir.join(".thumbnails");
@@ -453,8 +1028,8 @@ fn generate_thumbnail(path: String, size: u32, dpr: Option<f64>) -> Result<Thumb
         }
     }
 
-    let source = image::load_from_memory(&bytes)
-        .map_err(|err| format!("failed to decode image: {err}"))?;
+    let source =
+        image::load_from_memory(&bytes).map_err(|err| format!("failed to decode image: {err}"))?;
     // `resize` preserves aspect ratio, fitting within target x target.
     let thumb = source.resize(target, target, image::imageops::FilterType::Lanczos3);
 
@@ -710,7 +1285,10 @@ fn compose_psd(
     let python = comfy_python(&dir);
     let script = dir.join("python").join("bridge").join("compose_psd_cli.py");
     if !script.is_file() {
-        return Err(format!("compose_psd_cli.py not found at {}", script.display()));
+        return Err(format!(
+            "compose_psd_cli.py not found at {}",
+            script.display()
+        ));
     }
 
     let mut cmd = std::process::Command::new(&python);
@@ -736,7 +1314,11 @@ fn compose_psd(
         .arg("--metadata")
         .arg(metadata.as_deref().unwrap_or("{}"))
         .arg("--save-preview")
-        .arg(if save_preview.unwrap_or(true) { "enable" } else { "disable" })
+        .arg(if save_preview.unwrap_or(true) {
+            "enable"
+        } else {
+            "disable"
+        })
         .current_dir(&dir);
     #[cfg(windows)]
     {
@@ -753,8 +1335,12 @@ fn compose_psd(
         return Err(format!("compose_psd failed: {}", stderr.trim()));
     }
     let stdout = String::from_utf8_lossy(&output.stdout);
-    serde_json::from_str::<ComposePsdResult>(stdout.trim())
-        .map_err(|err| format!("could not parse compose_psd output: {err} (raw: {})", stdout.trim()))
+    serde_json::from_str::<ComposePsdResult>(stdout.trim()).map_err(|err| {
+        format!(
+            "could not parse compose_psd output: {err} (raw: {})",
+            stdout.trim()
+        )
+    })
 }
 
 fn main() {
@@ -776,6 +1362,7 @@ fn main() {
             history_cleanup_apply,
             run_task,
             run_task_json,
+            run_studio_graph,
             rerun_task,
             open_url,
             pick_file,

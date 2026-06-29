@@ -54,6 +54,39 @@ export async function runTaskJson(task: unknown): Promise<ApiResultLike> {
   return (await invoke("run_task_json", { taskJson: JSON.stringify(task) })) as ApiResultLike;
 }
 
+export interface StudioGraphNodeRun {
+  node_id: string;
+  kind: string;
+  status: string;
+  duration_ms?: number | null;
+  error?: string | null;
+}
+
+export interface StudioGraphRunResult {
+  version: number;
+  outputs: Record<string, Record<string, unknown>>;
+  statuses: Record<string, string>;
+  node_runs: StudioGraphNodeRun[];
+}
+
+/** Run a renderer-agnostic Studio WorkflowGraph through the Rust backend. */
+export async function runStudioGraph(graph: unknown): Promise<StudioGraphRunResult> {
+  const invoke = tauriInvoke();
+  if (!invoke) {
+    const version =
+      typeof graph === "object" &&
+      graph !== null &&
+      "version" in graph &&
+      typeof (graph as { version?: unknown }).version === "number"
+        ? (graph as { version: number }).version
+        : 1;
+    return { version, outputs: {}, statuses: {}, node_runs: [] };
+  }
+  return (await invoke("run_studio_graph", {
+    graphJson: JSON.stringify(graph),
+  })) as StudioGraphRunResult;
+}
+
 export interface ThumbnailRequest {
   path: string;
   /** Display size in CSS px; backend should generate at size * dpr. */

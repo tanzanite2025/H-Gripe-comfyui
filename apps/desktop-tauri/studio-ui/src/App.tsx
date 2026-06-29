@@ -241,7 +241,7 @@ function Studio() {
   // Per-node run telemetry (duration / error) for node-level logs/progress.
   const recordRun = useCallback(
     (id: string, info: NodeRunInfo) =>
-      patchNode(id, { durationMs: info.durationMs ?? null, error: info.error ?? null }),
+      patchNode(id, { durationMs: info.durationMs, error: info.error ?? null }),
     [patchNode],
   );
   // Clear the previous run's duration/error before a fresh run.

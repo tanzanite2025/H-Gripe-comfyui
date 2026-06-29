@@ -1,16 +1,20 @@
 import { useEffect, useRef } from "react";
 import { useStore, type ReactFlowState } from "@xyflow/react";
 
-export interface HelperLinesProps {
+export interface HelperLineOverlayProps {
   horizontal?: number;
   vertical?: number;
 }
 
-const selector = (s: ReactFlowState) => ({ width: s.width, height: s.height, transform: s.transform });
+const selector = (s: ReactFlowState) => ({
+  width: s.width,
+  height: s.height,
+  transform: s.transform,
+});
 
-// Draws the alignment guide lines (computed in flow space) onto a canvas
-// overlay, mapping flow coordinates through the current viewport transform.
-export function HelperLines({ horizontal, vertical }: HelperLinesProps) {
+// Draws alignment guide lines (computed in flow space) onto a canvas overlay,
+// mapping flow coordinates through the current viewport transform.
+export function HelperLineOverlay({ horizontal, vertical }: HelperLineOverlayProps) {
   const { width, height, transform } = useStore(selector);
   const canvasRef = useRef<HTMLCanvasElement>(null);
 
@@ -48,7 +52,15 @@ export function HelperLines({ horizontal, vertical }: HelperLinesProps) {
     <canvas
       ref={canvasRef}
       className="helper-lines"
-      style={{ width, height, position: "absolute", top: 0, left: 0, zIndex: 10, pointerEvents: "none" }}
+      style={{
+        width,
+        height,
+        position: "absolute",
+        top: 0,
+        left: 0,
+        zIndex: 10,
+        pointerEvents: "none",
+      }}
     />
   );
 }

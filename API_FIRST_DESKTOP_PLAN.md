@@ -334,6 +334,9 @@ cargo build -p hgripe-api --bins
 - 统一节点输入输出类型。
 - 引入 SQLite 历史记录和缓存索引。
 - 支持批量运行、暂停、取消、恢复。
+- 明确前后端边界：画布拖拽、选择、分组、连线辅助、缩放、节点参数编辑可以留在前端；真正执行、文件读写、API 请求、凭据、缓存、历史、视频导出、本地 GPU 小服务必须后端优先。
+- 当前 Studio 里的 TypeScript `runGraph` 只能作为原型和浏览器预览运行时；Rust `run_studio_graph` 已有第一版入口，直接吃同一个 `WorkflowGraph` JSON，后续需要把进度、日志、错误、取消状态通过 Tauri event 回传。
+- 视频剪辑/拼接/导出、PSD 生成、高清缩略图、媒体索引和本地模型服务启动都归入后端能力，前端只负责调度界面和可视化。
 
 ### Phase 4: Lightweight Node Editor
 
@@ -341,6 +344,8 @@ cargo build -p hgripe-api --bins
 - 只支持 API-first 工作流需要的节点和数据类型。
 - 保留导入部分 ComfyUI workflow 的能力。
 - 逐步减少对完整 ComfyUI 的依赖。
+- 节点编辑器优先做少量高价值语义节点，不再按厂商无限新增平行节点；重复功能通过统一参数、provider profile 和能力声明合并。
+- React Flow/xyflow 可以继续作为第一版渲染层，但图数据、节点规格、运行协议必须保持 renderer-agnostic，方便未来切到 Canvas/WebGPU/tldraw 等方案而不迁移工作流格式。
 
 ## 推荐目录结构
 

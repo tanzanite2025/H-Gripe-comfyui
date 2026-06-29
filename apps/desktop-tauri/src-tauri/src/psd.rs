@@ -693,3 +693,144 @@ pub(crate) fn refine_mask_edge(
         )
     })
 }
+
+/// What `enhance_image` did: the resolved mode, source/output/target sizes, the
+/// applied scale factor and the per-step strengths. Fields are `snake_case` to
+/// match the `image_enhance_cli.py` JSON.
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub(crate) struct EnhanceReport {
+    #[serde(default)]
+    pub(crate) mode: String,
+    #[serde(default)]
+    pub(crate) scale_factor: f64,
+    /// `[width, height]` of the input image.
+    #[serde(default)]
+    pub(crate) source_size: Option<[i64; 2]>,
+    /// `[width, height]` of the written image.
+    #[serde(default)]
+    pub(crate) output_size: Option<[i64; 2]>,
+    /// `[width, height]` requested target, or `null` when a preset scale was used.
+    #[serde(default)]
+    pub(crate) target_size: Option<[i64; 2]>,
+    #[serde(default)]
+    pub(crate) target_dpi: u32,
+    #[serde(default)]
+    pub(crate) max_pixels: i64,
+    /// `true` when the scale was reduced to honour `max_pixels`.
+    #[serde(default)]
+    pub(crate) clamped: bool,
+    #[serde(default)]
+    pub(crate) denoise_strength: f64,
+    #[serde(default)]
+    pub(crate) texture_strength: f64,
+    #[serde(default)]
+    pub(crate) preserve_text_logo: bool,
+    #[serde(default)]
+    pub(crate) processing_time_ms: i64,
+}
+
+/// Result of the **Image Enhance** node: the written enhanced image, the actual
+/// scale factor applied, and the [`EnhanceReport`].
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub(crate) struct EnhanceImageResult {
+    #[serde(default)]
+    pub(crate) enhanced_image: String,
+    #[serde(default)]
+    pub(crate) scale_factor: f64,
+    #[serde(default)]
+    pub(crate) enhance_report: EnhanceReport,
+}
+
+/// Upscale and sharpen a low-resolution subject so it fills a PSD placeholder at
+/// the target DPI without going soft. This is the **Image Enhance / Super
+/// Resolution** node's backend (the fourth PSD production node): it consumes the
+/// base image plus an optional target size (explicit pixels or a connected
+/// placeholder-bounds object) and returns the enhanced image and a report.
+///
+/// Like the other PSD commands it shells out to `python/bridge/image_enhance_cli.py`
+/// using the project's bundled Python (Pillow + numpy; CPU-only in Phase 1, no
+/// GPU super-resolution). `mode` is `conservative | texture_rebuild | print_ready
+/// | custom`; the numeric strengths and `scale` apply only when `mode` is `custom`.
+#[tauri::command]
+#[allow(clippy::too_many_arguments)]
+pub(crate) fn enhance_image(
+    dir: Option<String>,
+    image: String,
+    target_bounds: Option<String>,
+    mode: Option<String>,
+    target_width: Option<i64>,
+    target_height: Option<i64>,
+    target_dpi: Option<i64>,
+    max_pixels: Option<i64>,
+    scale: Option<f64>,
+    denoise_strength: Option<f64>,
+    texture_strength: Option<f64>,
+    preserve_text_logo: Option<bool>,
+    output_dir: Option<String>,
+    output_name: Option<String>,
+) -> Result<EnhanceImageResult, String> {
+    let dir = resolve_project_dir(&dir)?;
+    let python = project_python(&dir);
+    let script = dir
+        .join("python")
+        .join("bridge")
+        .join("image_enhance_cli.py");
+    if !script.is_file() {
+        return Err(format!(
+            "image_enhance_cli.py not found at {}",
+            script.display()
+        ));
+    }
+
+    let mut cmd = std::process::Command::new(&python);
+    cmd.arg(&script)
+        .arg("--image")
+        .arg(&image)
+        .arg("--mode")
+        .arg(mode.as_deref().unwrap_or("conservative"))
+        .arg("--target-width")
+        .arg(target_width.unwrap_or(0).to_string())
+        .arg("--target-height")
+        .arg(target_height.unwrap_or(0).to_string())
+        .arg("--target-bounds-json")
+        .arg(target_bounds.as_deref().unwrap_or(""))
+        .arg("--target-dpi")
+        .arg(target_dpi.unwrap_or(300).to_string())
+        .arg("--max-pixels")
+        .arg(max_pixels.unwrap_or(48_000_000).to_string())
+        .arg("--scale")
+        .arg(scale.unwrap_or(2.0).to_string())
+        .arg("--denoise-strength")
+        .arg(denoise_strength.unwrap_or(0.3).to_string())
+        .arg("--texture-strength")
+        .arg(texture_strength.unwrap_or(0.25).to_string())
+        .arg("--output-dir")
+        .arg(output_dir.as_deref().unwrap_or(""))
+        .arg("--output-name")
+        .arg(output_name.as_deref().unwrap_or(""))
+        .current_dir(&dir);
+    if preserve_text_logo.unwrap_or(true) {
+        cmd.arg("--preserve-text-logo");
+    }
+    #[cfg(windows)]
+    {
+        use std::os::windows::process::CommandExt;
+        // CREATE_NO_WINDOW: don't pop a console window for the child.
+        cmd.creation_flags(0x0800_0000);
+    }
+
+    let output = cmd
+        .output()
+        .map_err(|err| format!("failed to launch {}: {err}", python.display()))?;
+    if !output.status.success() {
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        return Err(format!("enhance_image failed: {}", stderr.trim()));
+    }
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    serde_json::from_str::<EnhanceImageResult>(stdout.trim()).map_err(|err| {
+        format!(
+            "could not parse enhance_image output: {err} (raw: {})",
+            stdout.trim()
+        )
+    })
+}

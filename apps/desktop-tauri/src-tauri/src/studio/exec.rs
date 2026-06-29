@@ -20,6 +20,7 @@ use super::graph::{
     studio_non_empty, studio_output_map, studio_truthy, studio_value_to_number,
     studio_value_to_string, StudioGraphEdge, StudioGraphNode, StudioWorkflowGraph,
 };
+use super::image_enhance::execute_studio_image_enhance;
 use super::psd_analyze::execute_studio_psd_context_analyze;
 use super::psd_export::execute_studio_psd_export;
 use crate::broker;
@@ -682,6 +683,7 @@ async fn execute_studio_node(
         "psdContextAnalyze" => execute_studio_psd_context_analyze(node, &inputs),
         "matchLightColor" => execute_studio_match_light_color(node, &inputs),
         "refineMaskEdge" => execute_studio_refine_mask_edge(node, &inputs),
+        "imageEnhance" => execute_studio_image_enhance(node, &inputs),
         "psdExport" => execute_studio_psd_export(node, &inputs),
         other => Err(format!("unsupported Studio node kind: {other}")),
     }

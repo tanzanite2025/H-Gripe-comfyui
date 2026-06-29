@@ -16,6 +16,19 @@ function pretty(value) {
   return JSON.stringify(value, null, 2);
 }
 
+// Escape a value for safe interpolation into an innerHTML string (text or a
+// double-quoted attribute). Backend data (paths, provider/profile names, file
+// names, error strings) is untrusted for HTML purposes, so every dynamic value
+// spliced into innerHTML must go through this.
+function esc(value) {
+  return String(value)
+    .replace(/&/g, "&amp;")
+    .replace(/</g, "&lt;")
+    .replace(/>/g, "&gt;")
+    .replace(/"/g, "&quot;")
+    .replace(/'/g, "&#39;");
+}
+
 // ---- tabs ----
 $$("#tabs button").forEach((btn) => {
   btn.addEventListener("click", () => {
@@ -33,14 +46,14 @@ $$("#tabs button").forEach((btn) => {
 function pathCard(label, info) {
   const cls = info.exists ? "ok" : "missing";
   const flag = info.exists ? "found" : "missing";
-  return `<div class="card"><div class="label">${label} (${flag})</div><div class="value ${cls}">${info.path}</div></div>`;
+  return `<div class="card"><div class="label">${esc(label)} (${flag})</div><div class="value ${cls}">${esc(info.path)}</div></div>`;
 }
 
 async function loadDashboard() {
   try {
     const info = await invoke("get_runtime_info");
     $("#runtime-info").innerHTML = [
-      `<div class="card"><div class="label">providers</div><div class="value">${info.providers.join(", ")}</div></div>`,
+      `<div class="card"><div class="label">providers</div><div class="value">${esc(info.providers.join(", "))}</div></div>`,
       pathCard("credentials.json", info.credentials_file),
       pathCard("provider_profiles.json", info.profiles_file),
       pathCard("history file", info.history_file),
@@ -48,7 +61,7 @@ async function loadDashboard() {
       pathCard("output dir", info.output_dir),
     ].join("");
   } catch (err) {
-    $("#runtime-info").innerHTML = `<div class="card"><div class="value missing">${err}</div></div>`;
+    $("#runtime-info").innerHTML = `<div class="card"><div class="value missing">${esc(err)}</div></div>`;
   }
   try {
     $("#doctor-output").textContent = pretty(await invoke("doctor"));
@@ -64,14 +77,14 @@ const summaryRenderers = {
     items
       .map(
         (c) =>
-          `<div class="card"><div class="label">${c.credential_ref}</div><div class="value">provider: ${c.provider ?? "-"}<br/>key: ${c.api_key_configured ? "set" : c.api_key_env ? "env:" + c.api_key_env : "none"}<br/>headers: ${c.headers_count}</div></div>`
+          `<div class="card"><div class="label">${esc(c.credential_ref)}</div><div class="value">provider: ${esc(c.provider ?? "-")}<br/>key: ${c.api_key_configured ? "set" : c.api_key_env ? "env:" + esc(c.api_key_env) : "none"}<br/>headers: ${esc(c.headers_count)}</div></div>`
       )
       .join("") || `<div class="card"><div class="value">no entries</div></div>`,
   profiles: (items) =>
     items
       .map(
         (p) =>
-          `<div class="card"><div class="label">${p.profile_ref}</div><div class="value">provider: ${p.provider ?? "-"}<br/>model: ${p.model ?? "-"}<br/>creds: ${p.credentials_ref ?? "-"}<br/>params: ${p.params_count}</div></div>`
+          `<div class="card"><div class="label">${esc(p.profile_ref)}</div><div class="value">provider: ${esc(p.provider ?? "-")}<br/>model: ${esc(p.model ?? "-")}<br/>creds: ${esc(p.credentials_ref ?? "-")}<br/>params: ${esc(p.params_count)}</div></div>`
       )
       .join("") || `<div class="card"><div class="value">no entries</div></div>`,
 };
@@ -82,7 +95,7 @@ async function loadConfig(kind) {
     const items = await invoke(listCmd);
     $(`#${kind}-summary`).innerHTML = summaryRenderers[kind](items);
   } catch (err) {
-    $(`#${kind}-summary`).innerHTML = `<div class="card"><div class="value missing">${err}</div></div>`;
+    $(`#${kind}-summary`).innerHTML = `<div class="card"><div class="value missing">${esc(err)}</div></div>`;
   }
   try {
     $(`#${kind}-editor`).value = await invoke("read_config_file", { kind });
@@ -116,9 +129,9 @@ async function validateConfig(kind) {
     const ok = result.ok ?? issues.length === 0;
     target.innerHTML =
       `<span class="badge ${ok ? "ok" : "err"}">${ok ? "valid" : issues.length + " issue(s)"}</span>` +
-      (issues.length ? `<pre class="json">${pretty(issues)}</pre>` : "");
+      (issues.length ? `<pre class="json">${esc(pretty(issues))}</pre>` : "");
   } catch (err) {
-    target.innerHTML = `<span class="badge err">${err}</span>`;
+    target.innerHTML = `<span class="badge err">${esc(err)}</span>`;
   }
 }
 
@@ -173,15 +186,15 @@ async function loadHistory() {
       .map((r) => {
         const time = new Date(Number(r.timestamp_ms)).toLocaleString();
         return `<tr>
-          <td>${time}</td><td>${r.provider}</td><td>${r.operation}</td>
-          <td>${r.status}</td><td>${r.output_file_count}</td>
-          <td><button data-detail="${r.task_id}">view</button> <button data-rerun="${r.task_id}">rerun</button></td>
+          <td>${esc(time)}</td><td>${esc(r.provider)}</td><td>${esc(r.operation)}</td>
+          <td>${esc(r.status)}</td><td>${esc(r.output_file_count)}</td>
+          <td><button data-detail="${esc(r.task_id)}">view</button> <button data-rerun="${esc(r.task_id)}">rerun</button></td>
         </tr>`;
       })
       .join("");
     if (!records.length) tbody.innerHTML = `<tr><td colspan="6">no records</td></tr>`;
   } catch (err) {
-    tbody.innerHTML = `<tr><td colspan="6" class="status err">${err}</td></tr>`;
+    tbody.innerHTML = `<tr><td colspan="6" class="status err">${esc(err)}</td></tr>`;
   }
 }
 
@@ -278,13 +291,13 @@ async function loadPsdOutputs() {
         const badges = tags.map((t) => `<span class="badge ok">${t}</span>`).join(" ");
         const soBadge = o.smart_object ? ` <span class="badge so">smart object</span>` : "";
         return `<div class="card psd-card" data-psd-index="${i}">
-          <div class="label">${o.name}.psd</div>
-          <div class="value">${time}<br/>${fmtBytes(o.size_bytes)} ${badges}${soBadge}</div>
+          <div class="label">${esc(o.name)}.psd</div>
+          <div class="value">${esc(time)}<br/>${fmtBytes(o.size_bytes)} ${badges}${soBadge}</div>
         </div>`;
       })
       .join("");
   } catch (err) {
-    list.innerHTML = `<div class="card"><div class="value missing">${err}</div></div>`;
+    list.innerHTML = `<div class="card"><div class="value missing">${esc(err)}</div></div>`;
   }
 }
 
@@ -513,7 +526,7 @@ async function loadStudioProfiles() {
     const options = ['<option value="">— none (use provider below) —</option>'];
     items.forEach((p) => {
       studioProfiles[p.profile_ref] = p;
-      options.push(`<option value="${p.profile_ref}">${p.profile_ref}</option>`);
+      options.push(`<option value="${esc(p.profile_ref)}">${esc(p.profile_ref)}</option>`);
     });
     select.innerHTML = options.join("");
     if (current && studioProfiles[current]) select.value = current;
@@ -610,7 +623,7 @@ function renderStudioOutputs(result) {
   target.innerHTML = files
     .map(
       (f, i) =>
-        `<div class="card"><div class="label">output ${i + 1}</div><div class="value">${f.path}</div><div class="row"><button data-studio-open="${i}">Open</button></div></div>`
+        `<div class="card"><div class="label">output ${i + 1}</div><div class="value">${esc(f.path)}</div><div class="row"><button data-studio-open="${i}">Open</button></div></div>`
     )
     .join("");
   target.dataset.files = JSON.stringify(files.map((f) => f.path));

@@ -10,6 +10,10 @@ export interface HgripeNodeData extends Record<string, unknown> {
   kind: string;
   params: Record<string, unknown>;
   status?: NodeStatus;
+  /** Last run's wall-clock duration in ms (executed nodes only). */
+  durationMs?: number;
+  /** Last run's error message, when `status === "failed"`. */
+  error?: string | null;
   /** Path of the most recent output image, if any (for the preview node). */
   imagePath?: string | null;
   /** Backend-generated thumbnail data URL / path for display. */
@@ -19,6 +23,13 @@ export interface HgripeNodeData extends Record<string, unknown> {
 function basename(p: string): string {
   const parts = p.split(/[/\\]/);
   return parts[parts.length - 1] || p;
+}
+
+// Compact human-readable run time, e.g. "12ms" / "1.4s".
+export function fmtDuration(ms?: number): string {
+  if (ms == null) return "";
+  if (ms < 1000) return `${Math.round(ms)}ms`;
+  return `${(ms / 1000).toFixed(ms < 10000 ? 1 : 0)}s`;
 }
 
 // Thumbnail tile that only asks the backend for a thumbnail once the node
@@ -83,8 +94,18 @@ function HgripeNodeImpl({ id, data, selected }: NodeProps) {
     <div className={`node ${selected ? "selected" : ""} status-${status}`}>
       <div className="node-header">
         <span className="node-title">{spec.title}</span>
-        <span className={`badge badge-${status}`}>{status}</span>
+        <span className={`badge badge-${status}`} title={fmtDuration(d.durationMs)}>
+          {status}
+          {d.durationMs != null && (status === "succeeded" || status === "failed") ? (
+            <em className="badge-time"> {fmtDuration(d.durationMs)}</em>
+          ) : null}
+        </span>
       </div>
+      {status === "failed" && d.error ? (
+        <div className="node-error nodrag" title={d.error}>
+          {d.error}
+        </div>
+      ) : null}
 
       <div className="node-body">
         {inlineParams.map((p) => (

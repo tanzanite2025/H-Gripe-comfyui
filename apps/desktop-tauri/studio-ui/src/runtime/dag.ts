@@ -37,8 +37,19 @@ export type NodeExecutor = (
 
 export type ExecutorRegistry = Record<string, NodeExecutor>;
 
+/** Per-node run telemetry surfaced as a node finishes (or is skipped/cached). */
+export interface NodeRunInfo {
+  status: NodeStatus;
+  /** Wall-clock execution time in ms (only for actually-executed nodes). */
+  durationMs?: number;
+  /** Error message when `status === "failed"`. */
+  error?: string;
+}
+
 export interface RunObserver {
   onStatus?: (nodeId: string, status: NodeStatus) => void;
+  /** Richer per-node event with timing/error, emitted when a node settles. */
+  onNodeRun?: (nodeId: string, info: NodeRunInfo) => void;
 }
 
 export interface ValidationIssue {
@@ -212,6 +223,7 @@ export async function runGraph(
     statuses.set(id, s);
     observer.onStatus?.(id, s);
   };
+  const now = () => (typeof performance !== "undefined" ? performance.now() : Date.now());
   for (const n of graph.nodes) setStatus(n.id, "queued");
 
   // Nodes pruned by control flow (a branch that was not taken). Pruning
@@ -235,6 +247,7 @@ export async function runGraph(
         if (edges.length > 0 && edges.every(isDeadEdge)) {
           pruned.add(id);
           setStatus(id, "skipped");
+          observer.onNodeRun?.(id, { status: "skipped" });
           return;
         }
 
@@ -254,6 +267,7 @@ export async function runGraph(
         if (cached) {
           outputs.set(id, cached);
           setStatus(id, "cached");
+          observer.onNodeRun?.(id, { status: "cached" });
           return;
         }
 
@@ -264,13 +278,20 @@ export async function runGraph(
         }
 
         setStatus(id, "running");
+        const startedAt = now();
         try {
           const result = await executor({ nodeId: id, kind: node.kind, params, inputs });
           outputs.set(id, result);
           cache.set(sig, result);
           setStatus(id, "succeeded");
+          observer.onNodeRun?.(id, { status: "succeeded", durationMs: now() - startedAt });
         } catch (err) {
           setStatus(id, "failed");
+          observer.onNodeRun?.(id, {
+            status: "failed",
+            durationMs: now() - startedAt,
+            error: err instanceof Error ? err.message : String(err),
+          });
           throw err;
         }
       }),

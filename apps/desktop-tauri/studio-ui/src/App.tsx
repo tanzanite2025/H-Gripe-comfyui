@@ -30,7 +30,7 @@ import { fromWorkflowGraph, toWorkflowGraph } from "./editor/adapter";
 import { clearPersistedGraph, loadPersistedGraph, persistGraph } from "./editor/persist";
 import { defaultParams } from "./graph/nodeSpecs";
 import { deserializeGraph, serializeGraph } from "./graph/model";
-import { runGraph, validateGraph, type NodeStatus } from "./runtime/dag";
+import { runGraph, validateGraph, type NodeRunInfo, type NodeStatus } from "./runtime/dag";
 import { batchItems, defaultExecutors } from "./runtime/executors";
 import { isTauri } from "./bridge/tauri";
 
@@ -231,6 +231,19 @@ function Studio() {
     [patchNode],
   );
 
+  // Per-node run telemetry (duration / error) for node-level logs/progress.
+  const recordRun = useCallback(
+    (id: string, info: NodeRunInfo) =>
+      patchNode(id, { durationMs: info.durationMs ?? null, error: info.error ?? null }),
+    [patchNode],
+  );
+  // Clear the previous run's duration/error before a fresh run.
+  const clearRunInfo = useCallback(
+    () => setNodes((ns) => ns.map((n) => ({ ...n, data: { ...n.data, durationMs: undefined, error: undefined } }))),
+    [setNodes],
+  );
+  const observer = useMemo(() => ({ onStatus: setStatus, onNodeRun: recordRun }), [setStatus, recordRun]);
+
   // Surface output paths into preview nodes. The thumbnail itself is fetched
   // lazily by the node when it scrolls into view (see HgripeNode).
   const applyPreviews = useCallback(
@@ -251,9 +264,10 @@ function Studio() {
   const run = useCallback(async () => {
     setRunning(true);
     setMessage("running…");
+    clearRunInfo();
     try {
       const graph = toWorkflowGraph(nodes, edges);
-      const result = await runGraph(graph, defaultExecutors, { onStatus: setStatus });
+      const result = await runGraph(graph, defaultExecutors, observer);
       applyPreviews(graph, result);
       setMessage("done");
     } catch (err) {
@@ -261,7 +275,7 @@ function Studio() {
     } finally {
       setRunning(false);
     }
-  }, [nodes, edges, setStatus, applyPreviews]);
+  }, [nodes, edges, observer, clearRunInfo, applyPreviews]);
 
   // Batch fan-out: run the graph once per item of the (first) batch node,
   // sweeping its `index` via runGraph's paramOverrides. Sequential so node
@@ -281,13 +295,14 @@ function Studio() {
       return;
     }
     setRunning(true);
+    clearRunInfo();
     try {
       const graph = toWorkflowGraph(nodes, edges);
       const collected: string[] = [];
       for (let i = 0; i < batchCount; i++) {
         setMessage(`batch ${i + 1}/${batchCount}…`);
         const overrides = new Map([[batchNode.id, { index: i }]]);
-        const result = await runGraph(graph, defaultExecutors, { onStatus: setStatus }, overrides);
+        const result = await runGraph(graph, defaultExecutors, observer, overrides);
         collected.push(...applyPreviews(graph, result));
       }
       setMessage(`batch done: ${batchCount} run(s), ${collected.length} output(s)`);
@@ -296,7 +311,7 @@ function Studio() {
     } finally {
       setRunning(false);
     }
-  }, [batchNode, batchCount, nodes, edges, setStatus, applyPreviews]);
+  }, [batchNode, batchCount, nodes, edges, observer, clearRunInfo, applyPreviews]);
 
   const save = useCallback(() => {
     const json = serializeGraph(toWorkflowGraph(nodes, edges));

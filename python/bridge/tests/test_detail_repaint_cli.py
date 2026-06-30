@@ -301,3 +301,140 @@ def test_composite_oversized_input_refused(tmp_path: Path) -> None:
     img = _rgba(tmp_path / "base.png")
     with pytest.raises(ValueError, match="too large to decode"):
         _run_composite(img, tmp_path, manifest="{}", repainted="[]", max_decode_pixels=16)
+
+
+# --- repaint (opt-in local inpaint seam) -----------------------------------
+
+class _FakeBackend:
+    """A stand-in local inpaint engine: paints the crop a flat colour."""
+
+    id = "fake_inpaint"
+
+    def __init__(self, color=(10, 220, 10)) -> None:
+        self._color = color
+        self.calls: list[dict] = []
+
+    def weight_path(self) -> Path:
+        return Path("fake-inpaint")
+
+    def available(self) -> tuple[bool, str]:
+        return True, "ready"
+
+    def inpaint(self, crop, mask, prompt, **kwargs):  # noqa: ANN001
+        self.calls.append({"size": crop.size, "prompt": prompt, **kwargs})
+        return Image.new("RGB", crop.size, self._color)
+
+
+def _prepared_manifest(tmp_path: Path) -> dict:
+    img = _rgba(tmp_path / "hero.png", size=64)
+    prep = _run_prepare(
+        img, tmp_path, quality_report=_report(_issue([16, 16, 48, 48])), padding=8
+    )
+    return prep
+
+
+def _run_repaint(tmp_path: Path, manifest: dict, **kwargs: object) -> dict:
+    argv = ["repaint", "--manifest", json.dumps({"regions": manifest["regions"]}),
+            "--output-dir", str(tmp_path)]
+    for key, value in kwargs.items():
+        flag = "--" + key.replace("_", "-")
+        argv.extend([flag, str(value)])
+    args = cli.build_parser().parse_args(argv)
+    return cli.repaint(args)
+
+
+def test_repaint_provider_engine_emits_no_local_repaint(tmp_path: Path) -> None:
+    prep = _prepared_manifest(tmp_path)
+    out = _run_repaint(tmp_path, prep, engine="provider")
+    assert out["engine"] == "provider"
+    assert out["repainted"] == []
+    assert "provider" in out["engine_fallback_reason"]
+
+
+def test_repaint_unknown_engine_falls_back(tmp_path: Path) -> None:
+    prep = _prepared_manifest(tmp_path)
+    out = _run_repaint(tmp_path, prep, engine="does_not_exist")
+    assert out["engine"] == "provider"
+    assert out["repainted"] == []
+    assert "unknown engine" in out["engine_fallback_reason"]
+
+
+def test_repaint_runs_available_backend(tmp_path: Path, monkeypatch) -> None:
+    import inpaint_backends
+
+    backend = _FakeBackend()
+    monkeypatch.setattr(inpaint_backends, "resolve", lambda engine: backend)
+    prep = _prepared_manifest(tmp_path)
+    out = _run_repaint(tmp_path, prep, engine="fake_inpaint", prompt="restore the face")
+
+    assert out["engine"] == "fake_inpaint"
+    assert out["engine_fallback_reason"] is None
+    assert out["backend_model"] == "fake-inpaint"
+    assert out["repainted_count"] == 1
+    region = prep["regions"][0]
+    entry = out["repainted"][0]
+    assert entry["index"] == region["index"]
+    assert Path(entry["path"]).is_file()
+    # The repainted crop is the backend's output, same size as the source crop.
+    assert Image.open(entry["path"]).size == tuple(region["size"])
+    assert backend.calls[0]["prompt"] == "restore the face"
+
+
+def test_repaint_per_type_prompt_map_overrides(tmp_path: Path, monkeypatch) -> None:
+    import inpaint_backends
+
+    backend = _FakeBackend()
+    monkeypatch.setattr(inpaint_backends, "resolve", lambda engine: backend)
+    prep = _prepared_manifest(tmp_path)
+    issue_type = prep["regions"][0]["type"]
+    out = _run_repaint(
+        tmp_path, prep, engine="fake_inpaint", prompt="generic",
+        prompt_map=json.dumps({issue_type: "per-type prompt"}),
+    )
+    assert out["repainted_count"] == 1
+    assert backend.calls[0]["prompt"] == "per-type prompt"
+
+
+def test_repaint_unavailable_backend_falls_back(tmp_path: Path, monkeypatch) -> None:
+    import inpaint_backends
+
+    class _Unavailable(_FakeBackend):
+        def available(self) -> tuple[bool, str]:
+            return False, "missing optional dependency: torch"
+
+    monkeypatch.setattr(inpaint_backends, "resolve", lambda engine: _Unavailable())
+    prep = _prepared_manifest(tmp_path)
+    out = _run_repaint(tmp_path, prep, engine="fake_inpaint")
+    assert out["engine"] == "provider"
+    assert out["repainted"] == []
+    assert "torch" in out["engine_fallback_reason"]
+
+
+def test_repaint_output_feeds_composite(tmp_path: Path, monkeypatch) -> None:
+    # The repaint manifest plugs straight into composite as its `repainted` list.
+    import inpaint_backends
+
+    backend = _FakeBackend(color=(240, 30, 30))
+    monkeypatch.setattr(inpaint_backends, "resolve", lambda engine: backend)
+    img = _rgba(tmp_path / "hero.png", size=64, color=(80, 120, 200))
+    prep = _run_prepare(
+        img, tmp_path, quality_report=_report(_issue([16, 16, 48, 48])), padding=8
+    )
+    rep = _run_repaint(tmp_path, prep, engine="fake_inpaint", prompt="x")
+    out = _run_composite(
+        img, tmp_path,
+        manifest=json.dumps({"regions": prep["regions"]}),
+        repainted=json.dumps(rep["repainted"]),
+    )
+    assert out["repaint_report"]["repainted_count"] == 1
+    res = np.asarray(Image.open(out["fixed_image"]).convert("RGBA"), dtype=np.float32)
+    assert res[32, 32, 0] > 150.0
+
+
+def test_probe_engines_reports_provider(tmp_path: Path, capsys) -> None:
+    rc = cli.main(["--probe-engines"])
+    assert rc == 0
+    payload = json.loads(capsys.readouterr().out)
+    assert payload["engines"]["provider"]["available"] is True
+    assert "sd_inpaint" in payload["engines"]
+    assert "model_cache_dir" in payload

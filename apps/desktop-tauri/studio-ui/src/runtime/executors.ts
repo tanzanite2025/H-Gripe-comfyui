@@ -6,7 +6,7 @@
 // sinks. This wires the renderer-agnostic DAG runtime to real backend
 // capability.
 
-import { analyzePsdContext, composePsd, compositeRepaint, detectQualityIssues, enhanceImage, getOutputDir, matchLightColor, prepareRepaintRegions, refineMaskEdge, runTaskJson } from "../bridge/tauri";
+import { analyzePsdContext, composePsd, compositeRepaint, detectQualityIssues, enhanceImage, getOutputDir, localRepaintRegions, matchLightColor, prepareRepaintRegions, refineMaskEdge, runTaskJson } from "../bridge/tauri";
 import type { RepaintedCrop } from "../bridge/tauri";
 import type { Bounds, QualityReport, VisualContext } from "../types/production";
 import type { ExecutorRegistry } from "./dag";
@@ -26,6 +26,7 @@ const DETAIL_REPAINT_RESERVED = new Set([
   "provider",
   "operation",
   "credentials_ref",
+  "engine",
   "repaint_prompt_base",
   "repaint_actions",
   "min_confidence",
@@ -445,6 +446,40 @@ export const defaultExecutors: ExecutorRegistry = {
     const operation = String(ctx.params.operation ?? "image.edit");
     const credentialsRef = String(ctx.params.credentials_ref ?? "") || null;
     const promptBase = String(ctx.params.repaint_prompt_base ?? "").trim();
+    const engine = String(ctx.params.engine ?? "provider").trim() || "provider";
+
+    const regionPrompt = (issue: string) =>
+      promptBase
+        ? issue
+          ? `${promptBase} (issue: ${issue})`
+          : promptBase
+        : `Repaint and restore this ${issue || "flagged"} region with clean, realistic detail; keep the style, lighting and colours consistent with the surroundings.`;
+
+    const repainted: RepaintedCrop[] = [];
+
+    // Opt-in local inpaint backend: when a non-`provider` engine is selected,
+    // run the local GPU pipeline over the manifest instead of the remote
+    // `image.edit` loop. A missing backend (deps/weights) returns an empty set
+    // with a reason, so we fall through to the provider path below.
+    let localUsed = false;
+    if (engine !== "provider") {
+      const promptMap: Record<string, string> = {};
+      for (const region of prepared.regions) {
+        const issue = region.type ?? "";
+        promptMap[issue] = regionPrompt(issue);
+      }
+      const local = await localRepaintRegions({
+        manifest: prepared,
+        engine,
+        prompt: regionPrompt(""),
+        promptMap: JSON.stringify(promptMap),
+        outputDir: outputDir || undefined,
+      });
+      if (local.engine !== "provider" && local.repainted.length > 0) {
+        localUsed = true;
+        repainted.push(...local.repainted);
+      }
+    }
 
     // Forward every non-reserved, non-empty param into each region's task.
     const params: Record<string, unknown> = {};
@@ -457,15 +492,10 @@ export const defaultExecutors: ExecutorRegistry = {
     // mock / empty provider has no `image.edit` capability: leave every region
     // unrepainted so the composite step passes the image through unchanged.
     const providerCanEdit = provider.length > 0 && provider !== "mock";
-    const repainted: RepaintedCrop[] = [];
-    if (providerCanEdit) {
+    if (!localUsed && providerCanEdit) {
       for (const region of prepared.regions) {
         const issue = region.type ?? "";
-        const prompt = promptBase
-          ? issue
-            ? `${promptBase} (issue: ${issue})`
-            : promptBase
-          : `Repaint and restore this ${issue || "flagged"} region with clean, realistic detail; keep the style, lighting and colours consistent with the surroundings.`;
+        const prompt = regionPrompt(issue);
         const task = {
           id: `studio-${ctx.nodeId}-r${region.index}-${Date.now()}`,
           provider,

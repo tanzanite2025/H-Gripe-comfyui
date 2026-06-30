@@ -1034,6 +1034,15 @@ export const NODE_SPECS: Record<string, NodeSpec> = {
         inline: true,
       },
       {
+        key: "engine",
+        label: "Engine",
+        control: "select",
+        options: ["provider", "sd_inpaint"],
+        defaultValue: "provider",
+        inline: true,
+        hint: "provider = remote image.edit (default); sd_inpaint = opt-in local GPU inpaint, falls back to the provider when its weights/deps are missing",
+      },
+      {
         key: "credentials_ref",
         label: "Credentials",
         control: "text",

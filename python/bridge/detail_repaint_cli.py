@@ -7,22 +7,34 @@ detect-only **Detail Watchdog**. Detail Watchdog reports *where* an image
 breaks down (a :class:`QualityReport`); Detail Repaint takes those issue
 regions and actually fixes them via a GPU/repaint provider.
 
-The provider call itself (``image.edit`` through the H-Gripe broker) is owned
+The generative fix itself (``image.edit`` through the H-Gripe broker) is owned
 by the Rust/TS orchestration layer, not this script, so the pixel work is split
-into two stateless subcommands the orchestrator drives around the broker call:
+into stateless subcommands the orchestrator drives around the broker call:
 
 * ``prepare``   -- for each issue region selected from the quality report, crop
   a padded window out of the candidate image and write a same-size inpaint
   ``mask`` marking the (un-padded) issue core as the edit area. Emits a JSON
   manifest of the regions (crop + mask paths, geometry) so the orchestrator can
   send each ``crop`` + ``mask`` + repaint prompt to the provider.
-* ``composite`` -- given the repainted crops returned by the provider, paste
-  each back into the candidate within a *feathered* version of its issue core
-  (a secondary edge fusion at the patch seam), leaving the padding context
-  untouched, and write the final fixed image. Emits a ``repaint_report``.
+* ``repaint``   -- the **opt-in local** ``engine`` seam (Phase 2,
+  ``docs/phase2-algorithm-roadmap.md`` §3): instead of the remote provider, run
+  a local GPU inpaint backend (``python/bridge/inpaint_backends/``) over the
+  manifest's crops + masks + prompt, writing repainted crops and emitting the
+  same ``{index, path}`` list ``composite`` consumes. ``provider`` stays the
+  default and the always-available fallback — when it is selected, or the local
+  backend's deps/weights are missing, no local repaint runs and the orchestrator
+  uses the remote provider exactly as before. ``--probe-engines`` reports which
+  engines are usable so the UI can grey out unavailable ones.
+* ``composite`` -- given the repainted crops (from the provider *or* the local
+  backend), paste each back into the candidate within a *feathered* version of
+  its issue core (a secondary edge fusion at the patch seam), leaving the
+  padding context untouched, and write the final fixed image. Emits a
+  ``repaint_report``.
 
-Only the vendored ``Pillow`` + ``numpy`` are used (no OpenCV, no ML). Both
-subcommands **input-harden** the candidate decode: CMYK (via its embedded ICC
+The ``prepare`` / ``composite`` pixel halves use only the vendored ``Pillow`` +
+``numpy`` (no OpenCV, no ML); the optional ``repaint`` backends import ``torch``
+/ ``diffusers`` lazily and only when explicitly selected. The pixel subcommands
+**input-harden** the candidate decode: CMYK (via its embedded ICC
 profile when present), 16-bit / float, palette and grayscale sources are
 normalised to an 8-bit RGBA working space, EXIF orientation is applied, and an
 input larger than ``--max-decode-pixels`` is refused before it is decoded. The
@@ -434,11 +446,151 @@ def composite(args: argparse.Namespace) -> dict[str, Any]:
     }
 
 
+_PROVIDER_ENGINE = "provider"
+
+
+def _inner_mask(size: tuple[int, int], inner: list[int]) -> "np.ndarray":
+    """A crop-sized ``L`` mask (uint8) that is white (255) inside ``inner``.
+
+    This is the **diffusers convention** (white marks the area to regenerate),
+    derived from the manifest geometry directly so it is independent of the
+    provider-oriented alpha mask ``prepare`` wrote (whose edit-area polarity is
+    flipped by ``--invert-mask``).
+    """
+    crop_w, crop_h = size
+    mask = np.zeros((crop_h, crop_w), dtype=np.uint8)
+    x1, y1, x2, y2 = (int(v) for v in inner)
+    x1 = max(0, min(x1, crop_w))
+    y1 = max(0, min(y1, crop_h))
+    x2 = max(x1, min(x2, crop_w))
+    y2 = max(y1, min(y2, crop_h))
+    mask[y1:y2, x1:x2] = 255
+    return mask
+
+
+def repaint(args: argparse.Namespace) -> dict[str, Any]:
+    """Run the opt-in local inpaint backend over a prepare manifest's regions.
+
+    Emits the same ``{index, path}`` repaint list ``composite`` consumes plus
+    engine telemetry. ``provider`` (the default) and any unavailable backend
+    produce an **empty** list and a recorded ``engine_fallback_reason`` so the
+    orchestrator falls back to the remote ``image.edit`` provider — this never
+    hard-fails on a box without the model.
+    """
+    manifest = _load_json_arg(args.manifest, "manifest") or {}
+    regions = manifest.get("regions") if isinstance(manifest, dict) else None
+    regions = regions if isinstance(regions, list) else []
+
+    prompt = (args.prompt or "").strip()
+    prompt_map = _load_json_arg(args.prompt_map, "prompt_map") or {}
+    if not isinstance(prompt_map, dict):
+        prompt_map = {}
+
+    engine_requested = (args.engine or _PROVIDER_ENGINE).strip().lower() or _PROVIDER_ENGINE
+    engine_used = _PROVIDER_ENGINE
+    engine_fallback_reason: str | None = None
+    backend_model: str | None = None
+
+    repainted: list[dict[str, Any]] = []
+    skipped: list[dict[str, Any]] = []
+
+    backend = None
+    if engine_requested == _PROVIDER_ENGINE:
+        engine_fallback_reason = "engine 'provider': remote image.edit owned by orchestrator"
+    else:
+        from inpaint_backends import resolve
+
+        backend = resolve(engine_requested)
+        if backend is None:
+            engine_fallback_reason = f"unknown engine {engine_requested!r}"
+        else:
+            ok, reason = backend.available()
+            if not ok:
+                engine_fallback_reason = reason
+                backend = None
+
+    directory = Path((args.output_dir or "").strip() or ".")
+    seed = args.seed if getattr(args, "seed", None) is not None and args.seed >= 0 else None
+
+    if backend is not None:
+        from inpaint_backends import InpaintUnavailable
+        from PIL import Image
+
+        directory.mkdir(parents=True, exist_ok=True)
+        backend_model = Path(backend.weight_path()).name if hasattr(backend, "weight_path") else None
+        for region in regions:
+            if not isinstance(region, dict):
+                continue
+            index = int(region.get("index"))
+            crop_path = region.get("crop_path")
+            inner = region.get("inner_box")
+            issue_type = region.get("type")
+            if not (crop_path and Path(str(crop_path)).is_file()):
+                skipped.append({"index": index, "type": issue_type, "reason": "missing_crop"})
+                continue
+            if not (isinstance(inner, list) and len(inner) == 4):
+                skipped.append({"index": index, "type": issue_type, "reason": "bad_geometry"})
+                continue
+
+            crop_img = Image.open(str(crop_path)).convert("RGB")
+            mask_arr = _inner_mask(crop_img.size, [int(v) for v in inner])
+            mask_img = Image.fromarray(mask_arr, "L")
+            region_prompt = str(prompt_map.get(str(issue_type)) or prompt)
+
+            try:
+                result = backend.inpaint(
+                    crop_img,
+                    mask_img,
+                    region_prompt,
+                    negative_prompt=(args.negative_prompt or ""),
+                    strength=float(args.strength),
+                    guidance_scale=float(args.guidance_scale),
+                    steps=int(args.steps),
+                    seed=seed,
+                )
+            except InpaintUnavailable as err:
+                engine_fallback_reason = err.reason
+                repainted = []
+                skipped = []
+                backend = None
+                break
+            except Exception as err:  # noqa: BLE001 - degrade to provider, never crash
+                skipped.append(
+                    {"index": index, "type": issue_type, "reason": f"{type(err).__name__}: {err}"}
+                )
+                continue
+
+            stem = (args.output_name or "").strip() or _safe_stem(str(crop_path))
+            out_path = directory / f"{stem}_region{index}_repainted.png"
+            result.convert("RGBA").save(str(out_path), format="PNG")
+            repainted.append({"index": index, "path": str(out_path)})
+
+        if backend is not None and repainted:
+            engine_used = backend.id
+
+    return {
+        "repainted": repainted,
+        "skipped": skipped,
+        "engine": engine_used,
+        "engine_requested": engine_requested,
+        "engine_fallback_reason": engine_fallback_reason,
+        "backend_model": backend_model,
+        "requested_count": len(regions),
+        "repainted_count": len(repainted),
+    }
+
+
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         description="Localized repaint pixel helper (crop/mask prepare + paste-back composite)."
     )
-    sub = parser.add_subparsers(dest="command", required=True)
+    parser.add_argument(
+        "--probe-engines",
+        dest="probe_engines",
+        action="store_true",
+        help="print local inpaint engine availability JSON and exit (UI capability probe)",
+    )
+    sub = parser.add_subparsers(dest="command", required=False)
 
     prep = sub.add_parser("prepare", help="crop issue regions + write inpaint masks")
     prep.add_argument("--image", required=True, help="path to the candidate image")
@@ -538,14 +690,93 @@ def build_parser() -> argparse.ArgumentParser:
         default="",
         help="base name for the fixed image (default: <image>_repainted)",
     )
+
+    rep = sub.add_parser(
+        "repaint",
+        help="run a local inpaint engine over the manifest (opt-in; falls back to provider)",
+    )
+    rep.add_argument(
+        "--manifest",
+        default="",
+        help="inline manifest JSON returned by the prepare step",
+    )
+    rep.add_argument(
+        "--engine",
+        default=_PROVIDER_ENGINE,
+        help="inpaint engine: provider (default) | sd_inpaint (opt-in, falls back to provider)",
+    )
+    rep.add_argument(
+        "--prompt",
+        default="",
+        help="repaint prompt applied to every region (per-type override via --prompt-map)",
+    )
+    rep.add_argument(
+        "--prompt-map",
+        dest="prompt_map",
+        default="",
+        help="inline JSON mapping issue type -> prompt (overrides --prompt per region)",
+    )
+    rep.add_argument(
+        "--negative-prompt",
+        dest="negative_prompt",
+        default="",
+        help="negative prompt passed to the backend",
+    )
+    rep.add_argument(
+        "--strength",
+        type=float,
+        default=0.75,
+        help="inpaint denoise strength 0..1 (lower preserves more of the source)",
+    )
+    rep.add_argument(
+        "--guidance-scale",
+        dest="guidance_scale",
+        type=float,
+        default=7.5,
+        help="classifier-free guidance scale",
+    )
+    rep.add_argument(
+        "--steps",
+        type=int,
+        default=30,
+        help="number of inference steps",
+    )
+    rep.add_argument(
+        "--seed",
+        type=int,
+        default=-1,
+        help="random seed for reproducible inpaint (<0 = nondeterministic)",
+    )
+    rep.add_argument(
+        "--output-dir",
+        dest="output_dir",
+        default="",
+        help="directory for the repainted crop PNGs (default: cwd)",
+    )
+    rep.add_argument(
+        "--output-name",
+        dest="output_name",
+        default="",
+        help="base name for the repainted crops (default: from each crop file)",
+    )
     return parser
 
 
 def main(argv: list[str] | None = None) -> int:
-    args = build_parser().parse_args(argv)
+    parser = build_parser()
+    args = parser.parse_args(argv)
+    if getattr(args, "probe_engines", False):
+        from inpaint_backends import probe
+
+        sys.stdout.write(json.dumps(probe(), ensure_ascii=False))
+        return 0
+    if not getattr(args, "command", None):
+        parser.error("a subcommand is required (prepare | repaint | composite)")
     try:
         if args.command == "prepare":
             result = prepare(args)
+        elif args.command == "repaint":
+            result = repaint(args)
         else:
             result = composite(args)
     except Exception as err:  # noqa: BLE001 - surface a single clean error line

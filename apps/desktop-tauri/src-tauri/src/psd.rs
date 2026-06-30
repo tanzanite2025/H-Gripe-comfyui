@@ -1166,9 +1166,10 @@ pub(crate) fn probe_engines(dir: Option<String>) -> Result<EngineProbeReport, St
     let python = project_python(&dir);
 
     // (node kind, CLI) for every card that exposes an `engine` param.
-    const CARDS: [(&str, &str); 2] = [
+    const CARDS: [(&str, &str); 3] = [
         ("imageEnhance", "image_enhance_cli.py"),
         ("detailWatchdog", "detail_watchdog_cli.py"),
+        ("detailRepaint", "detail_repaint_cli.py"),
     ];
 
     let mut cards = Vec::with_capacity(CARDS.len());
@@ -1428,6 +1429,120 @@ pub(crate) fn composite_repaint(
     })
 }
 
+/// One repainted crop produced by the local inpaint backend: the region
+/// `index` and the path to the regenerated crop PNG, ready to feed straight
+/// into [`composite_repaint`]'s `repainted` list.
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub(crate) struct LocalRepaintedCrop {
+    #[serde(default)]
+    pub(crate) index: u32,
+    #[serde(default)]
+    pub(crate) path: String,
+}
+
+/// Result of the **Detail Repaint** local `repaint` step: the regenerated crops
+/// plus the engine telemetry the UI uses to explain a fallback to the remote
+/// provider. An empty `repainted` list (with a `engine_fallback_reason`) means
+/// the orchestrator should run its remote `image.edit` loop instead.
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub(crate) struct LocalRepaintResult {
+    #[serde(default)]
+    pub(crate) repainted: Vec<LocalRepaintedCrop>,
+    #[serde(default)]
+    pub(crate) skipped: Vec<serde_json::Value>,
+    /// Engine that actually ran (`provider` when no local backend was used).
+    #[serde(default)]
+    pub(crate) engine: String,
+    /// Engine the node asked for (differs from `engine` on fallback).
+    #[serde(default)]
+    pub(crate) engine_requested: String,
+    /// Why the local backend was not used (provider selected, missing deps/weight).
+    #[serde(default)]
+    pub(crate) engine_fallback_reason: Option<String>,
+    /// Weight name when a local backend ran, else null.
+    #[serde(default)]
+    pub(crate) backend_model: Option<String>,
+    #[serde(default)]
+    pub(crate) requested_count: u32,
+    #[serde(default)]
+    pub(crate) repainted_count: u32,
+}
+
+/// Run the opt-in **local** inpaint backend over a prepare manifest, an
+/// alternative to the remote `image.edit` provider for the **Detail Repaint**
+/// node (Phase 2, `docs/phase2-algorithm-roadmap.md` §3). `provider` (the
+/// default) or any backend whose optional deps/weights are missing yields an
+/// empty `repainted` list and a recorded reason, so the orchestrator falls back
+/// to the remote provider — this never hard-fails on a box without the model.
+///
+/// `manifest` is the JSON returned by [`prepare_repaint_regions`]; the returned
+/// `repainted` list feeds straight into [`composite_repaint`]. Shells out to
+/// `python/bridge/detail_repaint_cli.py repaint`.
+#[tauri::command]
+#[allow(clippy::too_many_arguments)]
+pub(crate) fn local_repaint_regions(
+    dir: Option<String>,
+    manifest: String,
+    engine: Option<String>,
+    prompt: Option<String>,
+    prompt_map: Option<String>,
+    negative_prompt: Option<String>,
+    strength: Option<f64>,
+    guidance_scale: Option<f64>,
+    steps: Option<i64>,
+    seed: Option<i64>,
+    output_dir: Option<String>,
+    output_name: Option<String>,
+) -> Result<LocalRepaintResult, String> {
+    let dir = resolve_project_dir(&dir)?;
+    let python = project_python(&dir);
+    let script = detail_repaint_script(&dir)?;
+    reject_unsafe_output_name(output_name.as_deref().unwrap_or(""))?;
+
+    let mut cmd = std::process::Command::new(&python);
+    cmd.arg(&script)
+        .arg("repaint")
+        .arg("--manifest")
+        .arg(&manifest)
+        .arg("--engine")
+        .arg(engine.as_deref().unwrap_or("provider"))
+        .arg("--prompt")
+        .arg(prompt.as_deref().unwrap_or(""))
+        .arg("--prompt-map")
+        .arg(prompt_map.as_deref().unwrap_or(""))
+        .arg("--negative-prompt")
+        .arg(negative_prompt.as_deref().unwrap_or(""))
+        .arg("--strength")
+        .arg(strength.unwrap_or(0.75).to_string())
+        .arg("--guidance-scale")
+        .arg(guidance_scale.unwrap_or(7.5).to_string())
+        .arg("--steps")
+        .arg(steps.unwrap_or(30).to_string())
+        .arg("--seed")
+        .arg(seed.unwrap_or(-1).to_string())
+        .arg("--output-dir")
+        .arg(output_dir.as_deref().unwrap_or(""))
+        .arg("--output-name")
+        .arg(output_name.as_deref().unwrap_or(""))
+        .current_dir(&dir);
+    no_window(&mut cmd);
+
+    let output = cmd
+        .output()
+        .map_err(|err| format!("failed to launch {}: {err}", python.display()))?;
+    if !output.status.success() {
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        return Err(format!("local_repaint_regions failed: {}", stderr.trim()));
+    }
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    serde_json::from_str::<LocalRepaintResult>(stdout.trim()).map_err(|err| {
+        format!(
+            "could not parse local_repaint_regions output: {err} (raw: {})",
+            stdout.trim()
+        )
+    })
+}
+
 #[cfg(test)]
 mod tests {
     use super::{
@@ -1542,6 +1657,45 @@ mod tests {
         assert!(report.cards[0].error.is_none());
         assert_eq!(report.cards[1].error.as_deref(), Some("probe failed"));
         assert!(report.cards[1].engines.is_empty());
+    }
+
+    #[test]
+    fn local_repaint_result_parses_backend_and_fallback() {
+        // A successful local run: a backend ran and returned one repainted crop.
+        let raw = r#"{
+            "repainted": [{"index": 0, "path": "/out/hero_region0_repainted.png"}],
+            "skipped": [],
+            "engine": "sd_inpaint",
+            "engine_requested": "sd_inpaint",
+            "engine_fallback_reason": null,
+            "backend_model": "sd-inpaint",
+            "requested_count": 1,
+            "repainted_count": 1
+        }"#;
+        let res: super::LocalRepaintResult = serde_json::from_str(raw).unwrap();
+        assert_eq!(res.engine, "sd_inpaint");
+        assert_eq!(res.repainted.len(), 1);
+        assert_eq!(res.repainted[0].index, 0);
+        assert!(res.engine_fallback_reason.is_none());
+        assert_eq!(res.backend_model.as_deref(), Some("sd-inpaint"));
+
+        // The provider-fallback shape: no local repaint, a recorded reason.
+        let fallback = r#"{
+            "repainted": [],
+            "engine": "provider",
+            "engine_requested": "sd_inpaint",
+            "engine_fallback_reason": "missing optional dependency: torch",
+            "requested_count": 2,
+            "repainted_count": 0
+        }"#;
+        let res: super::LocalRepaintResult = serde_json::from_str(fallback).unwrap();
+        assert_eq!(res.engine, "provider");
+        assert!(res.repainted.is_empty());
+        assert_eq!(
+            res.engine_fallback_reason.as_deref(),
+            Some("missing optional dependency: torch")
+        );
+        assert!(res.backend_model.is_none());
     }
 
     #[test]

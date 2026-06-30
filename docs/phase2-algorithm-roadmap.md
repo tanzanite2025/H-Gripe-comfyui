@@ -159,10 +159,18 @@ provider:
   compositing) for harder seams.
 
 ### 3.3 Integration plan
+**Status: the seam + `sd_inpaint` have landed** (the rest of this section is the
+design it was built to; ⛔ items are SDXL / Flux Fill backends, ControlNet, the
+advanced-blend flag and real-inference CI). The selector is the local card's
+**`engine` param** (`provider` | `sd_inpaint` | …); `provider` stays the default
+and the fallback.
 - The `prepare`/`composite` split and manifest **already** isolate the generative
-  step cleanly — Phase 2 adds a local backend that consumes the same manifest, so
-  the orchestrator chooses "provider `image.edit`" vs "local inpaint" by
-  `profile_ref` with **no contract change**.
+  step cleanly — the `repaint` subcommand (`python/bridge/inpaint_backends/`) adds
+  a local backend that consumes the same manifest, so the orchestrator chooses
+  "provider `image.edit`" vs "local inpaint" by the `engine` param with **no
+  contract change**: a `repaint` run emits the same `{index, path}` list that
+  `composite` already consumes, and an unavailable/`provider` engine emits an
+  empty list + `engine_fallback_reason` so the remote path runs unchanged.
 - `composite` stays backend-agnostic; only an optional advanced-blend flag is
   added, defaulting to today's feather.
 

@@ -320,6 +320,10 @@ export const NODE_ZH: Record<string, NodeSpecZh> = {
         hint: "具备 image.edit 能力的提供方（选择档案时自动设置）；空/mock 则直通",
       },
       operation: { label: "操作" },
+      engine: {
+        label: "引擎",
+        hint: "provider = 远程 image.edit（默认）；sd_inpaint = 可选本地 GPU 重绘，权重/依赖缺失时回落 provider",
+      },
       credentials_ref: { label: "凭据", hint: "选择档案时自动设置" },
       repaint_prompt_base: {
         label: "重绘提示词",

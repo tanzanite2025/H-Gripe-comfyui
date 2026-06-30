@@ -18,6 +18,7 @@ and UI can be exercised without a GPU or large model downloads.
 | Detail Watchdog | `detect_quality_issues` | Pillow+numpy rule heuristics (Laplacian variance, tile sharpness grid, alpha-rim halo, mean-colour drift) | ML/VLM semantic defect detection |
 | Detail Repaint | `prepare_repaint_regions` + `composite_repaint` | crop/mask + feathered paste around a provider `image.edit` call | dedicated GPU inpainting backend |
 | Match Light & Color | `match_light_color` | Reinhard Lab transfer / per-channel histogram match weighted to shadows/highlights, brand-colour protected (CPU) | learned image-harmonisation backend |
+| Refine Mask Edge | `refine_mask_edge` | erode/dilate morphology + numpy guided-filter edge snapping + feather + colour decontamination, trimap unknown band protected (CPU) | learned alpha-matting backend |
 
 The guiding principle for Phase 2 is **additive, opt-in backends**: the existing
 CPU path stays as the always-available default and fallback; GPU/ML strength is
@@ -224,7 +225,54 @@ weight is opt-in so real-inference CI is gated like ViTMatte.
 
 ---
 
-## 5. Cross-cutting concerns
+## 5. Refine Mask Edge — `refine_mask_edge`
+
+### 5.1 Phase 1 baseline
+`python/bridge/edge_refine_cli.py` runs, on CPU only (Pillow + numpy, no OpenCV):
+erode/dilate morphology to bite off the white fringe, a numpy guided filter that
+snaps the matte to the subject's own luminance edges, a Gaussian feather, and
+edge colour decontamination. When a matting **trimap** is connected, the unknown
+band (hair / fur / glass) is *protected* from the erode/feather clean-up and
+restored from the source matte. Emits `{refined_image, refined_mask,
+edge_report}`.
+
+### 5.2 Phase 2 target
+A **learned alpha-matting** network (ViTMatte / IndexNet / MODNet-style) that
+solves true continuous alpha in the trimap's unknown band — recovering fine hair
+and semi-transparent edges the global guided filter flattens — while leaving the
+definite FG/BG regions to the deterministic heuristic clean-up.
+
+### 5.3 Integration plan
+**Status: the seam + `onnx_matting` have landed** (the trained weight is the
+remaining piece). Mirroring the SR / Watchdog / Repaint / Match Light & Color
+seams:
+
+- A new **`engine` param** (`cpu` | `onnx_matting` | …); `cpu` stays the default
+  and always-available heuristic baseline.
+- `python/bridge/matting_backends/` is the registry (`known_engines` / `resolve`
+  / `probe`); 🟡 `onnx_matting` is the first concrete backend: it runs an ONNX
+  matting network (lazy `onnxruntime`, weight from `HGRIPE_MATTING_MODEL` /
+  `HGRIPE_MODEL_CACHE`) over the subject + trimap and returns a refined alpha at
+  the source geometry.
+- The learned alpha **replaces the source matte only inside the protected
+  (unknown) band**, so the definite regions still get the morphology/guided/
+  feather clean-up and the geometry / report contract is unchanged (plus
+  `engine` / `engine_requested` / `engine_fallback_reason` / `backend_model`
+  telemetry). A learned matter is meaningful only with a trimap, so without one
+  the node records a skip reason and keeps the heuristic.
+- `--probe-engines` reports availability; `refine_mask_edge` joins the cross-card
+  `probe_engines` aggregation so the inspector greys it out when its dep/weight
+  is missing. Missing dep/weight → graceful fallback to the heuristic.
+
+### 5.4 Dependencies & risks
+`onnxruntime` + a matting weight (not bundled; the same family as the native
+ViTMatte path in `subject_matte.rs`). Risks: trimap quality dominates matting
+quality (the seam is gated on a connected trimap), and the weight is opt-in so
+real-inference CI is gated like ViTMatte.
+
+---
+
+## 6. Cross-cutting concerns
 
 - **Packaging (ties to Issue #2):** model weights are **not** bundled in the
   installer. Backends resolve weights from `HGRIPE_MODEL_CACHE` (downloaded /
@@ -242,7 +290,7 @@ weight is opt-in so real-inference CI is gated like ViTMatte.
   `QualityReport` / `RepaintReport` / enhance JSON shapes. Phase 2 is selected
   per run via `profile_ref`; the CPU path remains the default and fallback.
 
-## 6. Suggested sequencing
+## 7. Suggested sequencing
 
 1. **SR first (highest visible win, lowest risk):** Real-ESRGAN backend behind
    `profile_ref` + capability probe + CPU fallback.
@@ -251,3 +299,7 @@ weight is opt-in so real-inference CI is gated like ViTMatte.
    currently-`skipped` semantic targets.
 4. **SupIR/CCSR** as premium SR profiles once the backend dispatch + weight cache
    are proven by Real-ESRGAN.
+
+The per-card `engine` seams (1–3 above plus Match Light & Color and Refine Mask
+Edge) have all landed; what remains across the board is the trained weights, the
+premium backends, and the opt-in real-inference CI.

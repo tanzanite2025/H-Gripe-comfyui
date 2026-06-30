@@ -351,6 +351,7 @@ export const defaultExecutors: ExecutorRegistry = {
       guidedRadius: Number(ctx.params.guided_radius ?? 8),
       edgeDecontaminate: Boolean(ctx.params.edge_decontaminate ?? true),
       backgroundBlendStrength: Number(ctx.params.background_blend_strength ?? 0.4),
+      engine: String(ctx.params.engine ?? "cpu").trim() || undefined,
       outputDir: outputDir || undefined,
       outputName: String(ctx.params.output_name ?? "").trim() || undefined,
     });

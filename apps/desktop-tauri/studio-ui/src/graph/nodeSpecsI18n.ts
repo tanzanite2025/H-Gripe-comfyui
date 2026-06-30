@@ -235,6 +235,10 @@ export const NODE_ZH: Record<string, NodeSpecZh> = {
         label: "预设",
         hint: "clean = 紧致 1px 收边，natural = 柔和 6px 羽化，soft = 不收边，custom = 展开全部",
       },
+      engine: {
+        label: "引擎",
+        hint: "cpu = 内置启发式精修（始终可用）；onnx_matting = 可选学习抠像，需要连接 trimap，权重/依赖缺失时回落 cpu",
+      },
       erode_px: { label: "腐蚀 px", hint: "向内收边以去除白边" },
       dilate_px: { label: "膨胀 px", hint: "向外扩张蒙版" },
       feather_px: { label: "羽化 px", hint: "柔化边缘过渡" },

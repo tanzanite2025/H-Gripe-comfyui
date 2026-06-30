@@ -132,6 +132,8 @@ def probe() -> dict[str, Any]:
         PROVIDER_ENGINE: {
             "available": True,
             "reason": "remote image.edit provider (orchestrator)",
+            # Remote call, not a local accelerator, so no GPU/CPU device note.
+            "accelerated": False,
         },
     }
     for name, backend in _registry().items():
@@ -139,5 +141,7 @@ def probe() -> dict[str, Any]:
             ok, reason = backend.available()
         except Exception as err:  # noqa: BLE001 - a broken probe must not crash the report
             ok, reason = False, f"{type(err).__name__}: {err}"
-        engines[name] = {"available": bool(ok), "reason": reason}
+        # GPU-capable local engine: the UI pairs this with the machine device
+        # probe to warn it would fall back to CPU on a box with no CUDA device.
+        engines[name] = {"available": bool(ok), "reason": reason, "accelerated": True}
     return {"engines": engines, "model_cache_dir": str(model_cache_dir())}

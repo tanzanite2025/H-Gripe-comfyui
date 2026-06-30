@@ -58,6 +58,8 @@ def test_probe_always_reports_rules_available() -> None:
     report = probe()
     assert report["engines"]["rules"]["available"] is True
     assert "onnx_defect" in report["engines"]
+    assert report["engines"]["rules"]["accelerated"] is False
+    assert report["engines"]["onnx_defect"]["accelerated"] is True
     assert "model_cache_dir" in report
 
 

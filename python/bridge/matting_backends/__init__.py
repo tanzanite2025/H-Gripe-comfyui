@@ -122,12 +122,18 @@ def probe() -> dict[str, Any]:
     missing. Always includes ``cpu`` as available.
     """
     engines: dict[str, Any] = {
-        CPU_ENGINE: {"available": True, "reason": "built-in CPU heuristic refine"},
+        CPU_ENGINE: {
+            "available": True,
+            "reason": "built-in CPU heuristic refine",
+            "accelerated": False,
+        },
     }
     for name, backend in _registry().items():
         try:
             ok, reason = backend.available()
         except Exception as err:  # noqa: BLE001 - a broken probe must not crash the report
             ok, reason = False, f"{type(err).__name__}: {err}"
-        engines[name] = {"available": bool(ok), "reason": reason}
+        # GPU-capable engine: the UI pairs this with the machine device probe to
+        # warn it would fall back to CPU on a box with no CUDA device.
+        engines[name] = {"available": bool(ok), "reason": reason, "accelerated": True}
     return {"engines": engines, "model_cache_dir": str(model_cache_dir())}

@@ -324,6 +324,14 @@ export const messages = {
     en: "This engine can't run on this machine — falls back to the CPU baseline.",
     zh: "此引擎在本机无法运行——将回落到 CPU 基线。",
   },
+  "inspector.engineGpu": {
+    en: "Runs on GPU (CUDA device detected).",
+    zh: "将在 GPU 上运行(检测到 CUDA 设备)。",
+  },
+  "inspector.engineCpuFallback": {
+    en: "No CUDA device — this engine runs on CPU (slower).",
+    zh: "无 CUDA 设备——此引擎将在 CPU 上运行(较慢)。",
+  },
   "inspector.output": { en: "Output", zh: "输出" },
   "inspector.viewFull": { en: "View full size", zh: "查看原图" },
 

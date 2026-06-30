@@ -48,6 +48,9 @@ def test_probe_reports_cpu_available_and_realesrgan_entry() -> None:
     # availability is a bool either way; reason is always a non-empty string.
     assert isinstance(engines["realesrgan"]["available"], bool)
     assert engines["realesrgan"]["reason"]
+    # The CPU baseline is not GPU-accelerated; the ML engine is.
+    assert engines["cpu"]["accelerated"] is False
+    assert engines["realesrgan"]["accelerated"] is True
     assert "model_cache_dir" in report
 
 

@@ -1,11 +1,17 @@
 # Design: Local/API card split + PSD chain hardening
 
-Status: proposal (no code changes in this PR)
+Status: implemented — this design has landed and this doc is now the reference
+for it. The first-class `executor` split is the `StudioExecutor` enum
+(`Graph` / `Local` / `Compute` / `Api` / `Hybrid`) in
+`apps/desktop-tauri/src-tauri/src/studio/exec.rs`, classified by
+`studio_executor_for_kind` and mirrored by the `executor` field in
+`studio-ui/src/graph/nodeSpecs.ts`; the PSD chain input-hardening checklist has
+likewise shipped across the bridge CLIs.
 Scope: defines (1) a first-class `executor` (local vs API) dimension for node
 cards + the broker routing rules that enforce it, and (2) a per-chain
 "do it to the extreme" checklist for the eight PSD processing chains.
 
-This is the structural prerequisite the team agreed to land **before** deepening
+This was the structural prerequisite the team agreed to land **before** deepening
 the Phase 1 algorithms: once routing is explicit, each local chain can be
 hardened independently without touching dispatch, and future API/local-model
 management has clean seams to hook into.

@@ -1,6 +1,8 @@
-import { useState } from "react";
+import { useContext, useState } from "react";
 import type { Node } from "@xyflow/react";
 import { nodeSpec } from "../graph/nodeSpecs";
+import { localizeSpec } from "../graph/nodeSpecsI18n";
+import { LangContext, useT } from "../i18n";
 import { ParamField } from "./ParamField";
 import { ProfilePicker } from "./ProfilePicker";
 import { OutputPicker } from "./OutputPicker";
@@ -16,11 +18,13 @@ interface InspectorProps {
 // node card), so the canvas stays light and previews never blow up node size.
 export function Inspector({ node, onParamChange }: InspectorProps) {
   const [viewerPath, setViewerPath] = useState<string | null>(null);
+  const lang = useContext(LangContext);
+  const t = useT();
 
   if (!node) {
     return (
       <aside className="inspector">
-        <p className="muted">Select a node to edit its parameters.</p>
+        <p className="muted">{t("inspector.selectNode")}</p>
       </aside>
     );
   }
@@ -31,10 +35,10 @@ export function Inspector({ node, onParamChange }: InspectorProps) {
   if (data.kind === "group") {
     return (
       <aside className="inspector">
-        <h2>Group</h2>
-        <p className="muted">A container frame. Drag nodes in/out; members move with it.</p>
+        <h2>{t("inspector.group")}</h2>
+        <p className="muted">{t("inspector.groupDesc")}</p>
         <label className="field">
-          <span>Label</span>
+          <span>{t("inspector.label")}</span>
           <input
             value={String(data.params.label ?? "")}
             onChange={(e) => onParamChange(node.id, "label", e.target.value)}
@@ -44,7 +48,7 @@ export function Inspector({ node, onParamChange }: InspectorProps) {
     );
   }
 
-  const spec = nodeSpec(data.kind);
+  const spec = localizeSpec(nodeSpec(data.kind), lang);
 
   // A param can declare `visibleWhen` to hide itself unless a sibling param has
   // one of the listed values (e.g. show API fields only when mode === "api").
@@ -92,17 +96,17 @@ export function Inspector({ node, onParamChange }: InspectorProps) {
 
       {data.imagePath && (
         <div className="field">
-          <span>Output</span>
+          <span>{t("inspector.output")}</span>
           <button
             type="button"
             className="inspector-img-btn"
             onClick={() => setViewerPath(data.imagePath ?? null)}
-            title="View full size"
+            title={t("inspector.viewFull")}
           >
             {data.thumbnail ? (
               <img className="inspector-img" src={data.thumbnail} alt="output" />
             ) : (
-              <div className="inspector-img placeholder">View full size</div>
+              <div className="inspector-img placeholder">{t("inspector.viewFull")}</div>
             )}
           </button>
           <code className="path">{data.imagePath}</code>

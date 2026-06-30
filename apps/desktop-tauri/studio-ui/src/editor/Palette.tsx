@@ -1,17 +1,19 @@
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useContext, useEffect, useMemo, useRef, useState } from "react";
 import { paletteGroups, type NodeSpec } from "../graph/nodeSpecs";
+import { GROUP_ZH, localizeSpec } from "../graph/nodeSpecsI18n";
+import { LangContext, useT, type MsgKey } from "../i18n";
 
 interface PaletteProps {
   /** Click-to-add (node is placed at a default spot on the canvas). */
   onAdd: (kind: string) => void;
 }
 
-const CATEGORY_LABEL: Record<NodeSpec["category"], string> = {
-  input: "Inputs",
-  generate: "Generate",
-  control: "Control",
-  utility: "Utility",
-  output: "Outputs",
+const CATEGORY_LABEL: Record<NodeSpec["category"], MsgKey> = {
+  input: "palette.catInput",
+  generate: "palette.catGenerate",
+  control: "palette.catControl",
+  utility: "palette.catUtility",
+  output: "palette.catOutput",
 };
 
 // Local vs API badge shown on palette items so the two kinds of card are
@@ -32,6 +34,7 @@ const GROUP_ITEM = {
   title: "Group",
   description: "A resizable frame. Drag nodes inside to group them; members move together.",
 };
+const GROUP_ITEM_ZH = { kind: "group", title: GROUP_ZH.title, description: GROUP_ZH.description };
 
 export function matches(spec: { title: string; kind: string; description: string }, q: string): boolean {
   if (!q) return true;
@@ -49,6 +52,8 @@ export function matches(spec: { title: string; kind: string; description: string
 export function Palette({ onAdd }: PaletteProps) {
   const [query, setQuery] = useState("");
   const inputRef = useRef<HTMLInputElement>(null);
+  const lang = useContext(LangContext);
+  const t = useT();
 
   // "/" focuses search (unless already typing in a field), so you can add a
   // node without reaching for the mouse.
@@ -69,21 +74,26 @@ export function Palette({ onAdd }: PaletteProps) {
   const groups = useMemo(
     () =>
       paletteGroups()
-        .map(({ category, specs }) => ({ category, specs: specs.filter((s) => matches(s, query)) }))
+        .map(({ category, specs }) => ({
+          category,
+          specs: specs
+            .map((s) => localizeSpec(s, lang))
+            .filter((s) => matches(s, query)),
+        }))
         .filter((g) => g.specs.length > 0),
-    [query],
+    [query, lang],
   );
-  const showGroupItem = matches(GROUP_ITEM, query);
+  const showGroupItem = matches(lang === "zh" ? GROUP_ITEM_ZH : GROUP_ITEM, query);
   const empty = groups.length === 0 && !showGroupItem;
 
   return (
     <aside className="palette">
-      <h2>Nodes</h2>
+      <h2>{t("palette.heading")}</h2>
       <input
         ref={inputRef}
         className="palette-search"
         type="search"
-        placeholder="Search nodes…  ( / )"
+        placeholder={t("palette.searchPh")}
         value={query}
         onChange={(e) => setQuery(e.target.value)}
         onKeyDown={(e) => {
@@ -95,7 +105,7 @@ export function Palette({ onAdd }: PaletteProps) {
       />
       {groups.map(({ category, specs }) => (
         <div key={category} className="palette-group">
-          <h3>{CATEGORY_LABEL[category]}</h3>
+          <h3>{t(CATEGORY_LABEL[category])}</h3>
           {specs.map((spec) => (
             <button
               key={spec.kind}
@@ -120,7 +130,7 @@ export function Palette({ onAdd }: PaletteProps) {
       ))}
       {showGroupItem && (
         <div className="palette-group">
-          <h3>Containers</h3>
+          <h3>{t("palette.containers")}</h3>
           <button
             className="palette-item"
             draggable
@@ -129,16 +139,16 @@ export function Palette({ onAdd }: PaletteProps) {
               e.dataTransfer.effectAllowed = "move";
             }}
             onClick={() => onAdd("group")}
-            title={GROUP_ITEM.description}
+            title={lang === "zh" ? GROUP_ZH.description : GROUP_ITEM.description}
           >
-            Group
+            {t("palette.group")}
           </button>
         </div>
       )}
       {empty ? (
-        <p className="muted palette-hint">No nodes match “{query}”.</p>
+        <p className="muted palette-hint">{t("palette.noMatch", { query })}</p>
       ) : (
-        <p className="muted palette-hint">Drag onto the canvas, or click to add.</p>
+        <p className="muted palette-hint">{t("palette.hint")}</p>
       )}
     </aside>
   );

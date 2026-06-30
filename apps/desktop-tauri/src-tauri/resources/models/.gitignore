@@ -1,0 +1,7 @@
+# Auto-subject model weights are fetched at package time (see
+# scripts/fetch-subject-model.*), not committed to git. The directory itself is
+# tracked so `tauri-build` can resolve the `bundle.resources` mapping and the
+# release fetch step has a place to drop the weight.
+*.onnx
+!.gitignore
+!README.md

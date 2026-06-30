@@ -476,7 +476,12 @@ fn main() {
             // shipped via `bundle.resources` when running from a packaged
             // install.
             use tauri::Manager;
-            psd::set_resource_dir(app.path().resource_dir().ok());
+            let resource_dir = app.path().resource_dir().ok();
+            psd::set_resource_dir(resource_dir.clone());
+            // The auto-subject model is bundled under the same resource dir; the
+            // handle-free `Compute` segmenter needs it captured here to resolve
+            // the weight in a packaged install.
+            studio::set_subject_model_resource_dir(resource_dir);
             Ok(())
         })
         .invoke_handler(tauri::generate_handler![

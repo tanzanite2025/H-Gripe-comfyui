@@ -1005,6 +1005,16 @@ export const NODE_SPECS: Record<string, NodeSpec> = {
         hint: "rules = built-in CPU rule layer (always available); onnx_defect = opt-in ML detector for hands/text/logo, falls back to rules when its weight/deps are missing",
       },
       {
+        key: "device",
+        label: "Device",
+        control: "select",
+        options: ["auto", "cpu", "cuda"],
+        defaultValue: "auto",
+        inline: true,
+        hint: "compute device for the onnx_defect detector: auto (cuda if present else cpu) | cpu | cuda (degrades to cpu without an accelerator); ignored by the rules layer",
+        visibleWhen: { param: "engine", in: ["onnx_defect"] },
+      },
+      {
         key: "output_dir",
         label: "Output dir",
         control: "path",

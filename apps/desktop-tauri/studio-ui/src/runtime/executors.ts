@@ -411,6 +411,7 @@ export const defaultExecutors: ExecutorRegistry = {
       watchTargets: String(ctx.params.watch_targets ?? "").trim() || undefined,
       mode: String(ctx.params.mode ?? "balanced") || undefined,
       engine: String(ctx.params.engine ?? "rules").trim() || undefined,
+      device: String(ctx.params.device ?? "auto").trim() || undefined,
       outputDir: outputDir || undefined,
       outputName: String(ctx.params.output_name ?? "").trim() || undefined,
     });

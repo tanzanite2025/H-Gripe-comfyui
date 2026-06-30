@@ -593,6 +593,24 @@ describe("detailWatchdog", () => {
     expect(wr.skipped_targets).toEqual(["hands", "logo"]);
   });
 
+  it("threads the device param into the report (defaults to auto)", async () => {
+    // The mock bridge echoes the requested device back as device_requested, so
+    // the default (no param) lands as "auto" and an explicit choice is honoured.
+    const def = (await defaultExecutors.detailWatchdog(
+      ctx("detailWatchdog", { engine: "onnx_defect" }, { image: "/cand.png" }),
+    )) as Record<string, unknown>;
+    expect((def.watchdog_report as { device_requested?: string }).device_requested).toBe("auto");
+
+    const cpu = (await defaultExecutors.detailWatchdog(
+      ctx(
+        "detailWatchdog",
+        { engine: "onnx_defect", device: "cpu" },
+        { image: "/cand.png" },
+      ),
+    )) as Record<string, unknown>;
+    expect((cpu.watchdog_report as { device_requested?: string }).device_requested).toBe("cpu");
+  });
+
   it("requires a connected image input", async () => {
     await expect(
       defaultExecutors.detailWatchdog(ctx("detailWatchdog", {})),

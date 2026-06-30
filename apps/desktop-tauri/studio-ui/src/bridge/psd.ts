@@ -708,6 +708,10 @@ export interface WatchdogReport {
   detectors?: string[];
   /** File name of the weight the ML detector loaded, when one ran. */
   backend_model?: string | null;
+  /** Compute device the learned detector bound (`cpu`/`cuda`); null on rules. */
+  device?: string | null;
+  /** Compute device the node asked for (`auto`/`cpu`/`cuda`). */
+  device_requested?: string;
 }
 
 /** Result of the Detail Watchdog node (`detect_quality_issues`). */
@@ -733,6 +737,8 @@ export interface DetectQualityRequest {
   mode?: string;
   /** Detection engine: `rules` (default CPU layer) or an opt-in ML detector id. */
   engine?: string;
+  /** Compute device for the learned detector: `auto` (default) | `cpu` | `cuda`. */
+  device?: string;
   /** Directory for the written overlay PNG. */
   outputDir?: string;
   /** Base name for the written overlay PNG. */
@@ -829,6 +835,10 @@ export async function detectQualityIssues(
             : "ML detector unavailable in browser dev (mock)",
         detectors: [],
         backend_model: null,
+        // The rule layer runs no ML session, so no device is bound; echo the
+        // request so the inspector still reflects the chosen device.
+        device: null,
+        device_requested: req.device ?? "auto",
       },
     };
   }
@@ -839,6 +849,7 @@ export async function detectQualityIssues(
     watchTargets: req.watchTargets ?? null,
     mode: req.mode ?? null,
     engine: req.engine ?? null,
+    device: req.device ?? null,
     outputDir: req.outputDir ?? null,
     outputName: req.outputName ?? null,
   })) as DetectQualityResult;

@@ -205,5 +205,14 @@ interface NodeEditing {
    unified auto/manual + binding model end-to-end.
 3. **Video card:** `videoSource` + backend poster-frame extraction + its own
    (trim / frame-crop) editors, on a separate track.
-4. **Editor unification (optional, "all-in-one"):** fold crop / rotate / colour
-   tools into one editor entry per the same auto-base + manual-refine op model.
+4. **Manual editor unification ("all-in-one"):** the image card's manual lanes
+   collapse into a single **Edit** button that opens `MediaEditModal` — a unified
+   editor whose bar carries a tool-group switcher (**Mask** ⟷ **Crop**). It hosts
+   the existing `MaskEditModal` / `CropEditModal` (each unchanged, gaining only a
+   `headerExtra` slot for the switcher). Per **option A**, the source image is
+   never mutated and one *Apply* produces exactly one bound edit node of the
+   active group — mask → `subjectMask` seeded with `edit_paths`, crop → `crop`
+   seeded with `mode`/`aspect`/`margin_pct`/`crop_box` — then run-up-to-node, the
+   same pipeline as the auto entries. Existing `subjectMask` / `crop` nodes keep
+   their own node-bound editors (`openMaskEdit` / `openCropEdit`). Folding in more
+   tools (rotate / colour) is future work behind the same group switcher.

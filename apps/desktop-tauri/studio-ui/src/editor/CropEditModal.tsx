@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import { generateThumbnail } from "../bridge/tauri";
 import { useT } from "../i18n";
 
@@ -35,6 +35,8 @@ interface CropEditModalProps {
   initialMargin: number;
   onCommit: (commit: CropCommit) => void;
   onClose: () => void;
+  /** Optional bar content (e.g. the unified editor's tool-group switcher). */
+  headerExtra?: ReactNode;
 }
 
 type DragKind = "draw" | "move" | "nw" | "ne" | "sw" | "se";
@@ -71,6 +73,7 @@ export function CropEditModal({
   initialMargin,
   onCommit,
   onClose,
+  headerExtra,
 }: CropEditModalProps) {
   const t = useT();
   const [underlay, setUnderlay] = useState<string | null>(null);
@@ -230,6 +233,7 @@ export function CropEditModal({
           <span className="media-viewer-name" title={title}>
             {title} <span className="muted">· {t("crop.title")}</span>
           </span>
+          {headerExtra}
           <div className="media-viewer-actions">
             <button className="primary" onClick={handleApply} title={t("crop.applyTitle")}>
               {t("crop.apply")}

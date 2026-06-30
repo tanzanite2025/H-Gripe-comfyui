@@ -907,6 +907,20 @@ button:disabled { opacity: 0.6; cursor: default; }
 .media-viewer-actions button.primary { background: var(--accent); color: #00112e; border-color: var(--accent); }
 .preview-modal { width: min(1100px, 92vw); }
 
+/* Unified media editor: tool-group switcher in the bar (mask vs crop) */
+.media-edit-groups { display: inline-flex; gap: 4px; margin-left: 12px; }
+.media-edit-groups button {
+  background: var(--panel-2);
+  color: var(--text);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  padding: 4px 12px;
+  cursor: pointer;
+  font-size: 12px;
+}
+.media-edit-groups button:hover { background: #2a2f3d; }
+.media-edit-groups button.active { border-color: var(--accent); color: var(--accent); }
+
 /* Mask-Edit modal */
 .media-viewer.mask-edit { width: min(1280px, 94vw); height: 88vh; }
 .mask-edit-body {

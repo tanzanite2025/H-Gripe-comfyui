@@ -868,11 +868,49 @@ export interface CardEngineProbe {
   error?: string | null;
 }
 
+/** One CUDA device from the device probe (mirrors Rust `DeviceInfo`). */
+export interface DeviceInfo {
+  index: number;
+  name: string;
+  total_memory_mb: number;
+}
+
+/** `torch` presence + CUDA flag (mirrors Rust `TorchInfo`). */
+export interface TorchInfo {
+  installed: boolean;
+  version?: string | null;
+  cuda?: boolean | null;
+  reason?: string | null;
+}
+
+/** `onnxruntime` presence + execution providers (mirrors Rust `OnnxRuntimeInfo`). */
+export interface OnnxRuntimeInfo {
+  installed: boolean;
+  version?: string | null;
+  providers: string[];
+  reason?: string | null;
+}
+
+/**
+ * Machine compute capability (mirrors Rust `DeviceProbe`): which accelerator
+ * the opt-in GPU engines would actually run on. The per-card probes say *which*
+ * engines could run; this says *where*, so the inspector can warn that a GPU
+ * engine falls back to CPU on a box with no CUDA device.
+ */
+export interface DeviceProbe {
+  cuda_available: boolean;
+  devices: DeviceInfo[];
+  torch: TorchInfo;
+  onnxruntime: OnnxRuntimeInfo;
+}
+
 /** Cross-card engine capability report (mirrors Rust `EngineProbeReport`). */
 export interface EngineProbeReport {
   cards: CardEngineProbe[];
   /** Shared weight cache (`HGRIPE_MODEL_CACHE` or the bundled dir). */
   model_cache_dir?: string | null;
+  /** Machine compute capability, probed once; absent when it could not run. */
+  runtime?: DeviceProbe | null;
 }
 
 /**

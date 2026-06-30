@@ -76,6 +76,34 @@ export function DashboardPanel() {
           </>
         )}
       </div>
+      {engines?.runtime && (
+        <>
+          <h2>{t("dashboard.compute")}</h2>
+          <p className="hint">{t("dashboard.computeDesc")}</p>
+          <div className="cards">
+            <div className="card">
+              <div className="label">{t("dashboard.computeCuda")}</div>
+              <div
+                className={"value " + (engines.runtime.cuda_available ? "ok" : "missing")}
+              >
+                {engines.runtime.cuda_available
+                  ? engines.runtime.devices
+                      .map((d) => `${d.name} (${d.total_memory_mb} MB)`)
+                      .join(", ") || t("dashboard.computeCuda")
+                  : t("dashboard.computeCpuOnly")}
+              </div>
+            </div>
+            <div className="card">
+              <div className="label">{t("dashboard.computeProviders")}</div>
+              <div className="value">
+                {engines.runtime.onnxruntime.installed
+                  ? engines.runtime.onnxruntime.providers.join(", ")
+                  : t("dashboard.computeNotInstalled")}
+              </div>
+            </div>
+          </div>
+        </>
+      )}
       {engines && engines.cards.length > 0 && (
         <>
           <h2>{t("dashboard.engines")}</h2>

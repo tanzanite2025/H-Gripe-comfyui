@@ -80,6 +80,75 @@ def model_cache_dir() -> Path:
     return repo / "apps" / "desktop-tauri" / "src-tauri" / "resources" / "models"
 
 
+def device_probe() -> dict[str, Any]:
+    """Machine compute capability for the capability report.
+
+    The per-card ``--probe-engines`` calls already say *which engines could run*;
+    this says *what accelerator they would run on*, so the UI can explain that a
+    GPU engine will fall back to CPU on a box with no CUDA device. It is the same
+    for every card (machine-global), so the Tauri aggregator records it once.
+
+    Optional deps are only inspected lazily here (never imported at module load,
+    mirroring the backend seams): ``torch`` for CUDA device names / VRAM and
+    ``onnxruntime`` for its available execution providers. Every field degrades
+    to a safe default when a dep is absent, so a CPU-only box reports
+    ``cuda_available=false`` with empty ``devices`` rather than erroring.
+    """
+    report: dict[str, Any] = {
+        "cuda_available": False,
+        "devices": [],
+        "torch": {"installed": False},
+        "onnxruntime": {"installed": False, "providers": []},
+    }
+
+    try:
+        import torch
+    except Exception as err:  # noqa: BLE001 - a missing/broken optional dep is just "unavailable"
+        report["torch"] = {"installed": False, "reason": f"{type(err).__name__}: {err}"}
+    else:
+        cuda = bool(torch.cuda.is_available())
+        report["torch"] = {
+            "installed": True,
+            "version": str(torch.__version__),
+            "cuda": cuda,
+        }
+        if cuda:
+            report["cuda_available"] = True
+            for index in range(torch.cuda.device_count()):
+                props = torch.cuda.get_device_properties(index)
+                report["devices"].append(
+                    {
+                        "index": index,
+                        "name": str(props.name),
+                        "total_memory_mb": int(props.total_memory // (1024 * 1024)),
+                    }
+                )
+
+    try:
+        import onnxruntime
+    except Exception as err:  # noqa: BLE001 - same: report unavailable, never crash the probe
+        report["onnxruntime"] = {
+            "installed": False,
+            "providers": [],
+            "reason": f"{type(err).__name__}: {err}",
+        }
+    else:
+        providers = [str(p) for p in onnxruntime.get_available_providers()]
+        report["onnxruntime"] = {
+            "installed": True,
+            "version": str(onnxruntime.__version__),
+            "providers": providers,
+        }
+        # CUDA / TensorRT / ROCm providers all imply a usable accelerator.
+        if any(
+            any(tag in provider for tag in ("CUDA", "Tensorrt", "TensorRT", "ROCM"))
+            for provider in providers
+        ):
+            report["cuda_available"] = True
+
+    return report
+
+
 # ---- registry ------------------------------------------------------------
 
 # Imported lazily so this module stays torch-free at import time.

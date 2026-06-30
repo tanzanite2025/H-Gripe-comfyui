@@ -67,13 +67,20 @@ export function fromWorkflowGraph(graph: WorkflowGraph): { nodes: Node[]; edges:
     return node;
   });
 
-  const edges: Edge[] = graph.edges.map((e) => ({
-    id: e.id,
-    source: e.source,
-    sourceHandle: e.sourcePort || null,
-    target: e.target,
-    targetHandle: e.targetPort || null,
-  }));
+  const edges: Edge[] = graph.edges.map((e) => {
+    const edge: Edge = {
+      id: e.id,
+      source: e.source,
+      sourceHandle: e.sourcePort || null,
+      target: e.target,
+      targetHandle: e.targetPort || null,
+    };
+    // Binding edges (media source -> bound edit node) are rendered with the
+    // distinct `binding` style. The graph model carries no edge type, so we
+    // restore it from the `binding-` id prefix `addBoundEdit` stamps on them.
+    if (e.id.startsWith("binding-")) edge.type = "binding";
+    return edge;
+  });
 
   // Group frames must precede their children for React Flow.
   return { nodes: orderNodes(nodes), edges };

@@ -1,6 +1,13 @@
 import { describe, expect, it } from "vitest";
 import { GRAPH_VERSION, type WorkflowGraph } from "../graph/model";
-import { runGraph, topoLevels, validateGraph, wouldCreateCycle, type ExecutorRegistry } from "./dag";
+import {
+  ancestorSubgraph,
+  runGraph,
+  topoLevels,
+  validateGraph,
+  wouldCreateCycle,
+  type ExecutorRegistry,
+} from "./dag";
 import { defaultExecutors } from "./executors";
 
 function graph(partial: Pick<WorkflowGraph, "nodes" | "edges">): WorkflowGraph {
@@ -288,5 +295,35 @@ describe("conditional branch execution", () => {
     expect(ran).toEqual(["m"]);
     expect(statuses.get("m")).toBe("succeeded");
     expect(outputs.get("m")).toEqual({ image: "hi" });
+  });
+});
+
+describe("ancestorSubgraph", () => {
+  it("keeps only the target and its transitive inputs", () => {
+    const sub = ancestorSubgraph(chain, "generate-1");
+    expect(sub.nodes.map((n) => n.id).sort()).toEqual(["generate-1", "prompt-1"]);
+    expect(sub.edges.map((e) => e.id)).toEqual(["e1"]);
+  });
+
+  it("drops sibling branches that do not feed the target", () => {
+    const g = graph({
+      nodes: [
+        { id: "a", kind: "prompt", position: { x: 0, y: 0 }, params: {} },
+        { id: "b", kind: "prompt", position: { x: 0, y: 0 }, params: {} },
+        { id: "gen", kind: "generate", position: { x: 0, y: 0 }, params: {} },
+        { id: "other", kind: "preview", position: { x: 0, y: 0 }, params: {} },
+      ],
+      edges: [
+        { id: "e1", source: "a", sourcePort: "text", target: "gen", targetPort: "prompt" },
+        { id: "e2", source: "gen", sourcePort: "image", target: "other", targetPort: "image" },
+      ],
+    });
+    const sub = ancestorSubgraph(g, "gen");
+    expect(sub.nodes.map((n) => n.id).sort()).toEqual(["a", "gen"]);
+    expect(sub.edges.map((e) => e.id)).toEqual(["e1"]);
+  });
+
+  it("returns the graph unchanged when the target is absent", () => {
+    expect(ancestorSubgraph(chain, "missing")).toBe(chain);
   });
 });

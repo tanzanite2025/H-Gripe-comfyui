@@ -1,6 +1,6 @@
 // Generic file helpers: native file picker + backend thumbnail generation.
 
-import { tauriInvoke } from "./core";
+import { tauriInvoke, tauriListen, type UnlistenFn } from "./core";
 
 export interface ThumbnailRequest {
   path: string;
@@ -60,4 +60,34 @@ export async function pickFile(opts: PickFileOptions = {}): Promise<string | nul
     extensions: opts.extensions ?? null,
   });
   return (path as string | null) ?? null;
+}
+
+export interface FileDropEvent {
+  /** Absolute paths of the dropped files. */
+  paths: string[];
+  /** Drop point in physical (device) pixels relative to the webview. */
+  position: { x: number; y: number };
+}
+
+/**
+ * Subscribe to OS files dropped onto the webview. This is the only way to get
+ * absolute filesystem paths for a drag-and-drop (the DOM `drop` event yields a
+ * sandboxed `File` with no real path), so canvas file ingestion goes through
+ * here on desktop. Returns `null` outside Tauri (browser preview has no native
+ * drag-drop paths). Tauri emits physical-pixel coordinates; callers divide by
+ * `devicePixelRatio` before mapping to flow space.
+ */
+export async function listenFileDrop(
+  cb: (event: FileDropEvent) => void,
+): Promise<UnlistenFn | null> {
+  const listen = tauriListen();
+  if (!listen) return null;
+  return listen<{ paths?: string[]; position?: { x: number; y: number } }>(
+    "tauri://drag-drop",
+    (event) => {
+      const payload = event.payload;
+      if (!payload?.paths || payload.paths.length === 0) return;
+      cb({ paths: payload.paths, position: payload.position ?? { x: 0, y: 0 } });
+    },
+  );
 }

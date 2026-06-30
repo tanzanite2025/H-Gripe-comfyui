@@ -24,7 +24,7 @@ import {
 } from "./runhistory";
 import { useProjectScopedStore } from "./useProjectScopedStore";
 import type { WorkflowGraph } from "../graph/model";
-import { runGraph, type NodeRunInfo, type NodeStatus } from "../runtime/dag";
+import { ancestorSubgraph, runGraph, type NodeRunInfo, type NodeStatus } from "../runtime/dag";
 import { batchItems, defaultExecutors } from "../runtime/executors";
 import {
   cancelStudioRun,
@@ -112,6 +112,8 @@ export interface StudioRunController {
   clearHistory: () => void;
   /** Run the current graph once. */
   run: () => Promise<void>;
+  /** Run only `nodeId` and its transitive inputs, then surface its result. */
+  runUpToNode: (nodeId: string) => Promise<void>;
   /** Run the graph once per item of the (first) batch node. */
   runBatch: () => Promise<void>;
   /** Request cancellation of the active run (Rust backend or browser preview). */
@@ -483,6 +485,90 @@ export function useStudioRunController({
     setMessage,
   ]);
 
+  // Run only the target node + its transitive inputs (ancestor subgraph), so
+  // confirming an edit surfaces that node's result without executing unrelated
+  // downstream branches. Reuses the same executor + preview machinery as run().
+  const runUpToNode = useCallback(
+    async (nodeId: string) => {
+      if (inFlight.current) return;
+      inFlight.current = true;
+      setRunning(true);
+      setShowLog(true);
+      runFailures.current = [];
+      autoSnapshotBeforeRun();
+      const useRustBackend = isTauri();
+      const backend = useRustBackend ? "Rust backend" : "browser preview";
+      setMessage(useRustBackend ? "running to node (Rust backend)…" : "running to node (browser preview)…");
+      clearRunInfo();
+      const startedAt = Date.now();
+      runEntriesRef.current = [];
+      let outcome: RunOutcome = "succeeded";
+      pushLog("info", `▶ run up to ${nodeId} started (${backend})`);
+      try {
+        const full = toWorkflowGraph(nodes, edges);
+        const graph = ancestorSubgraph(full, nodeId);
+        await warnPsdChain(graph);
+        if (useRustBackend) {
+          const runId = beginRustRun();
+          try {
+            const result = await runStudioGraph(graph, applyStudioRunEvent, runId);
+            applyStudioRunResult(result);
+            applyPreviews(graph, { outputs: studioOutputsToMap(result) });
+            setMessage("done (Rust backend)");
+          } finally {
+            endRustRun(runId);
+          }
+        } else {
+          const token = { cancelled: false };
+          browserCancel.current = token;
+          try {
+            const result = await runGraph(
+              graph,
+              defaultExecutors,
+              observer,
+              undefined,
+              () => token.cancelled,
+            );
+            applyPreviews(graph, result);
+            setMessage("done (browser preview)");
+          } finally {
+            browserCancel.current = null;
+          }
+        }
+        pushLog("success", `✔ run up to ${nodeId} finished (${backend})`);
+      } catch (err) {
+        const message = String(err);
+        const cancelled = message.toLowerCase().includes("cancel");
+        outcome = cancelled ? "cancelled" : "failed";
+        setMessage(cancelled ? "cancelled" : `error: ${message}`);
+        pushLog(cancelled ? "warn" : "error", cancelled ? "run cancelled" : `run failed: ${message}`);
+      } finally {
+        setRunning(false);
+        inFlight.current = false;
+        browserCancel.current = null;
+        highlightFailures();
+        recordRunHistory("run", startedAt, outcome, backend);
+      }
+    },
+    [
+      nodes,
+      edges,
+      observer,
+      clearRunInfo,
+      applyPreviews,
+      applyStudioRunResult,
+      applyStudioRunEvent,
+      beginRustRun,
+      endRustRun,
+      pushLog,
+      autoSnapshotBeforeRun,
+      highlightFailures,
+      warnPsdChain,
+      recordRunHistory,
+      setMessage,
+    ],
+  );
+
   // Batch fan-out: run the graph once per item of the (first) batch node,
   // sweeping its `index`. In Tauri, the graph is copied with an index override
   // and sent to Rust; in browser preview, runGraph uses paramOverrides.
@@ -618,6 +704,7 @@ export function useStudioRunController({
     setShowHistory,
     clearHistory,
     run,
+    runUpToNode,
     runBatch,
     cancelRun,
     hasBatch: !!batchNode,

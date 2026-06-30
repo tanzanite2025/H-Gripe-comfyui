@@ -93,6 +93,82 @@ function LazyThumb({ path }: { path: string }) {
   );
 }
 
+// Generic image media card body: a thumbnail + `name · W×H` info row + an
+// action row whose buttons spawn a *bound* edit node (the source card is never
+// mutated). Fetches the thumbnail once and reuses its reported dimensions for
+// the info row. See docs/cards/generic-media-card.md.
+function ImageSourceCard({ id, path }: { id: string; path: string }) {
+  const t = useT();
+  const editing = useNodeEditing();
+  const ref = useRef<HTMLDivElement | null>(null);
+  const [src, setSrc] = useState<string | null>(null);
+  const [dims, setDims] = useState<{ w: number; h: number } | null>(null);
+
+  useEffect(() => {
+    setSrc(null);
+    setDims(null);
+    const el = ref.current;
+    if (!el) return;
+    let cancelled = false;
+    const io = new IntersectionObserver(
+      (entries) => {
+        if (!entries.some((e) => e.isIntersecting)) return;
+        io.disconnect();
+        generateThumbnail({ path, size: 256 })
+          .then((thumb) => {
+            if (cancelled) return;
+            setSrc(thumb.data_url || null);
+            if (thumb.data_url && thumb.width && thumb.height) {
+              setDims({ w: thumb.width, h: thumb.height });
+            }
+          })
+          .catch(() => {
+            /* leave placeholder on failure */
+          });
+      },
+      { threshold: 0.1 },
+    );
+    io.observe(el);
+    return () => {
+      cancelled = true;
+      io.disconnect();
+    };
+  }, [path]);
+
+  return (
+    <div ref={ref} className="media-card">
+      {src ? (
+        <img className="node-thumb" src={src} alt="preview" />
+      ) : (
+        <div className="node-thumb placeholder">{t("common.loadingShort")}</div>
+      )}
+      <div className="media-info">
+        <span className="media-name" title={path}>
+          {basename(path)}
+        </span>
+        {dims ? (
+          <span className="media-dims">
+            {dims.w}×{dims.h}
+          </span>
+        ) : null}
+      </div>
+      <div className="media-card-actions nodrag">
+        <button
+          type="button"
+          className="primary"
+          title={t("node.mediaEditMaskTitle")}
+          onClick={() => editing?.addBoundEdit?.(id, "subjectMask")}
+        >
+          {t("node.mediaEditMask")}
+        </button>
+        <button type="button" disabled title={t("node.mediaCropSoon")}>
+          {t("node.mediaCrop")}
+        </button>
+      </div>
+    </div>
+  );
+}
+
 // A single export-artifact row: label + basename, click to copy the full path.
 function PathRow({ label, path }: { label: string; path: string }) {
   const t = useT();
@@ -224,6 +300,10 @@ function HgripeNodeImpl({ id, data, selected }: NodeProps) {
               </button>
             </div>
           </div>
+        ) : null}
+
+        {spec.kind === "imageSource" && d.params.path ? (
+          <ImageSourceCard id={id} path={String(d.params.path)} />
         ) : null}
 
         {spec.kind === "psdTemplate" && templateWarn ? (

@@ -1,4 +1,4 @@
-import { useCallback, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
   ReactFlowProvider,
   useEdgesState,
@@ -44,12 +44,24 @@ import { useStudioFileController } from "./editor/useStudioFileController";
 import { loadPersistedGraph } from "./editor/persist";
 import { defaultParams } from "./graph/nodeSpecs";
 import { topoLevels, validateGraph } from "./runtime/dag";
-import { isTauri } from "./bridge/tauri";
+import { isTauri, listenFileDrop } from "./bridge/tauri";
 import { useT } from "./i18n";
 
 function makeNode(id: string, kind: string, x: number, y: number, params?: Record<string, unknown>): Node {
   const data: HgripeNodeData = { kind, params: { ...defaultParams(kind), ...params }, status: "idle" };
   return { id, type: "hgripe", position: { x, y }, data };
+}
+
+// Canvas file-drop ingestion: which dropped files become a media card. Images
+// land on the generic image card (`imageSource`); video is a separate card on
+// its own track (see docs/cards/generic-media-card.md), so it is recognised but
+// not yet ingested.
+const IMAGE_DROP_EXTS = new Set(["png", "jpg", "jpeg", "webp", "gif", "bmp", "tif", "tiff"]);
+const VIDEO_DROP_EXTS = new Set(["mp4", "mov", "mkv", "webm", "avi", "m4v"]);
+
+function dropExtension(path: string): string {
+  const dot = path.lastIndexOf(".");
+  return dot >= 0 ? path.slice(dot + 1).toLowerCase() : "";
 }
 
 // Minimal pre-wired workflow: Prompt -> Generate -> Preview.
@@ -85,7 +97,7 @@ function Studio({ onToggleLang }: { onToggleLang: () => void }) {
   // Which node (if any) has the shared Preview / Mask-Edit modal open.
   const [previewNodeId, setPreviewNodeId] = useState<string | null>(null);
   const [maskEditNodeId, setMaskEditNodeId] = useState<string | null>(null);
-  const { fitView } = useReactFlow();
+  const { fitView, screenToFlowPosition } = useReactFlow();
   const isDesktop = isTauri();
   const [message, setMessage] = useState<string>(
     isDesktop
@@ -101,6 +113,9 @@ function Studio({ onToggleLang }: { onToggleLang: () => void }) {
   const dragging = useRef(false);
   // Coalesce rapid edits to the same param (e.g. typing) into one undo step.
   const lastParamEdit = useRef<{ id: string; key: string; t: number } | null>(null);
+  // Node id queued for a "run up to this node" once the committing param edit
+  // has landed in `nodes` state (setNodes is async, so we defer to an effect).
+  const pendingRunNode = useRef<string | null>(null);
 
   const newNodeId = useCallback((kind: string) => `${kind}-${Date.now()}-${idSeq.current++}`, []);
 
@@ -219,6 +234,53 @@ function Studio({ onToggleLang }: { onToggleLang: () => void }) {
     },
     [setNodes, takeSnapshot, newNodeId],
   );
+
+  // Ingest OS files dropped onto the canvas: create a generic image card per
+  // image (path pre-filled at the drop point), cascading multiple drops. Video
+  // is recognised but routed to a status note until the video card lands. The
+  // Tauri drop position is physical px, so divide by the device pixel ratio
+  // before mapping to flow space.
+  const ingestDroppedFiles = useCallback(
+    (paths: string[], physical: { x: number; y: number }) => {
+      const dpr = window.devicePixelRatio || 1;
+      const origin = screenToFlowPosition({ x: physical.x / dpr, y: physical.y / dpr });
+      const images = paths.filter((p) => IMAGE_DROP_EXTS.has(dropExtension(p)));
+      const videos = paths.filter((p) => VIDEO_DROP_EXTS.has(dropExtension(p)));
+      if (images.length === 0) {
+        if (videos.length > 0) setMessage(t("canvas.dropVideoSoon"));
+        else setMessage(t("canvas.dropUnsupported"));
+        return;
+      }
+      takeSnapshot();
+      const created = images.map((path, i) => ({
+        ...makeNode(newNodeId("imageSource"), "imageSource", origin.x + i * 28, origin.y + i * 28, { path }),
+        selected: i === images.length - 1,
+      }));
+      setNodes((ns) => [...ns.map((n) => ({ ...n, selected: false })), ...created]);
+      setSelectedId(created[created.length - 1]?.id ?? null);
+      const note =
+        videos.length > 0
+          ? t("canvas.dropImagesAndVideo", { n: images.length })
+          : t("canvas.dropImages", { n: images.length });
+      setMessage(note);
+    },
+    [screenToFlowPosition, setNodes, takeSnapshot, newNodeId, setMessage, t],
+  );
+
+  // Subscribe to the Tauri webview file-drop (desktop only; browser preview has
+  // no native drag-drop paths). Re-subscribes if the handler identity changes.
+  useEffect(() => {
+    let unlisten: (() => void) | null = null;
+    let disposed = false;
+    void listenFileDrop((e) => ingestDroppedFiles(e.paths, e.position)).then((fn) => {
+      if (disposed) fn?.();
+      else unlisten = fn;
+    });
+    return () => {
+      disposed = true;
+      unlisten?.();
+    };
+  }, [ingestDroppedFiles]);
 
   // After a drag, (re)assign the node to whatever group frame now contains it,
   // or detach it when dropped outside every group. Groups themselves are never
@@ -340,6 +402,7 @@ function Studio({ onToggleLang }: { onToggleLang: () => void }) {
     setShowHistory,
     clearHistory,
     run,
+    runUpToNode,
     runBatch,
     cancelRun,
     hasBatch,
@@ -355,11 +418,22 @@ function Studio({ onToggleLang }: { onToggleLang: () => void }) {
     projectStoreDir,
   });
 
-  // Switch the rendering style of all edges (and future ones).
+  // Fire a queued "run up to node" after the committing param edit has been
+  // applied to `nodes` (so the partial run sees the fresh params). Cleared
+  // immediately so it triggers exactly once per request.
+  useEffect(() => {
+    const target = pendingRunNode.current;
+    if (!target) return;
+    pendingRunNode.current = null;
+    void runUpToNode(target);
+  }, [nodes, runUpToNode]);
+
+  // Switch the rendering style of all edges (and future ones). Binding edges
+  // keep their distinct style — the global edge style applies to data wires.
   const changeEdgeType = useCallback(
     (t: EdgeStyle) => {
       setEdgeType(t);
-      setEdges((es) => es.map((e) => ({ ...e, type: t })));
+      setEdges((es) => es.map((e) => (e.id.startsWith("binding-") ? e : { ...e, type: t })));
     },
     [setEdges],
   );
@@ -498,10 +572,40 @@ function Studio({ onToggleLang }: { onToggleLang: () => void }) {
   const openPreview = useCallback((nodeId: string) => setPreviewNodeId(nodeId), []);
   const openMaskEdit = useCallback((nodeId: string) => setMaskEditNodeId(nodeId), []);
 
+  // Spawn a bound edit node from a media source card: place it to the right,
+  // wire a `binding` edge (source.image -> edit.image), select it, and open the
+  // matching editor. The source card is never mutated; the new node becomes the
+  // output the rest of the workflow consumes. See docs/cards/generic-media-card.md.
+  const addBoundEdit = useCallback(
+    (sourceId: string, editKind: string) => {
+      const source = nodes.find((n) => n.id === sourceId);
+      if (!source) return;
+      takeSnapshot();
+      const editId = newNodeId(editKind);
+      const pos = { x: source.position.x + 320, y: source.position.y };
+      setNodes((ns) =>
+        ns.map((n) => ({ ...n, selected: false })).concat({ ...makeNode(editId, editKind, pos.x, pos.y), selected: true }),
+      );
+      setEdges((es) =>
+        es.concat({
+          id: `binding-${editId}`,
+          source: sourceId,
+          sourceHandle: "image",
+          target: editId,
+          targetHandle: "image",
+          type: "binding",
+        }),
+      );
+      setSelectedId(editId);
+      if (editKind === "subjectMask") setMaskEditNodeId(editId);
+    },
+    [nodes, setNodes, setEdges, takeSnapshot, newNodeId],
+  );
+
   // Stable context value so memoized node cards can edit their own params.
   const editing = useMemo(
-    () => ({ onParamChange, openPreview, openMaskEdit }),
-    [onParamChange, openPreview, openMaskEdit],
+    () => ({ onParamChange, openPreview, openMaskEdit, addBoundEdit, runUpToNode }),
+    [onParamChange, openPreview, openMaskEdit, addBoundEdit, runUpToNode],
   );
 
   const previewNode = useMemo(
@@ -667,7 +771,12 @@ function Studio({ onToggleLang }: { onToggleLang: () => void }) {
           imagePath={connectedImagePath(maskEditNode.id)}
           initial={normalizeEditPaths((maskEditNode.data as HgripeNodeData).params.edit_paths)}
           wandTolerance={Number((maskEditNode.data as HgripeNodeData).params.wand_tolerance ?? 24)}
-          onCommit={(edits) => onParamChange(maskEditNode.id, "edit_paths", edits)}
+          onCommit={(edits) => {
+            // Commit the edit, then run up to this node so the result shows
+            // immediately (the effect fires once `nodes` reflects the commit).
+            pendingRunNode.current = maskEditNode.id;
+            onParamChange(maskEditNode.id, "edit_paths", edits);
+          }}
           onClose={() => setMaskEditNodeId(null)}
         />
       )}

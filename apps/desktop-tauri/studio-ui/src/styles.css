@@ -864,6 +864,33 @@ button:disabled { opacity: 0.6; cursor: default; }
 .subject-mask-actions button:hover { background: #2a2f3d; }
 .subject-mask-actions button.primary { background: var(--accent); color: #00112e; border-color: var(--accent); }
 
+/* generic image media card (imageSource): thumbnail + info + bound-edit actions */
+.media-card { display: flex; flex-direction: column; gap: 6px; }
+.media-info {
+  display: flex;
+  justify-content: space-between;
+  align-items: baseline;
+  gap: 8px;
+  font-size: 11px;
+  color: var(--muted);
+}
+.media-name { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.media-dims { flex: none; font-variant-numeric: tabular-nums; }
+.media-card-actions { display: flex; gap: 4px; }
+.media-card-actions button {
+  flex: 1;
+  font-size: 11px;
+  padding: 4px 6px;
+  background: var(--panel-2);
+  color: var(--text);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  cursor: pointer;
+}
+.media-card-actions button:hover:not(:disabled) { background: #2a2f3d; }
+.media-card-actions button.primary { background: var(--accent); color: #00112e; border-color: var(--accent); }
+.media-card-actions button:disabled { color: var(--muted); cursor: default; opacity: 0.5; }
+
 /* shared Preview modal (built on the media-viewer shell) */
 .media-viewer-actions button {
   background: var(--panel-2);

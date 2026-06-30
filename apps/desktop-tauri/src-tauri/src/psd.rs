@@ -1017,6 +1017,14 @@ pub(crate) struct WatchdogReport {
     /// File name of the weight the ML detector loaded, when one ran.
     #[serde(default)]
     pub(crate) backend_model: Option<String>,
+    /// Compute device the learned detector actually bound (`cpu`/`cuda`); `null`
+    /// on the rule-only path, which runs no ML session.
+    #[serde(default)]
+    pub(crate) device: Option<String>,
+    /// Compute device the node asked for (`auto`/`cpu`/`cuda`); an explicit
+    /// `cuda` degrades to `cpu` when no accelerator provider is present.
+    #[serde(default)]
+    pub(crate) device_requested: String,
 }
 
 /// Result of the **Detail Watchdog** node: the (unchanged, Phase 1) candidate
@@ -1053,6 +1061,7 @@ pub(crate) fn detect_quality_issues(
     watch_targets: Option<String>,
     mode: Option<String>,
     engine: Option<String>,
+    device: Option<String>,
     output_dir: Option<String>,
     output_name: Option<String>,
 ) -> Result<DetectQualityResult, String> {
@@ -1080,6 +1089,8 @@ pub(crate) fn detect_quality_issues(
         .arg(watch_targets.as_deref().unwrap_or(""))
         .arg("--engine")
         .arg(engine.as_deref().unwrap_or("rules"))
+        .arg("--device")
+        .arg(device.as_deref().unwrap_or("auto"))
         .arg("--visual-context")
         .arg(visual_context.as_deref().unwrap_or(""))
         .arg("--target-bounds")

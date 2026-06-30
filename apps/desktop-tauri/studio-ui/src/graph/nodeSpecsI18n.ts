@@ -305,6 +305,10 @@ export const NODE_ZH: Record<string, NodeSpecZh> = {
         label: "引擎",
         hint: "rules = 内置 CPU 规则层（始终可用）；onnx_defect = 可选 ML 检测器，覆盖 手/文字/logo，权重/依赖缺失时回落 rules",
       },
+      device: {
+        label: "设备",
+        hint: "onnx_defect 检测器的计算设备：auto（有 CUDA 用 CUDA，否则 CPU）| cpu | cuda（无加速器时回落 CPU）；rules 层忽略此项",
+      },
       output_dir: { label: "输出目录", hint: OUTPUT_DIR_HINT },
       output_name: { label: "输出名", hint: "问题叠加 PNG 的基础名（空 = <image>_issues）" },
     },

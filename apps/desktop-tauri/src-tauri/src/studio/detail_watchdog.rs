@@ -66,6 +66,9 @@ pub(super) fn execute_studio_detail_watchdog(
         // `engine` selects the opt-in ML detector (default `rules`); the bridge
         // falls back to the always-on rule layer when it is unavailable.
         optional(studio_value_to_string(node.params.get("engine"))),
+        // `device` selects the ONNX execution provider for the learned detector
+        // (default `auto`); ignored by the always-on CPU rule layer.
+        optional(studio_value_to_string(node.params.get("device"))),
         Some(output_dir),
         optional(studio_value_to_string(node.params.get("output_name"))),
     )?;
@@ -163,13 +166,19 @@ mod tests {
             "engine_requested": "onnx_defect",
             "engine_fallback_reason": null,
             "detectors": ["onnx_defect"],
-            "backend_model": "watchdog_defect.onnx"
+            "backend_model": "watchdog_defect.onnx",
+            "device": "cpu",
+            "device_requested": "auto"
         }))
         .unwrap();
         assert_eq!(ran.engine, "onnx_defect");
         assert!(ran.engine_fallback_reason.is_none());
         assert_eq!(ran.detectors, vec!["onnx_defect".to_string()]);
         assert_eq!(ran.backend_model.as_deref(), Some("watchdog_defect.onnx"));
+        // device telemetry: `auto` was requested, the session bound the CPU
+        // provider (the common no-accelerator box), reported truthfully.
+        assert_eq!(ran.device.as_deref(), Some("cpu"));
+        assert_eq!(ran.device_requested, "auto");
     }
 
     #[test]

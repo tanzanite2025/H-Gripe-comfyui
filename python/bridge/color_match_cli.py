@@ -336,6 +336,9 @@ def _apply_color_transfer(
 # The always-available CPU heuristic is the default "engine"; learned matchers
 # register in ``color_backends`` and are selected by ``--engine``.
 _CPU_ENGINE = "cpu"
+# Default compute-device selection for the learned matcher (mirrors
+# sr_backends.DEVICE_AUTO; kept local so the module stays import-light).
+_DEVICE_AUTO = "auto"
 
 
 def _run_engine(
@@ -343,6 +346,7 @@ def _run_engine(
     rgb: "np.ndarray",
     alpha: "np.ndarray",
     background_rgb: "np.ndarray",
+    device_requested: str,
 ) -> tuple[dict[str, Any], "np.ndarray | None"]:
     """Run the opt-in learned matcher for ``engine_requested`` (or the CPU path).
 
@@ -355,6 +359,7 @@ def _run_engine(
         "engine": _CPU_ENGINE,
         "fallback_reason": None,
         "backend_model": None,
+        "device": None,
     }
 
     from color_backends import MatcherUnavailable, resolve
@@ -370,7 +375,9 @@ def _run_engine(
         return state, None
 
     try:
-        harmonized = backend.match(rgb, alpha, background_rgb)
+        harmonized, state["device"] = backend.match(
+            rgb, alpha, background_rgb, device=device_requested
+        )
     except MatcherUnavailable as err:
         state["fallback_reason"] = err.reason
         return state, None
@@ -460,20 +467,30 @@ def match(args: argparse.Namespace) -> dict[str, Any]:
     # always-on heuristic baseline; a learned engine is opt-in and degrades back
     # to the heuristic (recording why) when its deps / weights are missing.
     engine_requested = (getattr(args, "engine", _CPU_ENGINE) or _CPU_ENGINE).strip().lower() or _CPU_ENGINE
+    # ``device`` selects the ONNX execution provider for the learned matcher (the
+    # CPU heuristic always runs on CPU). ``device`` in the report is the one the
+    # session actually bound, which can differ from the request (an explicit
+    # ``cuda`` degrades to ``cpu`` when ORT exposes no accelerator).
+    device_requested = (getattr(args, "device", None) or _DEVICE_AUTO).strip().lower() or _DEVICE_AUTO
     report["engine"] = _CPU_ENGINE
     report["engine_requested"] = engine_requested
     report["engine_fallback_reason"] = None
     report["backend_model"] = None
+    report["device"] = None
+    report["device_requested"] = device_requested
 
     pixels_change = mode != "prompt_only" and strength > 0.0
 
     engine_rgb: "np.ndarray | None" = None
     if engine_requested != _CPU_ENGINE:
         if pixels_change and background_rgb is not None:
-            engine_state, engine_rgb = _run_engine(engine_requested, rgb, alpha, background_rgb)
+            engine_state, engine_rgb = _run_engine(
+                engine_requested, rgb, alpha, background_rgb, device_requested
+            )
             report["engine"] = engine_state["engine"]
             report["engine_fallback_reason"] = engine_state["fallback_reason"]
             report["backend_model"] = engine_state["backend_model"]
+            report["device"] = engine_state["device"]
         else:
             # A learned matcher was requested but there is nothing for it to
             # harmonise against; keep the passthrough path and say why.
@@ -618,6 +635,15 @@ def build_parser() -> argparse.ArgumentParser:
         type=int,
         default=_DEFAULT_MAX_DECODE_PIXELS,
         help="refuse inputs larger than this many pixels before decoding (0 disables)",
+    )
+    parser.add_argument(
+        "--device",
+        default=_DEVICE_AUTO,
+        help=(
+            "compute device for the learned matcher: auto (default, cuda provider "
+            "if present else cpu) | cpu | cuda (degrades to cpu without an "
+            "accelerator provider)"
+        ),
     )
     parser.add_argument(
         "--engine",

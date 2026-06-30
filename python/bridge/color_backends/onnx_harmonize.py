@@ -39,7 +39,7 @@ import os
 from pathlib import Path
 from typing import Any
 
-from sr_backends import onnx_providers
+from sr_backends import onnx_providers, provider_device
 
 from . import MatcherUnavailable, model_cache_dir
 
@@ -74,12 +74,18 @@ class OnnxHarmonizeBackend:
             )
         return True, "ready"
 
-    def match(self, rgb: Any, alpha: Any, background_rgb: Any) -> Any:
+    def match(
+        self, rgb: Any, alpha: Any, background_rgb: Any, device: str | None = None
+    ) -> tuple[Any, str]:
         """Harmonise ``rgb`` toward ``background_rgb`` over the ``alpha`` matte.
 
-        Raises :class:`MatcherUnavailable` if deps / weights vanished since the
-        probe. The subject is composited over the resized background so the
-        network sees context; only the subject geometry is returned.
+        ``device`` selects the ONNX execution provider (``auto`` by default —
+        see :func:`onnx_providers`). Returns ``(image, device_used)`` so the
+        caller reports the device the session actually bound (an explicit
+        ``cuda`` degrades to ``cpu`` when ORT exposes no accelerator). The
+        subject is composited over the resized background so the network sees
+        context; only the subject geometry is returned. Raises
+        :class:`MatcherUnavailable` if deps / weights vanished since the probe.
         """
         ok, reason = self.available()
         if not ok:
@@ -90,8 +96,10 @@ class OnnxHarmonizeBackend:
 
         weight = self.weight_path()
         session = ort.InferenceSession(
-            str(weight), providers=onnx_providers(ort.get_available_providers())
+            str(weight),
+            providers=onnx_providers(ort.get_available_providers(), device=device),
         )
+        device_used = provider_device(session.get_providers())
         inputs = session.get_inputs()
         image_spec = _pick_input(inputs, "image", "input")
         mask_spec = _pick_input(inputs, "mask")
@@ -116,7 +124,7 @@ class OnnxHarmonizeBackend:
         # NCHW float -> HWC float in 0..1, resized back to the source geometry.
         out_hwc = np.transpose(np.asarray(out)[0], (1, 2, 0))
         harmonized = _resize_hwc(out_hwc, src_w, src_h, np)
-        return np.clip(np.rint(harmonized * 255.0), 0, 255).astype(np.uint8)
+        return np.clip(np.rint(harmonized * 255.0), 0, 255).astype(np.uint8), device_used
 
 
 def _pick_input(inputs: list[Any], *keys: str) -> Any | None:

@@ -74,15 +74,21 @@ class ColorMatchBackend(Protocol):
         """Resolved path of the (non-bundled) weight this matcher would load."""
         ...
 
-    def match(self, rgb: Any, alpha: Any, background_rgb: Any) -> Any:
+    def match(
+        self, rgb: Any, alpha: Any, background_rgb: Any, device: str | None = None
+    ) -> tuple[Any, str]:
         """Harmonise a subject toward a background reference.
 
         ``rgb`` is the subject as an ``(H, W, 3)`` uint8 array, ``alpha`` its
         ``(H, W)`` float matte in 0..1, and ``background_rgb`` the reference as
-        an ``(H', W', 3)`` uint8 array. Returns an ``(H, W, 3)`` uint8 array the
-        same size as ``rgb`` with the subject's light/colour nudged toward the
-        background. Raises :class:`MatcherUnavailable` if deps / weights vanished
-        between the probe and the call.
+        an ``(H', W', 3)`` uint8 array. ``device`` selects the ONNX execution
+        provider (``auto`` by default). Returns ``(image, device_used)`` where
+        ``image`` is an ``(H, W, 3)`` uint8 array the same size as ``rgb`` with
+        the subject's light/colour nudged toward the background, and
+        ``device_used`` is the ``cpu`` / ``cuda`` the session actually bound (an
+        explicit ``cuda`` degrades to ``cpu`` without an accelerator provider).
+        Raises :class:`MatcherUnavailable` if deps / weights vanished between the
+        probe and the call.
         """
         ...
 

@@ -21,19 +21,35 @@ into two stateless subcommands the orchestrator drives around the broker call:
   (a secondary edge fusion at the patch seam), leaving the padding context
   untouched, and write the final fixed image. Emits a ``repaint_report``.
 
-Only the vendored ``Pillow`` + ``numpy`` are used (no OpenCV, no ML). On
-failure the process exits non-zero with a single message on stderr.
+Only the vendored ``Pillow`` + ``numpy`` are used (no OpenCV, no ML). Both
+subcommands **input-harden** the candidate decode: CMYK (via its embedded ICC
+profile when present), 16-bit / float, palette and grayscale sources are
+normalised to an 8-bit RGBA working space, EXIF orientation is applied, and an
+input larger than ``--max-decode-pixels`` is refused before it is decoded. The
+``composite`` step is **alpha-isolated** (Method A): only the RGB channels of
+the repainted patch are blended in, the candidate's original alpha is preserved
+so a cut-out subject keeps its matte and gains no seam halo. On failure the
+process exits non-zero with a single message on stderr.
 """
 
 from __future__ import annotations
 
 import argparse
+import io
 import json
 import sys
 from pathlib import Path
 from typing import Any
 
 import numpy as np
+
+# Refuse to decode an input larger than this many pixels (decompression-bomb
+# guard). 0 disables the check.
+_DEFAULT_MAX_DECODE_PIXELS = 96_000_000
+_ALPHA_MODES = {"RGBA", "LA", "La", "PA"}
+_HIGHBIT_MODES = {"I", "I;16", "I;16B", "I;16L", "I;16N", "F"}
+# EXIF tag holding the orientation (1 = normal, 2..8 = a flip/rotation).
+_EXIF_ORIENTATION_TAG = 0x0112
 
 # Quality-report ``suggested_action`` values that a localized repaint can act
 # on. ``image_enhance`` (global low-resolution) and ``color_match`` (global
@@ -48,11 +64,104 @@ def _safe_stem(image_path: str) -> str:
     return cleaned or "image"
 
 
-def _load_rgba(path: str) -> "np.ndarray":
-    """Load an image as an (H,W,4) uint8 RGBA array."""
+def _cmyk_to_rgb(img: Any) -> Any:
+    """Convert CMYK to sRGB, honouring an embedded ICC profile when present.
+
+    A bare ``convert("RGB")`` uses a naive transform that visibly shifts colour;
+    with an embedded CMYK profile we run a real profile-to-profile transform
+    into sRGB instead, falling back to the naive path on any error.
+    """
+    icc = img.info.get("icc_profile")
+    if icc:
+        try:
+            from PIL import ImageCms
+
+            src = ImageCms.ImageCmsProfile(io.BytesIO(icc))
+            dst = ImageCms.createProfile("sRGB")
+            return ImageCms.profileToProfile(img, src, dst, outputMode="RGB")
+        except Exception:  # noqa: BLE001 - fall back to the naive conversion
+            pass
+    return img.convert("RGB")
+
+
+def _highbit_to_rgb(img: Any) -> Any:
+    """Normalise a 16-bit / 32-bit / float image down to 8-bit RGB.
+
+    ``convert("RGB")`` on an ``I;16`` image clips to 0..255 and destroys the
+    tonal range, so we scale the actual data range into 8 bits first.
+    """
+    arr = np.asarray(img).astype(np.float64)
+    if arr.size == 0:
+        return img.convert("RGB")
+    peak = float(arr.max())
+    if peak > 255.0:
+        arr = arr * (255.0 / peak)
+    arr = np.clip(arr, 0.0, 255.0).astype(np.uint8)
     from PIL import Image
 
-    return np.asarray(Image.open(path).convert("RGBA"), dtype=np.uint8)
+    return Image.fromarray(arr, mode="L").convert("RGB")
+
+
+def _apply_exif_orientation(img: Any) -> tuple[Any, bool]:
+    """Apply EXIF orientation, returning ``(image, transposed)``.
+
+    Pillow 12's ``ImageOps.exif_transpose`` returns a *new* object even when
+    there is no orientation to apply, so ``fixed is not img`` over-reports a
+    transpose on every plain image. We read the orientation tag directly and
+    only transpose for a real, non-identity orientation.
+    """
+    from PIL import ImageOps
+
+    try:
+        orientation = img.getexif().get(_EXIF_ORIENTATION_TAG, 1)
+    except Exception:  # noqa: BLE001 - a broken EXIF block must not abort repaint
+        orientation = 1
+    if orientation in (None, 0, 1):
+        return img, False
+    try:
+        fixed = ImageOps.exif_transpose(img)
+    except Exception:  # noqa: BLE001 - fall back to the un-rotated image
+        return img, False
+    return fixed, fixed is not img
+
+
+def _load_rgba(
+    path: str, max_decode_pixels: int = _DEFAULT_MAX_DECODE_PIXELS
+) -> tuple["np.ndarray", str, bool]:
+    """Load an image as (H,W,4 uint8 RGBA, source_mode, exif_transposed).
+
+    Refuses oversized inputs before decoding, applies EXIF orientation, and maps
+    CMYK / high-bit / palette / grayscale sources into an 8-bit RGBA working
+    space so crops and the paste-back composite carry honest colour. The alpha
+    channel is taken from the source when present, else a fully-opaque plane.
+    """
+    from PIL import Image
+
+    img = Image.open(path)
+    width, height = img.size
+    if max_decode_pixels > 0 and width * height > max_decode_pixels:
+        raise ValueError(
+            f"input image too large to decode safely: {width}x{height} "
+            f"({width * height} px > max {max_decode_pixels})"
+        )
+    img.load()
+
+    img, transposed = _apply_exif_orientation(img)
+
+    source_mode = img.mode
+    had_alpha = source_mode in _ALPHA_MODES or (
+        source_mode == "P" and "transparency" in img.info
+    )
+
+    if had_alpha:
+        rgba_img = img.convert("RGBA")
+    elif source_mode == "CMYK":
+        rgba_img = _cmyk_to_rgb(img).convert("RGBA")
+    elif source_mode in _HIGHBIT_MODES:
+        rgba_img = _highbit_to_rgb(img).convert("RGBA")
+    else:
+        rgba_img = img.convert("RGBA")
+    return np.asarray(rgba_img, dtype=np.uint8), source_mode, transposed
 
 
 def _load_json_arg(raw: str | None, label: str) -> Any:
@@ -153,8 +262,9 @@ def prepare(args: argparse.Namespace) -> dict[str, Any]:
     padding = int(max(0, args.padding))
     max_regions = int(max(1, args.max_regions))
     invert_mask = bool(args.invert_mask)
+    max_decode_pixels = int(max(0, getattr(args, "max_decode_pixels", _DEFAULT_MAX_DECODE_PIXELS)))
 
-    rgba = _load_rgba(image_path)
+    rgba, source_mode, exif_transposed = _load_rgba(image_path, max_decode_pixels)
     height, width = rgba.shape[:2]
 
     selected, skipped = _select_issues(issues, actions, min_confidence)
@@ -215,6 +325,9 @@ def prepare(args: argparse.Namespace) -> dict[str, Any]:
         "image_size": [width, height],
         "selected_count": len(regions),
         "mask_edit_is_transparent": not invert_mask,
+        "source_mode": source_mode,
+        "exif_transposed": exif_transposed,
+        "max_decode_pixels": max_decode_pixels,
     }
 
 
@@ -238,7 +351,9 @@ def composite(args: argparse.Namespace) -> dict[str, Any]:
 
     from PIL import Image
 
-    base = _load_rgba(image_path).astype(np.float32)
+    max_decode_pixels = int(max(0, getattr(args, "max_decode_pixels", _DEFAULT_MAX_DECODE_PIXELS)))
+    base_u8, source_mode, exif_transposed = _load_rgba(image_path, max_decode_pixels)
+    base = base_u8.astype(np.float32)
     height, width = base.shape[:2]
 
     region_results: list[dict[str, Any]] = []
@@ -269,14 +384,21 @@ def composite(args: argparse.Namespace) -> dict[str, Any]:
         crop_w, crop_h = cx2 - cx1, cy2 - cy1
         patch = Image.open(str(patch_path)).convert("RGBA")
         if patch.size != (crop_w, crop_h):
-            patch = patch.resize((crop_w, crop_h), Image.LANCZOS)
+            # Shrinking a provider crop: a box (area-average) filter avoids the
+            # ringing/aliasing Lanczos introduces when downsampling; only grow
+            # with Lanczos.
+            shrinking = crop_w < patch.size[0] or crop_h < patch.size[1]
+            resample = Image.BOX if shrinking else Image.LANCZOS
+            patch = patch.resize((crop_w, crop_h), resample)
         patch_arr = np.asarray(patch, dtype=np.float32)
 
         feather = float(args.feather_px) if args.feather_px > 0 else _auto_feather([int(v) for v in inner])
         alpha = _feather_mask((crop_h, crop_w), [int(v) for v in inner], feather)[..., None]
 
+        # Alpha isolation (Method A): blend only RGB; keep the candidate's own
+        # alpha so a cut-out subject's matte is never softened or haloed.
         window = base[cy1:cy2, cx1:cx2]
-        base[cy1:cy2, cx1:cx2] = window * (1.0 - alpha) + patch_arr * alpha
+        window[..., :3] = window[..., :3] * (1.0 - alpha) + patch_arr[..., :3] * alpha
         repainted_count += 1
         result["status"] = "repainted"
         result["feather_px"] = round(feather, 2)
@@ -305,6 +427,9 @@ def composite(args: argparse.Namespace) -> dict[str, Any]:
             "repainted_count": repainted_count,
             "requested_count": len(regions),
             "image_size": [width, height],
+            "source_mode": source_mode,
+            "exif_transposed": exif_transposed,
+            "max_decode_pixels": max_decode_pixels,
         },
     }
 
@@ -356,6 +481,13 @@ def build_parser() -> argparse.ArgumentParser:
         help="mark the edit area opaque/white instead of transparent",
     )
     prep.add_argument(
+        "--max-decode-pixels",
+        dest="max_decode_pixels",
+        type=int,
+        default=_DEFAULT_MAX_DECODE_PIXELS,
+        help="reject input images larger than this many pixels (0 disables)",
+    )
+    prep.add_argument(
         "--output-dir",
         dest="output_dir",
         default="",
@@ -386,6 +518,13 @@ def build_parser() -> argparse.ArgumentParser:
         type=float,
         default=0.0,
         help="seam feather radius (0 = auto from the issue size)",
+    )
+    comp.add_argument(
+        "--max-decode-pixels",
+        dest="max_decode_pixels",
+        type=int,
+        default=_DEFAULT_MAX_DECODE_PIXELS,
+        help="reject input images larger than this many pixels (0 disables)",
     )
     comp.add_argument(
         "--output-dir",

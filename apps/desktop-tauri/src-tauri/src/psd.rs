@@ -1086,6 +1086,15 @@ pub(crate) struct PrepareRepaintResult {
     /// convention); `false` when inverted (opaque/white = edit).
     #[serde(default)]
     pub(crate) mask_edit_is_transparent: bool,
+    /// Pillow mode of the decoded candidate before normalising to 8-bit RGBA.
+    #[serde(default)]
+    pub(crate) source_mode: String,
+    /// Whether an EXIF orientation tag was applied to upright the candidate.
+    #[serde(default)]
+    pub(crate) exif_transposed: bool,
+    /// Decode-pixel ceiling enforced before decoding (0 disables the guard).
+    #[serde(default)]
+    pub(crate) max_decode_pixels: i64,
 }
 
 /// Result of the **Detail Repaint** composite step: the fixed image (issue

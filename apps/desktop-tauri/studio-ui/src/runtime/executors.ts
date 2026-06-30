@@ -380,6 +380,7 @@ export const defaultExecutors: ExecutorRegistry = {
       denoiseStrength: Number(ctx.params.denoise_strength ?? 0.3),
       textureStrength: Number(ctx.params.texture_strength ?? 0.25),
       preserveTextLogo: Boolean(ctx.params.preserve_text_logo ?? true),
+      engine: String(ctx.params.engine ?? "cpu") || undefined,
       outputDir: outputDir || undefined,
       outputName: String(ctx.params.output_name ?? "").trim() || undefined,
     });

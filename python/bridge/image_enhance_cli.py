@@ -8,12 +8,18 @@ dropped into a large print PSD it goes soft, loses texture and is unusable at
 300 DPI. This node resizes the subject up to the PSD placeholder's pixel target
 and restores high-frequency detail.
 
-Phase 1 is deliberately CPU-only and dependency-light -- only the vendored
-``Pillow`` + ``numpy`` (no GPU, no SupIR / CCSR / RealESRGAN). The upscale is a
-Lanczos resample, detail is an unsharp mask, and denoise is an *edge-preserving*
-median blend (a plain Gaussian blur would smear the very edges we are about to
-sharpen). The GPU super-resolution backends are left as a future ``profile_ref``
-mode behind the same node contract.
+The default ``cpu`` engine is dependency-light -- only the vendored ``Pillow`` +
+``numpy`` (no GPU). The upscale is a Lanczos resample, detail is an unsharp
+mask, and denoise is an *edge-preserving* median blend (a plain Gaussian blur
+would smear the very edges we are about to sharpen).
+
+GPU super-resolution backends slot in behind the ``--engine`` seam
+(``python/bridge/sr_backends/``): ``--engine realesrgan`` runs Real-ESRGAN when
+its optional deps (``torch`` + ``realesrgan``) and weight are present, otherwise
+it **falls back to the CPU path** and records why in the report. ``cpu`` stays
+the default and the always-available fallback, so the node never hard-fails on a
+box without the model. ``--probe-engines`` prints which engines are usable so
+the UI can grey out unavailable ones.
 
 The enhancement is **alpha-aware and colour-space aware** so the node behaves on
 real production assets, not just clean 8-bit RGB PNGs:
@@ -74,6 +80,10 @@ _PRESETS: dict[str, dict[str, float]] = {
 }
 
 _VALID = {"conservative", "texture_rebuild", "print_ready", "custom"}
+
+# Engine ids are validated lazily against the sr_backends registry; "cpu" is the
+# always-available default and fallback.
+_CPU_ENGINE = "cpu"
 
 # Default ceiling on *input* pixels (~96 MP). The decode is refused above this
 # so a decompression-bomb workflow asset cannot exhaust memory before we even
@@ -333,13 +343,58 @@ def enhance(args: argparse.Namespace) -> dict[str, Any]:
     out_h = max(1, int(round(src_h * scale)))
     downscaling = out_w < src_w or out_h < src_h
 
-    # Pipeline (colour channels only): denoise the small image, resample, then
-    # sharpen so restored detail lands on the final grid. When downscaling we
-    # skip the unsharp pass -- it would only amplify resampling artefacts.
-    rgb = _denoise(rgb, denoise_strength)
-    rgb = _resample(rgb, out_w, out_h, downscaling)
-    applied_texture = 0.0 if downscaling else texture_strength
-    rgb = _sharpen(rgb, applied_texture)
+    # Resolve the requested upscale engine. A non-cpu engine only applies to a
+    # genuine upscale; downscales always use the CPU box filter. Any
+    # unavailability (missing deps / weight, downscale, unknown name, runtime
+    # error) falls back to the CPU path and is recorded in the report.
+    engine_requested = (args.engine or _CPU_ENGINE).strip().lower() or _CPU_ENGINE
+    engine_used = _CPU_ENGINE
+    engine_fallback_reason: str | None = None
+    backend_model: str | None = None
+    used_backend = False
+
+    if engine_requested != _CPU_ENGINE:
+        from sr_backends import BackendUnavailable, resolve
+
+        if downscaling or scale <= 1.0:
+            engine_fallback_reason = "engine skipped: target is not an upscale"
+        else:
+            backend = resolve(engine_requested)
+            if backend is None:
+                engine_fallback_reason = f"unknown engine {engine_requested!r}"
+            else:
+                ok, reason = backend.available()
+                if not ok:
+                    engine_fallback_reason = reason
+                else:
+                    try:
+                        rgb = backend.upscale(rgb, scale)
+                        used_backend = True
+                        engine_used = backend.id
+                        backend_model = Path(backend.weight_path()).name
+                    except BackendUnavailable as err:
+                        engine_fallback_reason = err.reason
+                    except Exception as err:  # noqa: BLE001 - degrade to CPU, never crash
+                        engine_fallback_reason = f"{type(err).__name__}: {err}"
+
+    if used_backend:
+        # The model performs restoration + upscaling in one pass, so the CPU
+        # denoise / unsharp steps are skipped; the result is already at the
+        # requested factor (the backend resizes to the exact target).
+        applied_denoise = 0.0
+        applied_texture = 0.0
+        denoise_method = engine_used
+    else:
+        # CPU pipeline (colour channels only): denoise the small image,
+        # resample, then sharpen so restored detail lands on the final grid.
+        # When downscaling we skip the unsharp pass -- it would only amplify
+        # resampling artefacts.
+        rgb = _denoise(rgb, denoise_strength)
+        rgb = _resample(rgb, out_w, out_h, downscaling)
+        applied_texture = 0.0 if downscaling else texture_strength
+        rgb = _sharpen(rgb, applied_texture)
+        applied_denoise = denoise_strength
+        denoise_method = "median" if denoise_strength > 0.0 else "none"
 
     # Recombine the untouched alpha, resized on its own track so the matte edge
     # never picks up a denoise/sharpen halo.
@@ -382,10 +437,14 @@ def enhance(args: argparse.Namespace) -> dict[str, Any]:
         "downscaled": downscaling,
         "exif_transposed": exif_transposed,
         "icc_preserved": icc_preserved,
-        "denoise_method": "median" if denoise_strength > 0.0 else "none",
-        "denoise_strength": round(denoise_strength, 4),
+        "denoise_method": denoise_method,
+        "denoise_strength": round(applied_denoise, 4),
         "texture_strength": round(applied_texture, 4),
         "preserve_text_logo": preserve_text_logo,
+        "engine": engine_used,
+        "engine_requested": engine_requested,
+        "engine_fallback_reason": engine_fallback_reason,
+        "backend_model": backend_model,
         "processing_time_ms": elapsed_ms,
     }
 
@@ -468,6 +527,17 @@ def build_parser() -> argparse.ArgumentParser:
         help="unsharp-mask detail strength 0..1 (custom)",
     )
     parser.add_argument(
+        "--engine",
+        default=_CPU_ENGINE,
+        help="upscale engine: cpu (default) | realesrgan (opt-in, falls back to cpu)",
+    )
+    parser.add_argument(
+        "--probe-engines",
+        dest="probe_engines",
+        action="store_true",
+        help="print engine availability JSON and exit (UI capability probe)",
+    )
+    parser.add_argument(
         "--preserve-text-logo",
         dest="preserve_text_logo",
         action="store_true",
@@ -490,6 +560,11 @@ def build_parser() -> argparse.ArgumentParser:
 
 def main(argv: list[str] | None = None) -> int:
     args = build_parser().parse_args(argv)
+    if getattr(args, "probe_engines", False):
+        from sr_backends import probe
+
+        sys.stdout.write(json.dumps(probe(), ensure_ascii=False))
+        return 0
     try:
         result = enhance(args)
     except Exception as err:  # noqa: BLE001 - surface a single clean error line

@@ -1,13 +1,14 @@
 # Image Enhance / Super Resolution card
 
 Executor: **local** (always `python/bridge/image_enhance_cli.py`, never networks).
-Backend: `enhance_image` Tauri command → `image_enhance_cli.py` (Pillow + numpy, CPU-only in Phase 1).
+Backend: `enhance_image` Tauri command → `image_enhance_cli.py` (Pillow + numpy CPU default; opt-in model engines via `python/bridge/sr_backends/`).
 
 Upscales and restores a low-resolution subject so it fills a PSD placeholder at
 print DPI without going soft. This document is the card's contract: what it
-accepts, what it guarantees, and how it behaves at the edges. The deep GPU
-super-resolution backends (SupIR / CCSR / RealESRGAN) are a future `profile_ref`
-mode behind this same contract.
+accepts, what it guarantees, and how it behaves at the edges. Heavier GPU
+super-resolution backends (SupIR / CCSR; **Real-ESRGAN landed as opt-in**) slot
+in behind the `engine` param without changing this contract — see
+[Engines](#engines).
 
 ## Inputs (ports)
 
@@ -21,6 +22,7 @@ mode behind this same contract.
 | Param | Type | Default | Range / values | Notes |
 | --- | --- | --- | --- | --- |
 | `mode` | enum | `conservative` | `conservative` \| `texture_rebuild` \| `print_ready` \| `custom` | Presets set denoise/texture; `custom` uses the sliders below. |
+| `engine` | enum | `cpu` | `cpu` \| `realesrgan` | Upscale backend. `cpu` is the built-in Lanczos+sharpen (always available); `realesrgan` is opt-in and **falls back to `cpu`** when its deps/weight are missing. See [Engines](#engines). |
 | `target_width` | int px | `0` | `>= 0` (0 = auto) | Explicit target wins over `target_bounds`. |
 | `target_height` | int px | `0` | `>= 0` (0 = auto) | |
 | `target_dpi` | int | `300` | `>= 1` | Written into the output PNG metadata only. |
@@ -90,17 +92,65 @@ The input is normalised to an 8-bit RGB working space and the original
 | Broken EXIF block | Ignored; enhancement proceeds. |
 | Unsafe `output_name` (`..`, separators) | Rejected server-side. |
 
+## Engines
+
+The `engine` param is the **local-card backend seam** from
+`docs/card-executor-split-and-psd-chain-hardening.md` (§2.5 / §3.4): adding an
+engine extends the registry + the CLI only, with no dispatch changes.
+
+| Engine | Deps | Weight | Behaviour |
+| --- | --- | --- | --- |
+| `cpu` (default) | vendored Pillow + numpy | none | Lanczos resample + unsharp mask + edge-preserving median denoise. Always available; the fallback for every other engine. |
+| `realesrgan` | `torch` + `realesrgan` (optional, **not** bundled) | `RealESRGAN_x4plus.pth` in the model cache | Real-ESRGAN x4 in one pass (tiled), then Lanczos to the exact requested factor. CUDA when present, else CPU. |
+
+Rules (`python/bridge/sr_backends/`):
+
+- **Opt-in & CPU-safe.** A non-`cpu` engine is used only when explicitly
+  requested *and* its deps + weight are present. On any miss (no deps, no
+  weight, a downscale target, an unknown name, or a runtime error) the node
+  **falls back to the `cpu` path** and records `engine_fallback_reason` — it
+  never hard-fails.
+- **Weights are not bundled.** `realesrgan` resolves its weight from
+  `HGRIPE_REALESRGAN_MODEL` (explicit path) or `<model cache>/RealESRGAN_x4plus.pth`,
+  where the cache dir is `HGRIPE_MODEL_CACHE` or the bundled `resources/models`
+  dir (same convention as the SAM 2 / ViTMatte weights).
+- **Model replaces the CPU steps.** When a model engine runs it performs
+  restoration + upscaling itself, so the CPU denoise/unsharp passes are skipped
+  (`denoise_method` is the engine id, `texture_strength` reported as `0.0`).
+- **Capability probe.** `image_enhance_cli.py --probe-engines` prints which
+  engines are usable right now (`{engines: {<id>: {available, reason, …}}, model_cache_dir}`)
+  so the UI can grey out unavailable engines.
+
 ## `enhance_report` fields
 
 `mode`, `scale_factor`, `source_mode`, `output_mode`, `had_alpha`,
 `source_size`, `output_size`, `target_size`, `target_dpi`, `max_pixels`,
 `max_decode_pixels`, `clamped`, `downscaled`, `exif_transposed`,
 `icc_preserved`, `denoise_method`, `denoise_strength`, `texture_strength`,
-`preserve_text_logo`, `processing_time_ms`.
+`preserve_text_logo`, `engine`, `engine_requested`, `engine_fallback_reason`,
+`backend_model`, `processing_time_ms`.
 
 ## Tests
 
 - `python/bridge/tests/test_image_enhance_cli.py` — alpha isolation, CMYK /
   high-bit handling, downscale path, decode guard, target resolution, clamp,
-  logo guard, output naming, ICC preservation (run: `pytest python/bridge/tests`).
+  logo guard, output naming, ICC preservation, and the **engine seam** (default
+  `cpu`, unknown-engine fallback, `realesrgan` unavailable fallback, downscale
+  skip, a fake-backend dispatch + telemetry, `--probe-engines`) — run:
+  `pytest python/bridge/tests`.
+- `python/bridge/tests/test_sr_backends.py` — registry `resolve`, capability
+  `probe`, weight-path resolution, and the Real-ESRGAN unavailable/raise paths.
 - `src-tauri/src/studio/image_enhance.rs` — the connected-image-input guard.
+
+## Verifying `realesrgan` end-to-end
+
+Real inference needs `torch` + `realesrgan` + the weight, which CI does not
+install, so it is verified manually (mirroring the ViTMatte e2e):
+
+```
+pip install torch realesrgan
+export HGRIPE_MODEL_CACHE=/path/to/models   # or HGRIPE_REALESRGAN_MODEL=/path/to/RealESRGAN_x4plus.pth
+python python/bridge/image_enhance_cli.py --probe-engines        # realesrgan -> available: true
+python python/bridge/image_enhance_cli.py --image in.png --engine realesrgan \
+  --target-width 1024 --output-dir out                          # enhance_report.engine == "realesrgan"
+```

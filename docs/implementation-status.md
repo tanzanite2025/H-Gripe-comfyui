@@ -27,22 +27,23 @@
 | Match Light & Color (`color_match_cli.py`) | ✅ Landed (CPU) | Rule-based light/colour match. Learned matcher `engine` is ⛔ planned. |
 | PSD Export (`compose_psd_cli.py`) | ✅ Landed | Smart-object replacement + `.psd`/preview/metadata triplet. |
 | Refine Mask Edge (`edge_refine_cli.py`) | 🟡 Partial | CPU clean/feather + trimap-aware hand-off (protects the matte unknown band) landed. A learned-matting / `guidedFilter` `profile_ref` **engine mode** is ⛔ planned. |
-| Image Enhance (`image_enhance_cli.py`) | 🟡 Partial | CPU Lanczos upscale + denoise + unsharp only. See §2. |
+| Image Enhance (`image_enhance_cli.py`) | 🟡 Partial | CPU Lanczos upscale + denoise + unsharp default, plus an opt-in **`engine` seam** (`python/bridge/sr_backends/`) with a **Real-ESRGAN** backend + capability probe + CPU fallback. Real GPU inference is opt-in (deps/weight not bundled). See §2. |
 | Detail Watchdog (`detail_watchdog_cli.py`) | 🟡 Partial | Rule heuristics only; semantic targets reported `skipped`. See §2. |
 | Detail Repaint (`detail_repaint_cli.py`) | 🟡 Partial | `prepare`/`composite` around a provider `image.edit` call; no local backend. See §2. |
 
 ## 2. Phase 2 algorithm backends — [`phase2-algorithm-roadmap.md`](phase2-algorithm-roadmap.md)
 
-The whole roadmap is **design-only today**. The guiding principle is additive,
-opt-in backends selected per run via `profile_ref`, with the CPU path remaining
-the default and fallback.
+The roadmap is **mostly design-only today**, the first backend has landed. The
+guiding principle is additive, opt-in backends selected per run via the local
+card's `engine` param (the API-card `profile_ref` is a separate credentials
+concept), with the CPU path remaining the default and fallback.
 
 | Item | Status | What's missing |
 | --- | --- | --- |
-| **Super-resolution** GPU backend | ⛔ Planned | Real-ESRGAN / CCSR / SupIR backends, `--profile-ref` dispatch, `python/bridge/sr_backends/` modules. Roadmap recommends Real-ESRGAN first (highest visible win, lowest risk). |
+| **Super-resolution** GPU backend | 🟡 Partial | `engine` seam + `python/bridge/sr_backends/` registry + **Real-ESRGAN** backend (lazy torch, weight from `HGRIPE_MODEL_CACHE`) + `--probe-engines` capability probe + graceful CPU fallback **landed**. Still ⛔: CCSR / SupIR backends, real-inference CI (opt-in like ViTMatte), installer weight story, UI greying via the probe. |
 | **Detail Watchdog** ML/VLM passes | ⛔ Planned | Face/hand quality model, OCR + logo/template matching, VLM defect pass. Currently-`skipped` semantic targets graduate to real findings only once these land. |
 | **Detail Repaint** local inpaint backend | ⛔ Planned | Local GPU diffusion inpaint (SD/SDXL/Flux Fill) consuming the existing crop+mask+prompt manifest, optional ControlNet, Poisson/gradient-domain seam blending. |
-| **Capability probe / weight cache** | ⛔ Planned | `doctor`-style GPU/CUDA/installed-backend/cached-weight report; `HGRIPE_MODEL_CACHE` resolution; UI greying GPU presets with CPU fallback. |
+| **Capability probe / weight cache** | 🟡 Partial | Per-engine `--probe-engines` + `HGRIPE_MODEL_CACHE` resolution **landed for Image Enhance**. Still ⛔: a `doctor`-style cross-card GPU/CUDA/backend report and the UI wiring that greys unavailable engines. |
 
 ## 3. Subject Mask / Matte — [`subject-mask-matte.md`](cards/subject-mask-matte.md)
 

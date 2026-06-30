@@ -260,6 +260,10 @@ export const NODE_ZH: Record<string, NodeSpecZh> = {
         label: "模式",
         hint: "conservative = 温和，texture_rebuild = 强细节，print_ready = 均衡，custom = 展开滑块",
       },
+      engine: {
+        label: "引擎",
+        hint: "cpu = 内置 Lanczos+锐化（始终可用）；realesrgan = 可选 GPU/CPU 模型，权重/依赖缺失时回落 cpu",
+      },
       target_width: { label: "目标宽度", hint: "显式目标像素（0 = 由所连边界或预设缩放自动推算）" },
       target_height: { label: "目标高度", hint: "显式目标像素（0 = 由所连边界或预设缩放自动推算）" },
       target_dpi: { label: "目标 DPI", hint: "写入输出 PNG 元数据的 DPI" },

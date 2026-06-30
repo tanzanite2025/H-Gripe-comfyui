@@ -7,6 +7,9 @@
 //! - [`image_enhance`]: the `imageEnhance` node executor (CPU upscale/sharpen).
 //! - [`detail_watchdog`]: the `detailWatchdog` node executor (CPU quality scan).
 //! - [`psd_export`]: the `psdExport` node executor (PSD composition bridge).
+//! - [`studio_image`]: decode-guard + colour-space loaders shared by native
+//!   (`Compute`) Rust cards.
+//! - [`subject_mask`]: the `subjectMask` node executor (native-Rust matte).
 //! - [`persist`]: on-disk autosave, workflow files, recents, and pickers.
 //! - [`history`]: project-scoped snapshot / run-history JSON stores.
 //!
@@ -23,6 +26,8 @@ mod image_enhance;
 mod persist;
 mod psd_analyze;
 mod psd_export;
+mod studio_image;
+mod subject_mask;
 
 // Glob re-exports so the original `crate::studio::*` command paths keep
 // resolving from `main.rs`'s `generate_handler!`. A plain `use exec::cmd` only

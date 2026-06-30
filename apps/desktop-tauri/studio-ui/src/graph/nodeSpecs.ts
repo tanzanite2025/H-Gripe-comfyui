@@ -42,11 +42,12 @@ export interface ParamSpec {
  * Where a node runs — the routing/grouping discriminator.
  * - `graph`  pure in-process node (no backend call).
  * - `local`  always a `python/bridge` CLI; must not touch the network.
+ * - `compute` in-process native-Rust image/model work; must not touch the network.
  * - `api`    always a provider call (needs a profile + credentials_ref).
  * - `hybrid` user picks per-node via a `mode` param (e.g. `promptOptimize`).
  * See docs/card-executor-split-and-psd-chain-hardening.md.
  */
-export type Executor = "graph" | "local" | "api" | "hybrid";
+export type Executor = "graph" | "local" | "compute" | "api" | "hybrid";
 
 export interface NodeSpec {
   kind: string;
@@ -582,6 +583,100 @@ export const NODE_SPECS: Record<string, NodeSpec> = {
         control: "text",
         defaultValue: "",
         hint: "base name for the matched PNG (empty = <image>_matched)",
+        inline: true,
+      },
+    ],
+  },
+  subjectMask: {
+    kind: "subjectMask",
+    executor: "compute",
+    title: "Subject Mask / Matte",
+    description:
+      "Select the subject and produce a mask / cutout / alpha triplet. Phase 1 runs in-process in native Rust (no python bridge): magic-wand flood select + brush/eraser strokes (carried in edit_paths), morphology (grow/shrink, fill holes) and a final feather. Emits the mask, alpha image, cutout, and an enriched matte report. Auto-subject model modes (SAM/RMBG/BiRefNet) are Phase 2.",
+    category: "control",
+    inputs: [
+      port("image", "image", "image"),
+      port("reference", "reference", "image"),
+      port("visual_context", "visual context", "any"),
+      port("placeholder_mask", "placeholder mask", "image"),
+      port("previous_mask", "previous mask", "image"),
+      port("edit_paths", "edit paths", "any"),
+    ],
+    outputs: [
+      port("mask", "mask", "image"),
+      port("alpha_image", "alpha image", "image"),
+      port("cutout_image", "cutout image", "image"),
+      port("matte_report", "matte report", "any"),
+      port("edit_paths", "edit paths", "any"),
+    ],
+    params: [
+      {
+        key: "mode",
+        label: "Mode",
+        control: "select",
+        options: [
+          "hybrid",
+          "manual_brush",
+          "manual_pen",
+          "auto_subject",
+          "auto_product",
+          "auto_person",
+          "auto_transparent_object",
+        ],
+        defaultValue: "hybrid",
+        inline: true,
+        hint: "Phase 1 runs the manual_* / hybrid modes; the auto_* model modes are Phase 2",
+      },
+      {
+        key: "wand_tolerance",
+        label: "Wand tolerance",
+        control: "slider",
+        min: 0,
+        max: 255,
+        step: 1,
+        defaultValue: 24,
+        hint: "colour distance for the magic-wand flood select",
+      },
+      {
+        key: "grow_px",
+        label: "Grow / shrink px",
+        control: "slider",
+        min: -16,
+        max: 16,
+        step: 1,
+        defaultValue: 0,
+        hint: "positive dilates the matte, negative erodes it",
+      },
+      {
+        key: "fill_holes",
+        label: "Fill holes",
+        control: "checkbox",
+        defaultValue: false,
+        hint: "close enclosed interior gaps before feather",
+      },
+      {
+        key: "feather_px",
+        label: "Feather px",
+        control: "slider",
+        min: 0,
+        max: 16,
+        step: 1,
+        defaultValue: 0,
+        hint: "soften the matte edge (applied last)",
+      },
+      {
+        key: "output_dir",
+        label: "Output dir",
+        control: "path",
+        defaultValue: "",
+        hint: "leave empty to use the configured output directory",
+      },
+      {
+        key: "output_name",
+        label: "Output name",
+        control: "text",
+        defaultValue: "",
+        hint: "base name for the triplet PNGs (empty = <image>_mask)",
         inline: true,
       },
     ],

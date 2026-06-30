@@ -77,15 +77,19 @@ class DetectorBackend(Protocol):
         ...
 
     def detect(
-        self, rgb: Any, alpha: Any, watch: set[str]
-    ) -> list[dict[str, Any]]:
+        self, rgb: Any, alpha: Any, watch: set[str], device: str | None = None
+    ) -> tuple[list[dict[str, Any]], str]:
         """Detect defects on an 8-bit RGB image, restricted to ``watch`` targets.
 
         ``rgb`` is an ``(H, W, 3)`` uint8 array, ``alpha`` an ``(H, W)`` float
-        array in 0..1. Returns a list of issue dicts in the shared
-        ``QualityReport`` shape (``type`` / ``confidence`` / ``bbox`` /
-        ``suggested_action``). Raises :class:`DetectorUnavailable` if deps /
-        weights vanished between the probe and the call.
+        array in 0..1. ``device`` selects the ONNX execution provider (``auto``
+        by default). Returns ``(issues, device_used)`` where ``issues`` is a
+        list of issue dicts in the shared ``QualityReport`` shape (``type`` /
+        ``confidence`` / ``bbox`` / ``suggested_action``) and ``device_used`` is
+        the ``cpu`` / ``cuda`` the session actually bound (an explicit ``cuda``
+        degrades to ``cpu`` without an accelerator provider). Raises
+        :class:`DetectorUnavailable` if deps / weights vanished between the probe
+        and the call.
         """
         ...
 

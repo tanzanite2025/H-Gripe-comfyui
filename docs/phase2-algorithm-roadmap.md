@@ -305,12 +305,13 @@ real-inference CI is gated like ViTMatte.
   `auto`/`cpu`/`cuda` selection (an explicit `cpu` pins the CPU provider; `cuda`
   degrades to CPU when ORT exposes no accelerator) and `provider_device()` maps
   the bound provider back to a `cpu`/`cuda` label for the report. **Refine Mask
-  Edge** (`onnx_matting`) and **Match Light & Color** (`onnx_harmonize`) are
-  wired end-to-end (their `--device` threads into the session and the edge /
-  match report records `device_requested` + `device`). ⛔ still: extend
-  `--device` to the last ONNX card (`onnx_defect`), wire it through the Tauri
-  commands / Graph executor and the inspector UI, and a per-node `precision`
-  selection (the "local model manager" surface).
+  Edge** (`onnx_matting`), **Match Light & Color** (`onnx_harmonize`) and
+  **Detail Watchdog** (`onnx_defect`) are wired end-to-end (their `--device`
+  threads into the session and the edge / match / watchdog report records
+  `device_requested` + `device`) — every ONNX engine now honours `--device`. ⛔
+  still: wire `--device` through the Tauri commands / Graph executor and the
+  inspector UI, and a per-node `precision` selection (the "local model manager"
+  surface).
 - **Determinism & safety:** seedable backends; keep the text/logo guards; require
   rule+ML agreement before any *automatic* (non-user-confirmed) repaint.
 - **Contracts are stable:** every Phase 2 backend emits the existing

@@ -106,6 +106,9 @@ _UNSUPPORTED_TARGETS = ("hands", "text", "logo")
 # The always-available rule layer is the default "engine"; learned detectors
 # register in ``detector_backends`` and are selected by ``--engine``.
 _RULES_ENGINE = "rules"
+# Default compute-device selection for the learned detector (mirrors
+# sr_backends.DEVICE_AUTO; kept local so the module stays import-light).
+_DEVICE_AUTO = "auto"
 
 
 def _safe_stem(image_path: str) -> str:
@@ -483,6 +486,7 @@ def _run_engine(
     rgb: "np.ndarray",
     alpha: "np.ndarray",
     watch_set: set[str],
+    device_requested: str,
 ) -> dict[str, Any]:
     """Run the opt-in ML detector for ``engine_requested`` (or the rule-only path).
 
@@ -496,6 +500,7 @@ def _run_engine(
         "fallback_reason": None,
         "detectors": [],
         "backend_model": None,
+        "device": None,
         "issues": [],
         "covered": set(),
     }
@@ -515,7 +520,9 @@ def _run_engine(
         return result
 
     try:
-        issues = backend.detect(rgb, alpha, watch_set)
+        issues, result["device"] = backend.detect(
+            rgb, alpha, watch_set, device=device_requested
+        )
     except DetectorUnavailable as err:
         result["fallback_reason"] = err.reason
         return result
@@ -560,6 +567,11 @@ def watch(args: argparse.Namespace) -> dict[str, Any]:
         raise ValueError(f"unknown watch target(s): {unknown}; expected {list(_ALL_TARGETS)}")
 
     engine_requested = (getattr(args, "engine", _RULES_ENGINE) or _RULES_ENGINE).strip().lower() or _RULES_ENGINE
+    # ``device`` selects the ONNX execution provider for the learned detector
+    # (the rule layer always runs on CPU). ``device`` in the report is the one
+    # the session actually bound, which can differ from the request (an explicit
+    # ``cuda`` degrades to ``cpu`` when ORT exposes no accelerator).
+    device_requested = (getattr(args, "device", None) or _DEVICE_AUTO).strip().lower() or _DEVICE_AUTO
 
     max_decode_pixels = int(max(0, getattr(args, "max_decode_pixels", _DEFAULT_MAX_DECODE_PIXELS)))
 
@@ -588,7 +600,7 @@ def watch(args: argparse.Namespace) -> dict[str, Any]:
 
     # Opt-in ML pass: merges semantic findings (hands/text/logo) on top of the
     # rule findings and graduates the targets it covers out of skipped_targets.
-    engine = _run_engine(engine_requested, rgb, alpha, watch_set)
+    engine = _run_engine(engine_requested, rgb, alpha, watch_set, device_requested)
     issues.extend(engine["issues"])
     skipped = sorted((watch_set & set(_UNSUPPORTED_TARGETS)) - engine["covered"])
 
@@ -632,6 +644,8 @@ def watch(args: argparse.Namespace) -> dict[str, Any]:
             "engine_fallback_reason": engine["fallback_reason"],
             "detectors": engine["detectors"],
             "backend_model": engine["backend_model"],
+            "device": engine["device"],
+            "device_requested": device_requested,
         },
     }
 
@@ -669,6 +683,15 @@ def build_parser() -> argparse.ArgumentParser:
         "--engine",
         default=_RULES_ENGINE,
         help="detection engine: rules (default) | onnx_defect (opt-in ML, falls back to rules)",
+    )
+    parser.add_argument(
+        "--device",
+        default=_DEVICE_AUTO,
+        help=(
+            "compute device for the learned detector: auto (default, cuda provider "
+            "if present else cpu) | cpu | cuda (degrades to cpu without an "
+            "accelerator provider)"
+        ),
     )
     parser.add_argument(
         "--probe-engines",

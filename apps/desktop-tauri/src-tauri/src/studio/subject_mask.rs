@@ -23,6 +23,7 @@ use super::graph::{
 };
 use super::persist::studio_reject_unsafe_basename;
 use super::studio_image;
+use super::subject_matte;
 use super::subject_segment::{segmenter_for_mode, AutoMode, SegmentRequest};
 
 const MASK_ON: u8 = 255;
@@ -172,6 +173,23 @@ pub(super) fn execute_studio_subject_mask(
     } else if grow_px < 0 {
         mask = erode(&mask, grow_px.unsigned_abs());
         operations.push(json!({ "type": "shrink", "px": grow_px.abs() }));
+    }
+
+    // Continuous alpha matting: resolve the binary edge into soft alpha (hair /
+    // glass / translucency) via a trimap. Off by default so Phase 1 stays
+    // binary + deterministic; behind the flag it runs ViTMatte when its weight
+    // resolves, else the deterministic builtin feather fallback.
+    if bool_param(node, "alpha_matting", false) {
+        let band = number_param(node, "matting_band_px", 12.0).max(0.0) as u32;
+        let trimap = subject_matte::trimap_from_mask(&mask, band);
+        let matter = subject_matte::matter();
+        let matte_provider = matter.provider().to_string();
+        mask = matter.matte(&image, &trimap)?;
+        operations.push(json!({
+            "type": "alpha_matting",
+            "provider": matte_provider,
+            "band_px": band,
+        }));
     }
 
     let feather_px = number_param(node, "feather_px", 0.0).max(0.0);
@@ -484,13 +502,15 @@ fn fill_holes(mask: &mut GrayImage) {
     }
 }
 
-/// Separable max filter: grow the matte outward by `radius` px.
-fn dilate(mask: &GrayImage, radius: u32) -> GrayImage {
+/// Separable max filter: grow the matte outward by `radius` px. Also used by
+/// [`subject_matte`](super::subject_matte) to build trimaps.
+pub(super) fn dilate(mask: &GrayImage, radius: u32) -> GrayImage {
     morphology(mask, radius, true)
 }
 
-/// Separable min filter: bite the matte inward by `radius` px.
-fn erode(mask: &GrayImage, radius: u32) -> GrayImage {
+/// Separable min filter: bite the matte inward by `radius` px. Also used by
+/// [`subject_matte`](super::subject_matte) to build trimaps.
+pub(super) fn erode(mask: &GrayImage, radius: u32) -> GrayImage {
     morphology(mask, radius, false)
 }
 

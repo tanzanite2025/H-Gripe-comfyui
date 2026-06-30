@@ -396,11 +396,14 @@ Phase 2（接模型，ort/candle）：点选 = SAM point-prompt，模型算 mask
 | Phase 2 模型 | U²-Netp(ort) 后端 + `ModelSpec` 加载/打包权重解析 | #101 | ✅ 已合并 |
 | 级联 1 | BiRefNet 高质量去背后端（可下载大档，sha256 校验） | #102 | ✅ 已合并 |
 | 级联 2a | SAM2 交互点选后端（encoder+decoder 两段，点选提示路由） | #103 | ✅ 已合并 |
-| 级联 2b | 前端把节点点选坐标接到 SAM2：`Point (SAM 2)` 工具写 `edit_paths.points` | 本 PR | ✅ |
-| 级联 3 | ViTMatte / trimap 连续 alpha 抠图，喂给 Refine Mask Edge | — | ⏳ 待开 |
+| 级联 2b | 前端把节点点选坐标接到 SAM2：`Point (SAM 2)` 工具写 `edit_paths.points` | #104 | ✅ 已合并 |
+| 级联 3 | ViTMatte / trimap 连续 alpha 抠图后端（`alpha_matting` 开关，喂给 Refine Mask Edge） | 本 PR | ✅ |
 | Phase 3 | 钢笔/套索路径栅格化（注册表里现为 planned 占位） | — | ⏳ 待开 |
+| 级联 3 前端 | 精修弹窗专用 `matting` 工具（按区域画 trimap） | — | ⏳ 待开 |
 
-**点选 → SAM2 链路（本 PR / 级联 2b）**：精修弹窗新增 `Point (SAM 2)` 工具，每次点击把图像坐标记进 `edit_paths.points`（绿色十字标记 + 计数，支持撤销/重做、随节点 `edit_paths` 参数持久化）。后端 `segmenter_for_mode(mode, points)` 在 `auto_*` 模式下：有 points → 走 SAM2（`provider: sam2`），无 points → 走 BiRefNet→U²-Netp→builtin 显著性级联。前端纯数据接线，模型仍跑在 Rust `Compute` 内进程。
+**点选 → SAM2 链路（级联 2b）**：精修弹窗新增 `Point (SAM 2)` 工具，每次点击把图像坐标记进 `edit_paths.points`（绿色十字标记 + 计数，支持撤销/重做、随节点 `edit_paths` 参数持久化）。后端 `segmenter_for_mode(mode, points)` 在 `auto_*` 模式下：有 points → 走 SAM2（`provider: sam2`），无 points → 走 BiRefNet→U²-Netp→builtin 显著性级联。前端纯数据接线，模型仍跑在 Rust `Compute` 内进程。
+
+**连续 alpha 抠图链路（本 PR / 级联 3）**：分割只回答"哪些像素是主体"（硬二值蒙版）；新增 `subject_matte` 模块在 `alpha_matting` 开关打开时，把二值蒙版按 `matting_band_px` 腐蚀/膨胀成三值 trimap（前景核 / 未知带 / 背景），再交给 `AlphaMatter` 解算连续 alpha：权重就位时跑 **ViTMatte small**（`provider: vitmatte`，Apache-2.0，~104 MB，单个 4 通道 `pixel_values` = RGB + trimap，`ort` 内进程），否则用确定性 `builtin-cpu-matte` 羽化兜底，保证开关始终可用。结果记进 `matte_report.operations`，软蒙版直接喂给 Refine Mask Edge。权重不入 git，由 `scripts/fetch-vitmatte.*` 拉取（sha256 校验）或 `HGRIPE_VITMATTE_MODEL` 指本地档。
 
 ## 结论
 

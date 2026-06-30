@@ -665,6 +665,23 @@ export const NODE_SPECS: Record<string, NodeSpec> = {
         hint: "soften the matte edge (applied last)",
       },
       {
+        key: "alpha_matting",
+        label: "Alpha matting",
+        control: "checkbox",
+        defaultValue: false,
+        hint: "resolve the binary edge into continuous alpha (hair / glass) via a trimap — ViTMatte when its weight is present, else a deterministic feather fallback",
+      },
+      {
+        key: "matting_band_px",
+        label: "Matting band px",
+        control: "slider",
+        min: 0,
+        max: 32,
+        step: 1,
+        defaultValue: 12,
+        hint: "width of the trimap unknown band the matter resolves (only when alpha matting is on)",
+      },
+      {
         key: "output_dir",
         label: "Output dir",
         control: "path",

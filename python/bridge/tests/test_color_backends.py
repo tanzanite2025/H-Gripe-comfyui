@@ -167,9 +167,14 @@ def test_onnx_harmonize_runs_with_synthetic_model(
     alpha = np.ones((40, 32), dtype=np.float32)
     bg = (np.random.rand(50, 60, 3) * 255).astype(np.uint8)
 
-    out = backend.match(rgb, alpha, bg)
+    out, device_used = backend.match(rgb, alpha, bg)
     # Geometry contract: harmonised output matches the source subject size.
     assert out.shape == rgb.shape
+    # CPU-only ORT in CI: the session binds the CPU provider, reported truthfully
+    # even when cuda is requested (it degrades rather than crashing the run).
+    assert device_used == "cpu"
+    _, forced = backend.match(rgb, alpha, bg, device="cuda")
+    assert forced == "cpu"
     assert out.dtype == np.uint8
 
 
@@ -210,4 +215,7 @@ def test_onnx_harmonize_dispatch_via_match(
     assert report["engine_requested"] == "onnx_harmonize"
     assert report["engine_fallback_reason"] is None
     assert report["backend_model"] == "color_harmonize.onnx"
+    # device defaults to auto; on CPU-only ORT the session ran on cpu.
+    assert report["device_requested"] == "auto"
+    assert report["device"] == "cpu"
     assert report["applied"] is True

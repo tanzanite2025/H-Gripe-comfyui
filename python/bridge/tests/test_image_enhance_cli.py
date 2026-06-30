@@ -169,6 +169,96 @@ def test_default_output_name_from_stem(tmp_path: Path) -> None:
     assert Path(out["enhanced_image"]).name == "subject_enhanced.png"
 
 
+# ---- engine seam (sr_backends dispatch + CPU fallback) ----------------------
+
+
+def test_default_engine_is_cpu(tmp_path: Path) -> None:
+    src = _make_rgb(tmp_path / "in.png", (20, 20))
+    report = _run(src, target_width=40, target_height=40, output_dir=tmp_path)["enhance_report"]
+    assert report["engine"] == "cpu"
+    assert report["engine_requested"] == "cpu"
+    assert report["engine_fallback_reason"] is None
+    assert report["backend_model"] is None
+
+
+def test_unknown_engine_falls_back_to_cpu(tmp_path: Path) -> None:
+    src = _make_rgb(tmp_path / "in.png", (20, 20))
+    out = _run(src, target_width=40, target_height=40, engine="bogus", output_dir=tmp_path)
+    report = out["enhance_report"]
+    assert report["engine"] == "cpu"
+    assert report["engine_requested"] == "bogus"
+    assert "unknown engine" in (report["engine_fallback_reason"] or "")
+    # The node still produces an output at the requested target.
+    assert Image.open(out["enhanced_image"]).size == (40, 40)
+
+
+def test_realesrgan_unavailable_falls_back_to_cpu(tmp_path: Path) -> None:
+    # torch / realesrgan / the weight are absent in the test env: the requested
+    # engine is recorded but the CPU path runs and still yields the target size.
+    src = _make_rgb(tmp_path / "in.png", (20, 20))
+    out = _run(src, target_width=40, target_height=40, engine="realesrgan", output_dir=tmp_path)
+    report = out["enhance_report"]
+    assert report["engine"] == "cpu"
+    assert report["engine_requested"] == "realesrgan"
+    assert report["engine_fallback_reason"]  # non-empty reason recorded
+    assert Image.open(out["enhanced_image"]).size == (40, 40)
+
+
+def test_engine_skipped_on_downscale(tmp_path: Path) -> None:
+    src = _make_rgb(tmp_path / "big.png", (80, 80))
+    report = _run(
+        src, target_width=40, target_height=40, engine="realesrgan", output_dir=tmp_path
+    )["enhance_report"]
+    assert report["engine"] == "cpu"
+    assert "not an upscale" in (report["engine_fallback_reason"] or "")
+
+
+def test_backend_dispatch_success_records_telemetry(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # Inject a fake available backend so the dispatch + telemetry path is tested
+    # without torch / weights. The CLI imports ``resolve`` from ``sr_backends``
+    # at call time, so patching the module attribute is enough.
+    import sr_backends
+
+    class _FakeBackend:
+        id = "fake"
+        native_scale = 2
+
+        def available(self):
+            return True, "ready"
+
+        def weight_path(self):
+            return Path("/models/fake_x2.pth")
+
+        def upscale(self, rgb, scale):
+            w = max(1, round(rgb.width * scale))
+            h = max(1, round(rgb.height * scale))
+            return rgb.resize((w, h), Image.LANCZOS)
+
+    monkeypatch.setattr(sr_backends, "resolve", lambda name: _FakeBackend() if name == "fake" else None)
+
+    src = _make_rgb(tmp_path / "in.png", (20, 20))
+    out = _run(src, target_width=40, target_height=40, engine="fake", output_dir=tmp_path)
+    report = out["enhance_report"]
+    assert report["engine"] == "fake"
+    assert report["engine_requested"] == "fake"
+    assert report["engine_fallback_reason"] is None
+    assert report["backend_model"] == "fake_x2.pth"
+    # The model path replaces the CPU denoise/sharpen, so those are reported off.
+    assert report["denoise_method"] == "fake"
+    assert report["texture_strength"] == 0.0
+    assert Image.open(out["enhanced_image"]).size == (40, 40)
+
+
+def test_probe_engines_flag_emits_capability_json(tmp_path: Path, capsys) -> None:
+    rc = cli.main(["--image", "ignored", "--probe-engines"])
+    assert rc == 0
+    payload = json.loads(capsys.readouterr().out)
+    assert payload["engines"]["cpu"]["available"] is True
+    assert "realesrgan" in payload["engines"]
+
+
 def test_icc_preserved_for_rgb_with_profile(tmp_path: Path) -> None:
     pytest.importorskip("PIL.ImageCms")
     from PIL import ImageCms

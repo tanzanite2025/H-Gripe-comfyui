@@ -835,6 +835,15 @@ export const NODE_SPECS: Record<string, NodeSpec> = {
         hint: "conservative = gentle, texture_rebuild = strong detail, print_ready = balanced, custom = expose sliders",
       },
       {
+        key: "engine",
+        label: "Engine",
+        control: "select",
+        options: ["cpu", "realesrgan"],
+        defaultValue: "cpu",
+        inline: true,
+        hint: "cpu = built-in Lanczos+sharpen (always available); realesrgan = opt-in GPU/CPU model, falls back to cpu when its weight/deps are missing",
+      },
+      {
         key: "target_width",
         label: "Target width",
         control: "slider",

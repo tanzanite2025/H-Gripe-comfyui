@@ -49,17 +49,26 @@ detail** while preserving identity and text:
   good first integration target.
 
 ### 1.3 Integration plan
-- Add a `--profile-ref <id>` argument (placeholder already documented in the
-  CLI header). When present, the CLI dispatches to a backend module under
-  `python/bridge/sr_backends/` (`realesrgan.py`, `ccsr.py`, `supir.py`) selected
-  by the profile; when absent, the current CPU path runs unchanged.
-- Backends declare their model weights + device requirements; weights are
-  resolved from a cache dir (env `HGRIPE_MODEL_CACHE`), **not** bundled in the
-  installer (keeps the Tauri bundle small — see Issue #2).
-- Add a capability probe (`enhance_image` → `doctor`-style report) so the UI can
-  grey out GPU presets when CUDA/weights are unavailable and fall back to CPU.
-- Contract impact: none. Output stays `{fixed_image, scale, denoise_strength,
-  texture_strength, ...}`; add optional `backend`/`model` fields for telemetry.
+**Status: the seam + Real-ESRGAN have landed** (the rest of this section is the
+design it was built to; ⛔ items are CCSR/SupIR + real-inference CI + UI greying).
+The selector is the local card's **`engine` param** (`cpu` | `realesrgan` | …),
+not `--profile-ref` — `profile_ref` is the API-card credentials concept, and
+Image Enhance is a `local` card (see `card-executor-split-and-psd-chain-hardening.md`).
+
+- ✅ Add an `--engine <id>` argument. When non-`cpu`, the CLI dispatches to a
+  backend module under `python/bridge/sr_backends/` (`realesrgan.py` landed;
+  `ccsr.py`, `supir.py` ⛔) selected by the registry; when `cpu`/absent the
+  current CPU path runs unchanged.
+- ✅ Backends declare weights + device requirements; weights resolve from a
+  cache dir (env `HGRIPE_MODEL_CACHE`, or `HGRIPE_REALESRGAN_MODEL`), **not**
+  bundled in the installer (keeps the Tauri bundle small — see Issue #2).
+- ✅ Capability probe (`image_enhance_cli.py --probe-engines`) reports which
+  engines are usable so the UI can grey out unavailable ones; any miss falls
+  back to CPU and records `engine_fallback_reason`. ⛔ The UI greying itself.
+- ✅ Contract impact: none. Output adds optional `engine` / `engine_requested` /
+  `engine_fallback_reason` / `backend_model` telemetry fields.
+- ⛔ A real-inference CI job (opt-in like the ViTMatte e2e), since CI does not
+  install `torch` + the weight.
 
 ### 1.4 Dependencies & risks
 `torch` + CUDA, `realesrgan`/`spandrel`, model weights (hundreds of MB–GB).

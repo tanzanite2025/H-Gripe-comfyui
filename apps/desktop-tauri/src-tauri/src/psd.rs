@@ -804,6 +804,18 @@ pub(crate) struct EnhanceReport {
     pub(crate) texture_strength: f64,
     #[serde(default)]
     pub(crate) preserve_text_logo: bool,
+    /// The upscale engine actually used (`cpu` or a backend id, e.g. `realesrgan`).
+    #[serde(default)]
+    pub(crate) engine: String,
+    /// The engine the node asked for (may differ from `engine` on fallback).
+    #[serde(default)]
+    pub(crate) engine_requested: String,
+    /// Why the requested engine was not used (missing deps/weight, downscale, …).
+    #[serde(default)]
+    pub(crate) engine_fallback_reason: Option<String>,
+    /// Weight file name when a model backend ran, else `null`.
+    #[serde(default)]
+    pub(crate) backend_model: Option<String>,
     #[serde(default)]
     pub(crate) processing_time_ms: i64,
 }
@@ -845,6 +857,7 @@ pub(crate) fn enhance_image(
     denoise_strength: Option<f64>,
     texture_strength: Option<f64>,
     preserve_text_logo: Option<bool>,
+    engine: Option<String>,
     output_dir: Option<String>,
     output_name: Option<String>,
 ) -> Result<EnhanceImageResult, String> {
@@ -884,6 +897,8 @@ pub(crate) fn enhance_image(
         .arg(denoise_strength.unwrap_or(0.3).to_string())
         .arg("--texture-strength")
         .arg(texture_strength.unwrap_or(0.25).to_string())
+        .arg("--engine")
+        .arg(engine.as_deref().unwrap_or("cpu"))
         .arg("--output-dir")
         .arg(output_dir.as_deref().unwrap_or(""))
         .arg("--output-name")

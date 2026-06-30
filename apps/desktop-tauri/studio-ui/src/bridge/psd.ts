@@ -506,6 +506,14 @@ export interface EnhanceReport {
   denoise_strength: number;
   texture_strength: number;
   preserve_text_logo: boolean;
+  /** Upscale engine actually used (`cpu` or a backend id, e.g. `realesrgan`). */
+  engine?: string;
+  /** Engine the node asked for (differs from `engine` on fallback). */
+  engine_requested?: string;
+  /** Why the requested engine was not used (missing deps/weight, downscale, …). */
+  engine_fallback_reason?: string | null;
+  /** Weight file name when a model backend ran, else null. */
+  backend_model?: string | null;
   processing_time_ms: number;
 }
 
@@ -538,6 +546,8 @@ export interface EnhanceImageRequest {
   textureStrength?: number;
   /** Cap sharpening so logos / packaging text are not mangled. */
   preserveTextLogo?: boolean;
+  /** Upscale engine: `cpu` (default) or `realesrgan` (opt-in, falls back to cpu). */
+  engine?: string;
   /** Directory for the written PNG. */
   outputDir?: string;
   /** Base name for the written PNG. */
@@ -601,6 +611,11 @@ export async function enhanceImage(req: EnhanceImageRequest): Promise<EnhanceIma
         denoise_strength: custom ? (req.denoiseStrength ?? 0.3) : { conservative: 0.3, texture_rebuild: 0.15, print_ready: 0.2 }[mode] ?? 0.3,
         texture_strength: texture,
         preserve_text_logo: preserveTextLogo,
+        engine: "cpu",
+        engine_requested: req.engine ?? "cpu",
+        engine_fallback_reason:
+          (req.engine ?? "cpu") === "cpu" ? null : "engine unavailable in browser dev mock",
+        backend_model: null,
         processing_time_ms: 0,
       },
     };
@@ -617,6 +632,7 @@ export async function enhanceImage(req: EnhanceImageRequest): Promise<EnhanceIma
     denoiseStrength: req.denoiseStrength ?? null,
     textureStrength: req.textureStrength ?? null,
     preserveTextLogo: req.preserveTextLogo ?? null,
+    engine: req.engine ?? null,
     outputDir: req.outputDir ?? null,
     outputName: req.outputName ?? null,
   })) as EnhanceImageResult;

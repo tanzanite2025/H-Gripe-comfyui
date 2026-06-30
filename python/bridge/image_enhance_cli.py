@@ -84,6 +84,10 @@ _VALID = {"conservative", "texture_rebuild", "print_ready", "custom"}
 # Engine ids are validated lazily against the sr_backends registry; "cpu" is the
 # always-available default and fallback.
 _CPU_ENGINE = "cpu"
+# Default compute-device selection for the GPU-capable engine: pick the best
+# accelerator present (mirrors sr_backends.DEVICE_AUTO; kept local so the module
+# stays import-light, like _CPU_ENGINE).
+_DEVICE_AUTO = "auto"
 
 # Default ceiling on *input* pixels (~96 MP). The decode is refused above this
 # so a decompression-bomb workflow asset cannot exhaust memory before we even
@@ -352,6 +356,12 @@ def enhance(args: argparse.Namespace) -> dict[str, Any]:
     engine_fallback_reason: str | None = None
     backend_model: str | None = None
     used_backend = False
+    # ``device`` selects the compute device for the GPU-capable engine (the CPU
+    # path always runs on CPU). ``device_used`` is the device the backend
+    # actually ran on, which can differ from the request (an explicit ``cuda``
+    # degrades to ``cpu`` on a box with no CUDA device).
+    device_requested = (getattr(args, "device", None) or _DEVICE_AUTO).strip().lower() or _DEVICE_AUTO
+    device_used: str | None = None
 
     if engine_requested != _CPU_ENGINE:
         from sr_backends import BackendUnavailable, resolve
@@ -368,7 +378,9 @@ def enhance(args: argparse.Namespace) -> dict[str, Any]:
                     engine_fallback_reason = reason
                 else:
                     try:
-                        rgb = backend.upscale(rgb, scale)
+                        rgb, device_used = backend.upscale(
+                            rgb, scale, device=device_requested
+                        )
                         used_backend = True
                         engine_used = backend.id
                         backend_model = Path(backend.weight_path()).name
@@ -445,6 +457,8 @@ def enhance(args: argparse.Namespace) -> dict[str, Any]:
         "engine_requested": engine_requested,
         "engine_fallback_reason": engine_fallback_reason,
         "backend_model": backend_model,
+        "device": device_used,
+        "device_requested": device_requested,
         "processing_time_ms": elapsed_ms,
     }
 
@@ -530,6 +544,14 @@ def build_parser() -> argparse.ArgumentParser:
         "--engine",
         default=_CPU_ENGINE,
         help="upscale engine: cpu (default) | realesrgan (opt-in, falls back to cpu)",
+    )
+    parser.add_argument(
+        "--device",
+        default=_DEVICE_AUTO,
+        help=(
+            "compute device for the GPU-capable engine: auto (default, cuda if "
+            "present else cpu) | cpu | cuda (degrades to cpu without a CUDA device)"
+        ),
     )
     parser.add_argument(
         "--probe-engines",

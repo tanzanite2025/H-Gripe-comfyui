@@ -37,6 +37,29 @@ def test_onnx_providers_cpu_only_box() -> None:
     assert sr_backends.onnx_providers(["SomeOtherProvider"]) == ["CPUExecutionProvider"]
 
 
+def test_resolve_device_auto_follows_availability() -> None:
+    # auto (the default) mirrors the torch backends' long-standing behaviour:
+    # cuda when a device is present, else cpu. Blank / None / unknown == auto.
+    assert sr_backends.resolve_device("auto", True) == "cuda"
+    assert sr_backends.resolve_device("auto", False) == "cpu"
+    assert sr_backends.resolve_device(None, True) == "cuda"
+    assert sr_backends.resolve_device("", False) == "cpu"
+    assert sr_backends.resolve_device("bogus", True) == "cuda"
+
+
+def test_resolve_device_explicit_cpu_always_cpu() -> None:
+    # An explicit cpu never touches the GPU even when one is present.
+    assert sr_backends.resolve_device("cpu", True) == "cpu"
+    assert sr_backends.resolve_device("CPU", False) == "cpu"
+
+
+def test_resolve_device_explicit_cuda_degrades_truthfully() -> None:
+    # cuda is honoured only when a device exists; on a CPU-only box it degrades
+    # to cpu (reported truthfully by the caller) rather than crashing the run.
+    assert sr_backends.resolve_device("cuda", True) == "cuda"
+    assert sr_backends.resolve_device("cuda", False) == "cpu"
+
+
 def test_resolve_cpu_and_blank_return_none() -> None:
     assert resolve("cpu") is None
     assert resolve("") is None

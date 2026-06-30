@@ -294,8 +294,15 @@ real-inference CI is gated like ViTMatte.
   engines honour that badge: a shared `sr_backends.onnx_providers()` selects
   `CUDAExecutionProvider` first when ONNX Runtime exposes it (CPU always last),
   mirroring the torch backends' "cuda if available else cpu" auto behaviour
-  instead of the old hard-coded CPU provider. ⛔ still:
-  an explicit per-node `device` / `precision` selection (the "local model
+  instead of the old hard-coded CPU provider. ✅ explicit per-node `device`
+  selection has landed for the Image Enhance engine: the `--device`
+  (`auto`/`cpu`/`cuda`) param threads into `RealEsrganBackend.upscale` via the
+  shared `sr_backends.resolve_device()` helper, and the enhance report records
+  both `device_requested` and the `device` the run *actually* used (an explicit
+  `cuda` degrades to `cpu` on a box with no CUDA device, reported truthfully).
+  ⛔ still: extend the `--device` param to the other engine cards + ONNX
+  backends, wire it through the Tauri commands / Graph executor and the
+  inspector UI, and a per-node `precision` selection (the "local model
   manager" surface).
 - **Determinism & safety:** seedable backends; keep the text/logo guards; require
   rule+ML agreement before any *automatic* (non-user-confirmed) repaint.

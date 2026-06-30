@@ -836,3 +836,125 @@ button:disabled { opacity: 0.6; cursor: default; }
 .toast.show { opacity: 1; }
 .toast.err { border-color: var(--danger); }
 .toast.ok { border-color: var(--ok); }
+
+/* ===================================================================
+   Subject Mask card: node body actions, shared Preview modal,
+   on-demand Mask-Edit modal + tool registry palette.
+   =================================================================== */
+
+/* node body */
+.subject-mask { display: flex; flex-direction: column; gap: 6px; }
+.node-thumb.click-select {
+  cursor: crosshair;
+  font-size: 11px;
+  color: var(--muted);
+}
+.subject-mask-actions { display: flex; gap: 4px; }
+.subject-mask-actions button {
+  flex: 1;
+  font-size: 11px;
+  padding: 4px 6px;
+  background: var(--panel-2);
+  color: var(--text);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  cursor: pointer;
+}
+.subject-mask-actions button:hover { background: #2a2f3d; }
+.subject-mask-actions button.primary { background: var(--accent); color: #00112e; border-color: var(--accent); }
+
+/* shared Preview modal (built on the media-viewer shell) */
+.media-viewer-actions button {
+  background: var(--panel-2);
+  color: var(--text);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  padding: 4px 10px;
+  cursor: pointer;
+  font-size: 12px;
+}
+.media-viewer-actions button:hover:not(:disabled) { background: #2a2f3d; }
+.media-viewer-actions button:disabled { color: var(--muted); cursor: default; opacity: 0.5; }
+.media-viewer-actions button.active { border-color: var(--accent); color: var(--accent); }
+.media-viewer-actions button.primary { background: var(--accent); color: #00112e; border-color: var(--accent); }
+.preview-modal { width: min(1100px, 92vw); }
+
+/* Mask-Edit modal */
+.media-viewer.mask-edit { width: min(1280px, 94vw); height: 88vh; }
+.mask-edit-body {
+  flex: 1;
+  min-height: 0;
+  display: grid;
+  grid-template-columns: 128px 1fr 240px;
+  gap: 10px;
+  padding: 10px;
+}
+.mask-edit-tools {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  overflow-y: auto;
+}
+.mask-tool {
+  position: relative;
+  text-align: left;
+  padding: 6px 8px;
+  background: var(--panel-2);
+  color: var(--text);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  cursor: pointer;
+  font-size: 12px;
+}
+.mask-tool:hover:not(:disabled) { background: #2a2f3d; }
+.mask-tool.active { border-color: var(--accent); color: var(--accent); }
+.mask-tool.planned { opacity: 0.45; cursor: not-allowed; }
+.mask-tool .soon {
+  position: absolute;
+  right: 6px;
+  font-style: normal;
+  font-size: 9px;
+  text-transform: uppercase;
+  color: var(--running);
+  opacity: 0.9;
+}
+.mask-edit-stage {
+  min-width: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background:
+    repeating-conic-gradient(#1a1d26 0% 25%, #11131a 0% 50%) 50% / 24px 24px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  overflow: hidden;
+}
+.mask-edit-canvas {
+  max-width: 100%;
+  max-height: 100%;
+  touch-action: none;
+  cursor: crosshair;
+  display: block;
+}
+.mask-edit-controls {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  overflow-y: auto;
+}
+.mask-edit-controls .field { margin-top: 6px; }
+.mask-op-list { display: flex; flex-wrap: wrap; gap: 4px; }
+.mask-op-chip {
+  font-size: 11px;
+  padding: 2px 7px;
+  border-radius: 999px;
+  background: rgba(91, 140, 255, 0.15);
+  color: var(--accent);
+  border: 1px solid rgba(91, 140, 255, 0.35);
+}
+.mask-edit-note { line-height: 1.5; }
+.mask-edit-note code {
+  background: #11131a;
+  padding: 0 4px;
+  border-radius: 4px;
+}

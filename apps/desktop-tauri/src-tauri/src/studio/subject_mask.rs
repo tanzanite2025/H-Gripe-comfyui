@@ -126,7 +126,7 @@ pub(super) fn execute_studio_subject_mask(
             Some(auto) => {
                 let prompt = optional(studio_value_to_string(inputs.get("prompt")));
                 let points = parse_point_prompts(inputs.get("edit_paths"));
-                let segmenter = segmenter_for_mode(auto);
+                let segmenter = segmenter_for_mode(auto, &points);
                 let result = segmenter.segment(&SegmentRequest {
                     image: &image,
                     mode: auto,

@@ -10,6 +10,7 @@
 //! - [`studio_image`]: decode-guard + colour-space loaders shared by native
 //!   (`Compute`) Rust cards.
 //! - [`subject_mask`]: the `subjectMask` node executor (native-Rust matte).
+//! - [`subject_sam2`]: SAM 2 interactive point-prompt segmenter (Compute lane).
 //! - [`persist`]: on-disk autosave, workflow files, recents, and pickers.
 //! - [`history`]: project-scoped snapshot / run-history JSON stores.
 //!
@@ -29,6 +30,7 @@ mod psd_export;
 mod studio_image;
 mod subject_mask;
 mod subject_model;
+mod subject_sam2;
 mod subject_segment;
 
 // Glob re-exports so the original `crate::studio::*` command paths keep

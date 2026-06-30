@@ -7,8 +7,14 @@ priority order; the first whose weight resolves is used, otherwise the card
 falls back to the deterministic `builtin-cpu` segmenter so the modes always
 work.
 
+When the request carries **point prompts** (the node's click-to-select), the
+interactive **SAM 2** backend is preferred instead — it segments *what the user
+clicked* rather than the most salient subject — falling through to the salient
+cascade below when its weights are absent.
+
 | Priority | Model | `provider` | License | Size | Tier |
 | --- | --- | --- | --- | --- | --- |
+| prompt | SAM 2 (tiny) | `sam2` | Apache-2.0 | ~154 MB | downloadable big tier (point-prompted) |
 | 1 | BiRefNet (lite) | `birefnet` | MIT | ~224 MB | downloadable big tier |
 | 2 | U²-Netp | `u2netp` | Apache-2.0 | ~4.6 MB | bundled default |
 | — | builtin CPU | `builtin-cpu` | — | — | always-on fallback |
@@ -26,6 +32,10 @@ by the scripts below into this directory; `bundle.resources` in
   (~224 MB). Place it here to bundle it for a release, or point
   `HGRIPE_BIREFNET_MODEL` at a local copy for dev; when present it is preferred
   over u2netp for higher-quality background removal.
+- **sam2_tiny.encoder / sam2_tiny.decoder** are the interactive *downloadable
+  big tier* (~154 MB combined) — not bundled by default. Place both here to
+  bundle for a release, or point `HGRIPE_SAM2_ENCODER` / `HGRIPE_SAM2_DECODER`
+  at local copies for dev; used only when the request carries point prompts.
 
 ## Models
 
@@ -41,12 +51,26 @@ by the scripts below into this directory; `bundle.resources` in
 - **Output:** `1x1x1024x1024` map (min-max normalised + thresholded)
 - **sha256:** `5600024376f572a557870a5eb0afb1e5961636bef4e1e22132025467d0f03333`
 
+### SAM 2 tiny (downloadable big tier, point-prompted)
+- **License:** Apache-2.0 (https://huggingface.co/vietanhdev/segment-anything-2-onnx-models)
+- **Two stages:** an image encoder run once + a light mask decoder.
+- **Encoder** `sam2_tiny.encoder.onnx` — input RGB `1x3x1024x1024` (`1/255`
+  rescaled + ImageNet-normalised); outputs `image_embed` `1x256x64x64` plus two
+  high-resolution feature maps.
+  - **sha256:** `4cc015ee18520e93f8c7ddfeaca7436039daaaaf19721b4b96a8810a805e82f7`
+- **Decoder** `sam2_tiny.decoder.onnx` — inputs the embeddings + `point_coords`
+  / `point_labels` (image space scaled into 1024) + a zeroed `mask_input`;
+  outputs candidate `masks` + `iou_predictions`. The highest-IoU mask is kept,
+  thresholded at logit `0`, and resized to the original image.
+  - **sha256:** `f5a4bd656c143899fb7f52d64ed81e6f6aeb37d477a0b6da50146ac7cf2187bf`
+
 ## Manual fetch (dev)
 
 ```sh
 # from the repo root
 bash scripts/fetch-subject-model.sh   # u2netp  (or .ps1)
 bash scripts/fetch-birefnet.sh        # birefnet (or .ps1)
+bash scripts/fetch-sam2.sh            # sam2 encoder + decoder (or .ps1)
 ```
 
 Or point the segmenter at any local weight without bundling:
@@ -54,4 +78,6 @@ Or point the segmenter at any local weight without bundling:
 ```sh
 export HGRIPE_SUBJECT_MODEL=/path/to/u2netp.onnx
 export HGRIPE_BIREFNET_MODEL=/path/to/birefnet_lite.onnx
+export HGRIPE_SAM2_ENCODER=/path/to/sam2_tiny.encoder.onnx
+export HGRIPE_SAM2_DECODER=/path/to/sam2_tiny.decoder.onnx
 ```

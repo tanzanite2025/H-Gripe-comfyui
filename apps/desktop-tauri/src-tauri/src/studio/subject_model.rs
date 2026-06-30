@@ -101,13 +101,20 @@ pub(crate) fn set_resource_dir(dir: Option<PathBuf>) {
 
 /// Resolve a model's weight, or `None` when it is not present anywhere.
 fn resolve_weight(spec: &ModelSpec) -> Option<PathBuf> {
-    if let Ok(explicit) = std::env::var(spec.env_var) {
+    resolve_model_file(spec.env_var, spec.file_name)
+}
+
+/// Resolve an ONNX weight file: env override first, then the bundled / in-repo
+/// `resources/models/` locations. Shared by the single-file salient models here
+/// and the two-file SAM 2 backend in [`super::subject_sam2`].
+pub(super) fn resolve_model_file(env_var: &str, file_name: &str) -> Option<PathBuf> {
+    if let Ok(explicit) = std::env::var(env_var) {
         let path = PathBuf::from(explicit);
         if path.is_file() {
             return Some(path);
         }
     }
-    let rel = Path::new("resources").join("models").join(spec.file_name);
+    let rel = Path::new("resources").join("models").join(file_name);
     if let Some(dir) = RESOURCE_DIR.get().cloned().flatten() {
         let bundled = dir.join(&rel);
         if bundled.is_file() {
@@ -247,7 +254,7 @@ fn postprocess(saliency: &[f32], size: u32, width: u32, height: u32) -> GrayImag
     image::imageops::resize(&small, width, height, FilterType::Triangle)
 }
 
-fn constrain_to_placeholder(mask: &mut GrayImage, placeholder: &GrayImage) {
+pub(super) fn constrain_to_placeholder(mask: &mut GrayImage, placeholder: &GrayImage) {
     if placeholder.dimensions() != mask.dimensions() {
         return;
     }
@@ -261,7 +268,7 @@ fn constrain_to_placeholder(mask: &mut GrayImage, placeholder: &GrayImage) {
     }
 }
 
-fn selection_bbox(mask: &GrayImage) -> Option<(u32, u32, u32, u32)> {
+pub(super) fn selection_bbox(mask: &GrayImage) -> Option<(u32, u32, u32, u32)> {
     let (width, height) = mask.dimensions();
     let (mut x0, mut y0, mut x1, mut y1) = (u32::MAX, u32::MAX, 0u32, 0u32);
     let mut any = false;
@@ -279,7 +286,7 @@ fn selection_bbox(mask: &GrayImage) -> Option<(u32, u32, u32, u32)> {
     any.then_some((x0, y0, x1, y1))
 }
 
-fn coverage(mask: &GrayImage) -> f64 {
+pub(super) fn coverage(mask: &GrayImage) -> f64 {
     let total = mask.pixels().len();
     if total == 0 {
         return 0.0;

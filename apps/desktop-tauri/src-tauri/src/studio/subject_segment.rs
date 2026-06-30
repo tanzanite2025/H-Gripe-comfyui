@@ -93,10 +93,21 @@ pub(super) trait SubjectSegmenter {
     fn segment(&self, request: &SegmentRequest) -> Result<SegmentResult, String>;
 }
 
-/// Choose the segmenter for an auto mode: the ONNX model backend when a weight
-/// is resolvable, else the deterministic builtin CPU fallback. The call site
-/// (`subject_mask`) is unchanged either way.
-pub(super) fn segmenter_for_mode(mode: AutoMode) -> Box<dyn SubjectSegmenter> {
+/// Choose the segmenter for an auto mode. When the request carries point
+/// prompts, the interactive SAM 2 backend is preferred (it segments *what the
+/// user clicked*) if both its weights resolve. Otherwise the prompt-free
+/// salient model backend (BiRefNet → U²-Netp) is used when a weight resolves,
+/// and finally the deterministic builtin CPU fallback. The call site
+/// (`subject_mask`) hands the same `SegmentRequest` to whichever is returned.
+pub(super) fn segmenter_for_mode(
+    mode: AutoMode,
+    points: &[(u32, u32)],
+) -> Box<dyn SubjectSegmenter> {
+    if !points.is_empty() {
+        if let Some(sam2) = super::subject_sam2::Sam2Segmenter::resolve_and_load() {
+            return Box::new(sam2);
+        }
+    }
     if let Some(model) = super::subject_model::model_segmenter_for_mode(mode) {
         return Box::new(model);
     }
@@ -355,7 +366,7 @@ mod tests {
     #[test]
     fn builtin_selects_foreground_block() {
         let image = scene_with_block();
-        let result = segmenter_for_mode(AutoMode::Subject)
+        let result = segmenter_for_mode(AutoMode::Subject, &[])
             .segment(&SegmentRequest {
                 image: &image,
                 mode: AutoMode::Subject,

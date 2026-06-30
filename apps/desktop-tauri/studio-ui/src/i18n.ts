@@ -325,9 +325,10 @@ export const messages = {
   "node.mediaCrop": { en: "Crop", zh: "裁剪" },
   "node.mediaCropSoon": { en: "Crop — coming soon", zh: "裁剪 — 即将推出" },
   "node.mediaCropTitle": {
-    en: "Create a bound crop node from this image and open its editor",
-    zh: "基于此图新建一个绑定的裁剪节点并打开编辑器",
+    en: "Create a bound crop node from this image and draw the box manually",
+    zh: "基于此图新建一个绑定的裁剪节点，手动框选裁剪框",
   },
+  "node.cropAuto": { en: "Crop to subject (auto)", zh: "裁剪到主体（自动）" },
   "crop.title": { en: "Crop", zh: "裁剪" },
   "crop.modeManual": { en: "Manual box", zh: "手动框" },
   "crop.modeAuto": { en: "Auto (to subject)", zh: "自动（到主体）" },

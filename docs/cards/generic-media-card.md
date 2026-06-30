@@ -85,8 +85,22 @@ card, mirroring the `subjectMask` card body pattern (thumbnail + action row):
 | Info row | `width × height` (free — `generateThumbnail` already returns dims), file basename; format / DPI / size are a later enrich |
 | Action row | icon buttons that each **spawn a bound edit node** + open its editor: `Mask`, `Crop`, … (`planned` ones render greyed) |
 
-The action buttons call a new `editing.addBoundEdit(sourceId, editKind)` context
-method (see below); they do **not** mutate `imageSource`.
+The action buttons call `editing.addBoundEdit(sourceId, editKind, opts?)` (see
+below); they do **not** mutate `imageSource`. `opts` is what splits the auto vs
+manual entry points for the same edit kind:
+
+- **Manual** lives on the card action row. The `Crop` button calls
+  `addBoundEdit(id, "crop", { params: { mode: "manual" }, openEditor: true })` —
+  spawns the bound crop node and opens `CropEditModal` to draw the box.
+- **Auto** lives on the node's **right-click menu**. For an `imageSource` node
+  the menu shows `Crop to subject (auto)`, which calls
+  `addBoundEdit(id, "crop", { params: { mode: "auto_subject" }, openEditor: false, run: true })`
+  — spawns the bound crop node and runs its ancestor subgraph (run-up-to-node)
+  straight away, surfacing the cropped result with no editor.
+
+This is the general shape for every edit kind: the human-spatial-intent lane is a
+card button (opens an editor), the algorithm-derived lane is a right-click entry
+(`openEditor: false, run: true`).
 
 ## Video card (`videoSource`, new) — separate track
 

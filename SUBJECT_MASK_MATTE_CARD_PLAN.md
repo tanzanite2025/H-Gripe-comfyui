@@ -386,6 +386,22 @@ Phase 2（接模型，ort/candle）：点选 = SAM point-prompt，模型算 mask
 
 **后端语言 = 原生 Rust（已定）。** 本卡不走 `python/bridge`，图像处理用 `image` + `imageproc` 在进程内做；新增可复用 `studio_image`（解码守卫 + 色彩空间归一化），为后续 Rust 卡共用。因现有 `StudioExecutor::Local` 结构上等价于"python-bridge"，本卡走新增的 `Compute` 通道（内进程 Rust，无网络）。
 
+## 实现进度
+
+| 阶段 | 内容 | PR | 状态 |
+| --- | --- | --- | --- |
+| Phase 1 后端 | `Compute` 执行通道 + `studio_image` + 魔棒/画笔/形态学/羽化 + 三联输出 + `matte_report` | #96 | ✅ 已合并 |
+| Phase 1 前端 | 共享预览弹窗 + 按需精修弹窗 + 节点 body + 工具注册表(ready/planned) | #98 | ✅ 已合并 |
+| Phase 2 骨架 | `SubjectSegmenter` trait + 确定性 `builtin-cpu` 兜底（点选/placeholder 约束） | #100 | ✅ 已合并 |
+| Phase 2 模型 | U²-Netp(ort) 后端 + `ModelSpec` 加载/打包权重解析 | #101 | ✅ 已合并 |
+| 级联 1 | BiRefNet 高质量去背后端（可下载大档，sha256 校验） | #102 | ✅ 已合并 |
+| 级联 2a | SAM2 交互点选后端（encoder+decoder 两段，点选提示路由） | #103 | ✅ 已合并 |
+| 级联 2b | 前端把节点点选坐标接到 SAM2：`Point (SAM 2)` 工具写 `edit_paths.points` | 本 PR | ✅ |
+| 级联 3 | ViTMatte / trimap 连续 alpha 抠图，喂给 Refine Mask Edge | — | ⏳ 待开 |
+| Phase 3 | 钢笔/套索路径栅格化（注册表里现为 planned 占位） | — | ⏳ 待开 |
+
+**点选 → SAM2 链路（本 PR / 级联 2b）**：精修弹窗新增 `Point (SAM 2)` 工具，每次点击把图像坐标记进 `edit_paths.points`（绿色十字标记 + 计数，支持撤销/重做、随节点 `edit_paths` 参数持久化）。后端 `segmenter_for_mode(mode, points)` 在 `auto_*` 模式下：有 points → 走 SAM2（`provider: sam2`），无 points → 走 BiRefNet→U²-Netp→builtin 显著性级联。前端纯数据接线，模型仍跑在 Rust `Compute` 内进程。
+
 ## 结论
 
 这个卡片应该做，而且应该是 H-Gripe Studio 的核心生产卡片之一。

@@ -35,6 +35,7 @@ export function normalizeEditPaths(value: unknown): EditPaths {
     paths: Array.isArray(v.paths) ? v.paths : [],
     brush_strokes: Array.isArray(v.brush_strokes) ? v.brush_strokes : [],
     operations: Array.isArray(v.operations) ? v.operations : [],
+    points: Array.isArray(v.points) ? v.points : [],
   };
 }
 
@@ -59,6 +60,14 @@ export function addOperation(state: EditState, op: MaskOperation): EditState {
   return commit(state, {
     ...state.current,
     operations: [...state.current.operations, op],
+  });
+}
+
+/** Append a positive SAM 2 point prompt (image-space `[x, y]`). */
+export function addPoint(state: EditState, point: [number, number]): EditState {
+  return commit(state, {
+    ...state.current,
+    points: [...state.current.points, point],
   });
 }
 
@@ -89,11 +98,17 @@ export function isEmpty(edits: EditPaths): boolean {
   return (
     edits.paths.length === 0 &&
     edits.brush_strokes.length === 0 &&
-    edits.operations.length === 0
+    edits.operations.length === 0 &&
+    edits.points.length === 0
   );
 }
 
 /** Count of applied edits, for the modal's status line. */
 export function editCount(edits: EditPaths): number {
-  return edits.paths.length + edits.brush_strokes.length + edits.operations.length;
+  return (
+    edits.paths.length +
+    edits.brush_strokes.length +
+    edits.operations.length +
+    edits.points.length
+  );
 }

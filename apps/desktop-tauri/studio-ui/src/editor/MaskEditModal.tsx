@@ -9,6 +9,7 @@ import {
 import {
   addBrushStroke,
   addOperation,
+  addPoint,
   canRedo,
   canUndo,
   clearEdits,
@@ -30,6 +31,7 @@ const DEFAULT_H = 640;
 type Action =
   | { type: "stroke"; stroke: BrushStroke }
   | { type: "op"; op: MaskOperation }
+  | { type: "point"; point: [number, number] }
   | { type: "undo" }
   | { type: "redo" }
   | { type: "clear" };
@@ -40,6 +42,8 @@ function reducer(state: EditState, action: Action): EditState {
       return addBrushStroke(state, action.stroke);
     case "op":
       return addOperation(state, action.op);
+    case "point":
+      return addPoint(state, action.point);
     case "undo":
       return undo(state);
     case "redo":
@@ -186,6 +190,24 @@ export function MaskEditModal({
     const live = drawing.current;
     if (live) paintStroke({ mode: tool.mode ?? "add", radius: brushSize, points: live.points });
 
+    // SAM 2 point prompts: numbered crosshair markers.
+    state.current.points.forEach(([x, y], i) => {
+      ctx.strokeStyle = "rgba(120,230,140,0.95)";
+      ctx.fillStyle = "rgba(120,230,140,0.95)";
+      ctx.lineWidth = 2;
+      ctx.beginPath();
+      ctx.moveTo(x - 9, y);
+      ctx.lineTo(x + 9, y);
+      ctx.moveTo(x, y - 9);
+      ctx.lineTo(x, y + 9);
+      ctx.stroke();
+      ctx.beginPath();
+      ctx.arc(x, y, 3, 0, Math.PI * 2);
+      ctx.fill();
+      ctx.font = "600 13px system-ui, sans-serif";
+      ctx.fillText(String(i + 1), x + 11, y - 6);
+    });
+
     const mq = marquee.current;
     if (mq) {
       const [x1, y1] = mq.start;
@@ -202,7 +224,7 @@ export function MaskEditModal({
       }
       ctx.setLineDash([]);
     }
-  }, [dims.w, dims.h, underlay, overlayOnly, state.current.brush_strokes, tool.mode, tool.id, brushSize]);
+  }, [dims.w, dims.h, underlay, overlayOnly, state.current.brush_strokes, state.current.points, tool.mode, tool.id, brushSize]);
 
   useEffect(() => {
     redraw();
@@ -221,6 +243,9 @@ export function MaskEditModal({
     } else if (tool.kind === "click") {
       // Magic-wand: record a seeded flood-fill op for the backend.
       dispatch({ type: "op", op: { type: "wand", amount: tolerance, region: pt } });
+    } else if (tool.kind === "point") {
+      // SAM 2 point prompt: record the clicked point for the backend.
+      dispatch({ type: "point", point: pt });
     }
   };
 
@@ -269,6 +294,7 @@ export function MaskEditModal({
 
   const count = editCount(state.current);
   const ops = state.current.operations;
+  const points = state.current.points;
   const showAmount = useMemo(
     () => tool.kind === "global" || ["grow", "shrink", "feather", "smooth"].includes(toolId),
     [tool.kind, toolId],
@@ -374,9 +400,25 @@ export function MaskEditModal({
               </div>
             </div>
 
+            <div className="field">
+              <span>SAM 2 points ({points.length})</span>
+              <div className="mask-op-list">
+                {points.length === 0 ? (
+                  <small className="muted">none — pick Point (SAM 2) and click the subject</small>
+                ) : (
+                  points.map(([x, y], i) => (
+                    <span key={i} className="mask-op-chip">
+                      #{i + 1} {x},{y}
+                    </span>
+                  ))
+                )}
+              </div>
+            </div>
+
             <small className="muted mask-edit-note">
-              Edits ({count}) are recorded as <code>edit_paths</code> and rasterised by the
-              backend on run; pen/lasso/matting are planned (greyed).
+              Edits ({count}) are recorded as <code>edit_paths</code> and applied by the
+              backend on run. Point (SAM 2) prompts route auto modes to the SAM 2
+              segmenter; pen/lasso/matting are planned (greyed).
             </small>
           </div>
         </div>

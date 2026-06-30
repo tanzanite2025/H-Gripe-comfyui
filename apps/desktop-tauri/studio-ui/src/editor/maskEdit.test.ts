@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import {
   addBrushStroke,
   addOperation,
+  addPoint,
   canRedo,
   canUndo,
   clearEdits,
@@ -52,6 +53,20 @@ describe("maskEdit reducer-style helpers", () => {
     expect(isEmpty(s.current)).toBe(false);
   });
 
+  it("records SAM 2 point prompts and counts them", () => {
+    let s = initEditState();
+    s = addPoint(s, [120, 80]);
+    s = addPoint(s, [200, 150]);
+    expect(s.current.points).toEqual([
+      [120, 80],
+      [200, 150],
+    ]);
+    expect(editCount(s.current)).toBe(2);
+    expect(isEmpty(s.current)).toBe(false);
+    s = undo(s);
+    expect(s.current.points).toEqual([[120, 80]]);
+  });
+
   it("ignores empty strokes", () => {
     let s = initEditState();
     s = addBrushStroke(s, { id: "x", mode: "add", radius: 4, points: [] });
@@ -98,7 +113,7 @@ describe("maskEdit reducer-style helpers", () => {
   });
 
   it("seeds from an initial EditPaths", () => {
-    const s = initEditState({ version: 1, paths: [], brush_strokes: [stroke("s0")], operations: [] });
+    const s = initEditState({ version: 1, paths: [], brush_strokes: [stroke("s0")], operations: [], points: [] });
     expect(editCount(s.current)).toBe(1);
     expect(canUndo(s)).toBe(false);
   });

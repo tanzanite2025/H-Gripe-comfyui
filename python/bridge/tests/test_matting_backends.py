@@ -157,11 +157,16 @@ def test_onnx_matting_runs_with_synthetic_model(
     trimap[:8] = 1.0
     trimap[-8:] = 0.0
 
-    alpha = backend.matte(rgb, trimap)
+    alpha, device_used = backend.matte(rgb, trimap)
     # Geometry contract: solved alpha matches the source subject size.
     assert alpha.shape == rgb.shape[:2]
     assert alpha.dtype == np.float32
     assert float(alpha.min()) >= 0.0 and float(alpha.max()) <= 1.0
+    # CPU-only ORT in CI: the session binds the CPU provider, reported truthfully
+    # even when cuda is requested (it degrades rather than crashing the run).
+    assert device_used == "cpu"
+    _, forced = backend.matte(rgb, trimap, device="cuda")
+    assert forced == "cpu"
 
 
 @requires_onnx
@@ -210,4 +215,7 @@ def test_onnx_matting_dispatch_via_refine(
     assert report["engine_requested"] == "onnx_matting"
     assert report["engine_fallback_reason"] is None
     assert report["backend_model"] == "matting.onnx"
+    # device defaults to auto; on CPU-only ORT the session ran on cpu.
+    assert report["device_requested"] == "auto"
+    assert report["device"] == "cpu"
     assert report["trimap_applied"] is True

@@ -80,14 +80,18 @@ class MattingBackend(Protocol):
         """Resolved path of the (non-bundled) weight this matter would load."""
         ...
 
-    def matte(self, rgb: Any, trimap: Any) -> Any:
+    def matte(self, rgb: Any, trimap: Any, device: str | None = None) -> tuple[Any, str]:
         """Solve a refined alpha from a subject image and a matting trimap.
 
         ``rgb`` is the subject as an ``(H, W, 3)`` uint8 array and ``trimap`` its
         ``(H, W)`` float trimap in 0..1 (``0`` = background, ``~0.5`` = unknown,
-        ``1`` = foreground). Returns an ``(H, W)`` float alpha in 0..1 the same
-        size as ``rgb``. Raises :class:`MattingUnavailable` if deps / weights
-        vanished between the probe and the call.
+        ``1`` = foreground). ``device`` selects the ONNX execution provider
+        (``auto`` by default). Returns ``(alpha, device_used)`` where ``alpha``
+        is an ``(H, W)`` float in 0..1 the same size as ``rgb`` and
+        ``device_used`` is the ``cpu`` / ``cuda`` the session actually bound (an
+        explicit ``cuda`` degrades to ``cpu`` without an accelerator provider).
+        Raises :class:`MattingUnavailable` if deps / weights vanished between the
+        probe and the call.
         """
         ...
 

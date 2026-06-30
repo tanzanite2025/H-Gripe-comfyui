@@ -136,7 +136,7 @@ def weight_info(path: Path) -> dict[str, Any]:
 _PREFERRED_ONNX_PROVIDERS = ("CUDAExecutionProvider",)
 
 
-def onnx_providers(available: list[str] | None = None) -> list[str]:
+def onnx_providers(available: list[str] | None = None, device: str | None = None) -> list[str]:
     """Execution providers for an ONNX session, preferring a GPU when present.
 
     The ONNX engines (matting / colour harmonise / defect) used to hard-code the
@@ -146,6 +146,13 @@ def onnx_providers(available: list[str] | None = None) -> list[str]:
     used first when ONNX Runtime exposes it, with ``CPUExecutionProvider`` always
     last as the universal fallback.
 
+    ``device`` is the provider analogue of :func:`resolve_device`: ``auto`` (the
+    default) keeps the GPU-first behaviour, an explicit ``cpu`` pins the CPU
+    provider (so an operator can keep the GPU free), and an explicit ``cuda``
+    still degrades to CPU when ORT exposes no accelerator (the session always
+    builds). ``provider_device`` maps the chosen list back to a ``cpu`` / ``cuda``
+    label for truthful run telemetry.
+
     ``available`` is the ORT-reported provider list; it is injected for testing
     and queried lazily (``onnxruntime.get_available_providers()``) when omitted.
     """
@@ -153,8 +160,28 @@ def onnx_providers(available: list[str] | None = None) -> list[str]:
         import onnxruntime as ort
 
         available = [str(p) for p in ort.get_available_providers()]
+    name = (device or DEVICE_AUTO).strip().lower() or DEVICE_AUTO
+    if name == "cpu":
+        return ["CPUExecutionProvider"]
+    # auto / cuda both want a known accelerator first when ORT exposes one; CPU
+    # is always appended so the session never fails to build (a cuda request on
+    # a CPU-only box simply runs on CPU, reported truthfully by the caller).
     preferred = [p for p in _PREFERRED_ONNX_PROVIDERS if p in available]
     return [*preferred, "CPUExecutionProvider"]
+
+
+def provider_device(providers: list[str]) -> str:
+    """``cpu`` / ``cuda`` label for the provider an ONNX session actually used.
+
+    The first entry of ``session.get_providers()`` is the one ORT bound; a known
+    accelerator tag (CUDA / TensorRT / ROCm) means the run is GPU-backed, so the
+    caller can report the device truthfully (an explicit ``cuda`` that degraded
+    to the CPU provider is reported as ``cpu``).
+    """
+    first = providers[0] if providers else "CPUExecutionProvider"
+    if any(tag in first for tag in ("CUDA", "Tensorrt", "TensorRT", "ROCM")):
+        return "cuda"
+    return "cpu"
 
 
 def _engine_weight(backend: Any) -> dict[str, Any] | None:

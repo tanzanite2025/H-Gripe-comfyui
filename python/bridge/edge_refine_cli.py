@@ -290,12 +290,16 @@ def _coverage(mask: "np.ndarray") -> float:
 # The always-available CPU heuristic is the default "engine"; learned matters
 # register in ``matting_backends`` and are selected by ``--engine``.
 _CPU_ENGINE = "cpu"
+# Default compute-device selection for the learned matter (mirrors
+# sr_backends.DEVICE_AUTO; kept local so the module stays import-light).
+_DEVICE_AUTO = "auto"
 
 
 def _run_matting(
     engine_requested: str,
     rgb: "np.ndarray",
     trimap: "np.ndarray",
+    device_requested: str,
 ) -> tuple[dict[str, Any], "np.ndarray | None"]:
     """Run the opt-in learned matter for ``engine_requested`` (or the CPU path).
 
@@ -308,6 +312,7 @@ def _run_matting(
         "engine": _CPU_ENGINE,
         "fallback_reason": None,
         "backend_model": None,
+        "device": None,
     }
 
     from matting_backends import MattingUnavailable, resolve
@@ -323,7 +328,7 @@ def _run_matting(
         return state, None
 
     try:
-        alpha = backend.matte(rgb, trimap)
+        alpha, state["device"] = backend.matte(rgb, trimap, device=device_requested)
     except MattingUnavailable as err:
         state["fallback_reason"] = err.reason
         return state, None
@@ -408,10 +413,16 @@ def refine(args: argparse.Namespace) -> dict[str, Any]:
     # solved alpha replaces the source matte in the protected band only, so the
     # definite FG/BG regions still get the heuristic edge clean-up.
     engine_requested = (getattr(args, "engine", _CPU_ENGINE) or _CPU_ENGINE).strip()
+    # ``device`` selects the ONNX execution provider for the learned matter (the
+    # CPU heuristic always runs on CPU). ``device`` in the report is the one the
+    # session actually bound, which can differ from the request (an explicit
+    # ``cuda`` degrades to ``cpu`` when ORT exposes no accelerator).
+    device_requested = (getattr(args, "device", None) or _DEVICE_AUTO).strip().lower() or _DEVICE_AUTO
     engine_state: dict[str, Any] = {
         "engine": _CPU_ENGINE,
         "fallback_reason": None,
         "backend_model": None,
+        "device": None,
     }
     band_source = mask
     if engine_requested != _CPU_ENGINE:
@@ -420,7 +431,9 @@ def refine(args: argparse.Namespace) -> dict[str, Any]:
                 "no trimap reference (learned matting needs an unknown band)"
             )
         else:
-            engine_state, engine_alpha = _run_matting(engine_requested, rgb, trimap)
+            engine_state, engine_alpha = _run_matting(
+                engine_requested, rgb, trimap, device_requested
+            )
             if engine_alpha is not None:
                 band_source = engine_alpha
 
@@ -508,6 +521,8 @@ def refine(args: argparse.Namespace) -> dict[str, Any]:
         "engine_requested": engine_requested,
         "engine_fallback_reason": engine_state["fallback_reason"],
         "backend_model": engine_state["backend_model"],
+        "device": engine_state["device"],
+        "device_requested": device_requested,
     }
     if note is not None:
         edge_report["note"] = note
@@ -596,6 +611,15 @@ def build_parser() -> argparse.ArgumentParser:
         type=int,
         default=_DEFAULT_MAX_DECODE_PIXELS,
         help="refuse inputs larger than this many pixels before decoding (0 disables)",
+    )
+    parser.add_argument(
+        "--device",
+        default=_DEVICE_AUTO,
+        help=(
+            "compute device for the learned matter: auto (default, cuda provider "
+            "if present else cpu) | cpu | cuda (degrades to cpu without an "
+            "accelerator provider)"
+        ),
     )
     parser.add_argument(
         "--engine",

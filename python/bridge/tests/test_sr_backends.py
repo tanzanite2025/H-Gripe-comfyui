@@ -37,6 +37,34 @@ def test_onnx_providers_cpu_only_box() -> None:
     assert sr_backends.onnx_providers(["SomeOtherProvider"]) == ["CPUExecutionProvider"]
 
 
+def test_onnx_providers_device_cpu_pins_cpu_provider() -> None:
+    # An explicit cpu pins the CPU provider even on a CUDA box, so an operator
+    # can keep the GPU free for another engine.
+    assert sr_backends.onnx_providers(
+        ["CUDAExecutionProvider", "CPUExecutionProvider"], device="cpu"
+    ) == ["CPUExecutionProvider"]
+
+
+def test_onnx_providers_device_cuda_degrades_without_accelerator() -> None:
+    # cuda requested but ORT exposes no accelerator: still just CPU (the session
+    # always builds), same as auto.
+    assert sr_backends.onnx_providers(["CPUExecutionProvider"], device="cuda") == [
+        "CPUExecutionProvider"
+    ]
+    # cuda requested and present: accelerator first, CPU as the fallback.
+    assert sr_backends.onnx_providers(
+        ["CUDAExecutionProvider", "CPUExecutionProvider"], device="cuda"
+    ) == ["CUDAExecutionProvider", "CPUExecutionProvider"]
+
+
+def test_provider_device_labels_the_bound_provider() -> None:
+    # The label tracks the *first* (bound) provider, so a degraded cuda request
+    # that fell back to the CPU provider is reported truthfully as cpu.
+    assert sr_backends.provider_device(["CUDAExecutionProvider", "CPUExecutionProvider"]) == "cuda"
+    assert sr_backends.provider_device(["CPUExecutionProvider"]) == "cpu"
+    assert sr_backends.provider_device([]) == "cpu"
+
+
 def test_resolve_device_auto_follows_availability() -> None:
     # auto (the default) mirrors the torch backends' long-standing behaviour:
     # cuda when a device is present, else cpu. Blank / None / unknown == auto.

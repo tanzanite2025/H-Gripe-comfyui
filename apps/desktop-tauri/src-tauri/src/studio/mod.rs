@@ -28,6 +28,7 @@ mod psd_analyze;
 mod psd_export;
 mod studio_image;
 mod subject_mask;
+mod subject_segment;
 
 // Glob re-exports so the original `crate::studio::*` command paths keep
 // resolving from `main.rs`'s `generate_handler!`. A plain `use exec::cmd` only

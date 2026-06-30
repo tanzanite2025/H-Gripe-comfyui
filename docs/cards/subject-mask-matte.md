@@ -219,7 +219,7 @@ constrain / seed the subject.
 | Input larger than `max_decode_pixels` | `input image too large to decode safely: <path> WxH ...` (before allocation). |
 | Empty selection after edits | Emits a fully-transparent mask + `mask_coverage: 0.0`; never panics. |
 | EXIF-rotated image | Orientation normalised; `exif_transposed: true`. |
-| `auto_*` mode in Phase 1 | Falls back to an empty / `previous_mask` base for manual editing (no model yet). |
+| `auto_*` mode (no model weights yet) | A deterministic built-in CPU segmenter produces the base matte (border-background distance + largest connected component, point-prompt aware); `provider: builtin-cpu`. A `previous_mask`, if connected, still takes precedence as continuation. |
 | Unsafe `output_name` | Rejected via `studio_reject_unsafe_basename`. |
 
 ## Determinism
@@ -236,6 +236,13 @@ model id in `matte_report`.
 2. **Auto subject** — SAM / RMBG / BiRefNet in-process via `ort` / `candle` on the
    `Compute` lane; the node's click-to-select becomes a model point-prompt. A
    *remote* segmentation API instead moves that mode to `Api` / `Hybrid`.
+   - *Landed (skeleton):* a `SubjectSegmenter` trait routes the four `auto_*`
+     modes through the `Compute` lane, with a deterministic `builtin-cpu`
+     fallback so the modes work end-to-end without model weights. `matte_report`
+     carries `provider` and `detected_subjects` (`label` / `bbox` / `coverage`).
+   - *Pending:* the real `ort` / `candle` model backend slots into
+     `segmenter_for_mode` once weights are sourced; it reports its model id
+     (e.g. `birefnet`) as `provider`.
 3. **Pen paths** — bezier rasterise, path add/subtract/intersect, re-editable.
 4. **Alpha matting** — continuous alpha (hair / glass / translucency), trimap,
    tighter `Refine Mask Edge` hand-off.

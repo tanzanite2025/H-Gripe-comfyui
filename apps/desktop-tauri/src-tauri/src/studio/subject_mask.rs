@@ -23,6 +23,7 @@ use super::graph::{
 };
 use super::persist::studio_reject_unsafe_basename;
 use super::studio_image;
+use super::subject_segment::{segmenter_for_mode, AutoMode, SegmentRequest};
 
 const MASK_ON: u8 = 255;
 const MASK_OFF: u8 = 0;
@@ -103,17 +104,52 @@ pub(super) fn execute_studio_subject_mask(
     let image = loaded.image;
     let (width, height) = image.dimensions();
 
-    // Base mask: continue a prior mask, else seed from a PSD placeholder, else
-    // start empty (a fully transparent matte is a valid Phase-1 result).
+    let mode = param_or(node, "mode", "hybrid");
+    let auto_mode = AutoMode::from_mode(&mode);
+    let mut operations: Vec<Value> = Vec::new();
+    let mut detected_subjects: Vec<Value> = Vec::new();
+    // `rust-native` for the manual / hybrid lanes; an `auto_*` mode reports the
+    // segmenter that produced its base matte (today the builtin fallback).
+    let mut provider = "rust-native".to_string();
+
+    let placeholder = match optional(studio_value_to_string(inputs.get("placeholder_mask"))) {
+        Some(path) => Some(load_mask_sized(&path, width, height, max_decode_pixels)?),
+        None => None,
+    };
+
+    // Base mask: continue a prior mask; else for an `auto_*` mode segment a base
+    // matte from the image; else seed from a PSD placeholder; else start empty
+    // (a fully transparent matte is a valid result).
     let mut mask = match optional(studio_value_to_string(inputs.get("previous_mask"))) {
         Some(path) => load_mask_sized(&path, width, height, max_decode_pixels)?,
-        None => match optional(studio_value_to_string(inputs.get("placeholder_mask"))) {
-            Some(path) => load_mask_sized(&path, width, height, max_decode_pixels)?,
-            None => GrayImage::from_pixel(width, height, Luma([MASK_OFF])),
+        None => match auto_mode {
+            Some(auto) => {
+                let prompt = optional(studio_value_to_string(inputs.get("prompt")));
+                let points = parse_point_prompts(inputs.get("edit_paths"));
+                let segmenter = segmenter_for_mode(auto);
+                let result = segmenter.segment(&SegmentRequest {
+                    image: &image,
+                    mode: auto,
+                    placeholder: placeholder.as_ref(),
+                    prompt: prompt.as_deref(),
+                    points: &points,
+                })?;
+                provider = segmenter.provider().to_string();
+                detected_subjects = result.detected_subjects;
+                operations.push(json!({
+                    "type": "auto_segment",
+                    "mode": mode,
+                    "provider": provider,
+                }));
+                result.mask
+            }
+            None => match &placeholder {
+                Some(seed) => seed.clone(),
+                None => GrayImage::from_pixel(width, height, Luma([MASK_OFF])),
+            },
         },
     };
 
-    let mut operations: Vec<Value> = Vec::new();
     let wand_tolerance = number_param(node, "wand_tolerance", 24.0).clamp(0.0, 255.0) as i32;
 
     apply_edit_paths(
@@ -194,14 +230,14 @@ pub(super) fn execute_studio_subject_mask(
     .map_err(|err| format!("failed to write {}: {err}", paths_path.display()))?;
 
     let report = MatteReport {
-        mode: param_or(node, "mode", "hybrid"),
-        provider: "rust-native".to_string(),
+        mode,
+        provider,
         source_mode: loaded.meta.source_mode.clone(),
         exif_transposed: loaded.meta.exif_transposed,
         max_decode_pixels,
         image_size: [width, height],
         mask_coverage: coverage,
-        detected_subjects: Vec::new(),
+        detected_subjects,
         operations,
         triplet: Triplet {
             mask: mask_path.is_file(),
@@ -570,6 +606,28 @@ fn normalise_edit_paths(value: Option<&Value>) -> Value {
         .unwrap_or_else(|| json!({ "version": 1, "paths": [], "brush_strokes": [] }))
 }
 
+/// Optional point prompts for the auto-subject segmenter, read from a top-level
+/// `points` array on `edit_paths` (`[[x, y], ...]` or `[{ "x", "y" }, ...]`).
+/// Absent ⇒ no prompts (the segmenter falls back to its largest component).
+fn parse_point_prompts(edit_paths: Option<&Value>) -> Vec<(u32, u32)> {
+    let Some(value) = parse_edit_paths(edit_paths) else {
+        return Vec::new();
+    };
+    value
+        .get("points")
+        .and_then(Value::as_array)
+        .into_iter()
+        .flatten()
+        .filter_map(|item| match item {
+            Value::Array(pair) if pair.len() >= 2 => {
+                Some((json_u32(Some(&pair[0]))?, json_u32(Some(&pair[1]))?))
+            }
+            Value::Object(_) => Some((json_u32(item.get("x"))?, json_u32(item.get("y"))?)),
+            _ => None,
+        })
+        .collect()
+}
+
 fn parse_points(value: Option<&Value>) -> Vec<(f32, f32)> {
     let Some(Value::Array(items)) = value else {
         return Vec::new();
@@ -743,6 +801,105 @@ mod tests {
     fn normalise_edit_paths_defaults_to_versioned_envelope() {
         let value = normalise_edit_paths(None);
         assert_eq!(value.get("version").and_then(Value::as_i64), Some(1));
+    }
+
+    #[test]
+    fn auto_mode_segments_base_and_reports_provider() {
+        // A grey scene with a red block; auto_subject should segment the block
+        // as the base matte, report the builtin provider, and list one subject.
+        let nanos = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_nanos();
+        let root = std::env::temp_dir().join(format!("hgripe_subject_auto_{nanos}"));
+        std::fs::create_dir_all(&root).unwrap();
+        let image_path = root.join("scene.png");
+        let mut image = RgbaImage::from_pixel(12, 12, Rgba([120, 120, 120, 255]));
+        for y in 4..8 {
+            for x in 4..8 {
+                image.put_pixel(x, y, Rgba([220, 20, 20, 255]));
+            }
+        }
+        image.save(&image_path).unwrap();
+
+        let mut params = BTreeMap::new();
+        params.insert("mode".to_string(), json!("auto_subject"));
+        params.insert(
+            "output_dir".to_string(),
+            json!(root.to_string_lossy().to_string()),
+        );
+        params.insert("output_name".to_string(), json!("scene_mask"));
+        let node = StudioGraphNode {
+            id: "n1".to_string(),
+            kind: "subjectMask".to_string(),
+            params,
+        };
+        let mut inputs = BTreeMap::new();
+        inputs.insert(
+            "image".to_string(),
+            json!(image_path.to_string_lossy().to_string()),
+        );
+
+        let out = execute_studio_subject_mask(&node, &inputs).unwrap();
+        let report = out.get("matte_report").unwrap();
+        assert_eq!(
+            report.get("provider").and_then(Value::as_str),
+            Some("builtin-cpu")
+        );
+        assert_eq!(
+            report.get("mode").and_then(Value::as_str),
+            Some("auto_subject")
+        );
+        let subjects = report
+            .get("detected_subjects")
+            .and_then(Value::as_array)
+            .unwrap();
+        assert_eq!(subjects.len(), 1);
+        let coverage = report.get("mask_coverage").and_then(Value::as_f64).unwrap();
+        // The block is a small fraction of the scene, not the whole frame.
+        assert!(coverage > 0.0 && coverage < 0.5, "coverage={coverage}");
+
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn manual_mode_keeps_rust_native_provider() {
+        let nanos = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_nanos();
+        let root = std::env::temp_dir().join(format!("hgripe_subject_manual_{nanos}"));
+        std::fs::create_dir_all(&root).unwrap();
+        let image_path = root.join("scene.png");
+        RgbaImage::from_pixel(6, 6, Rgba([100, 100, 100, 255]))
+            .save(&image_path)
+            .unwrap();
+
+        let mut params = BTreeMap::new();
+        params.insert("mode".to_string(), json!("manual_brush"));
+        params.insert(
+            "output_dir".to_string(),
+            json!(root.to_string_lossy().to_string()),
+        );
+        params.insert("output_name".to_string(), json!("scene_mask"));
+        let node = StudioGraphNode {
+            id: "n1".to_string(),
+            kind: "subjectMask".to_string(),
+            params,
+        };
+        let mut inputs = BTreeMap::new();
+        inputs.insert(
+            "image".to_string(),
+            json!(image_path.to_string_lossy().to_string()),
+        );
+
+        let out = execute_studio_subject_mask(&node, &inputs).unwrap();
+        let report = out.get("matte_report").unwrap();
+        assert_eq!(
+            report.get("provider").and_then(Value::as_str),
+            Some("rust-native")
+        );
+        let _ = std::fs::remove_dir_all(&root);
     }
 
     #[test]

@@ -79,3 +79,71 @@ pub(super) fn execute_studio_detail_watchdog(
         ("watchdog_report", watchdog),
     ]))
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::psd::WatchdogReport;
+
+    fn node() -> StudioGraphNode {
+        StudioGraphNode {
+            id: "n1".to_string(),
+            kind: "detailWatchdog".to_string(),
+            params: BTreeMap::new(),
+        }
+    }
+
+    #[test]
+    fn rejects_missing_image_input() {
+        // No connected `image` input: must fail fast before shelling out to the
+        // python bridge, with a clear message.
+        let err = execute_studio_detail_watchdog(&node(), &BTreeMap::new()).unwrap_err();
+        assert!(err.contains("connected image input"), "{err}");
+    }
+
+    #[test]
+    fn blank_image_input_is_rejected() {
+        let mut inputs = BTreeMap::new();
+        inputs.insert("image".to_string(), json!("   "));
+        let err = execute_studio_detail_watchdog(&node(), &inputs).unwrap_err();
+        assert!(err.contains("connected image input"), "{err}");
+    }
+
+    #[test]
+    fn watchdog_report_parses_hardening_fields() {
+        // The new v1 hardening fields must deserialize from the python bridge
+        // JSON (and `mask_consumed` reflects the advisory Phase 1 mask).
+        let value = json!({
+            "mode": "balanced",
+            "watch_targets": ["face", "product_edges"],
+            "skipped_targets": ["hands"],
+            "image_size": [128, 96],
+            "target_size": null,
+            "global_sharpness": 142.5,
+            "source_mode": "CMYK",
+            "exif_transposed": true,
+            "max_decode_pixels": 96_000_000,
+            "mask_consumed": false
+        });
+        let report: WatchdogReport = serde_json::from_value(value).unwrap();
+        assert_eq!(report.source_mode, "CMYK");
+        assert!(report.exif_transposed);
+        assert_eq!(report.max_decode_pixels, 96_000_000);
+        assert!(!report.mask_consumed);
+    }
+
+    #[test]
+    fn watchdog_report_defaults_for_legacy_json() {
+        // Older records lack the v1 fields; they must still deserialize with
+        // safe defaults so historical runs remain readable.
+        let report: WatchdogReport = serde_json::from_value(json!({
+            "mode": "balanced",
+            "global_sharpness": 80.0
+        }))
+        .unwrap();
+        assert_eq!(report.source_mode, "");
+        assert!(!report.exif_transposed);
+        assert_eq!(report.max_decode_pixels, 0);
+        assert!(!report.mask_consumed);
+    }
+}

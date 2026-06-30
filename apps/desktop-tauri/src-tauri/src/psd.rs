@@ -933,6 +933,20 @@ pub(crate) struct WatchdogReport {
     /// Laplacian-variance sharpness of the whole image (higher = sharper).
     #[serde(default)]
     pub(crate) global_sharpness: f64,
+    /// Pillow mode of the decoded source before normalising to 8-bit RGB
+    /// (e.g. `RGB`, `RGBA`, `CMYK`, `I;16`, `P`).
+    #[serde(default)]
+    pub(crate) source_mode: String,
+    /// Whether an EXIF orientation tag was applied to upright the input.
+    #[serde(default)]
+    pub(crate) exif_transposed: bool,
+    /// Decode-pixel ceiling enforced before decoding (0 disables the guard).
+    #[serde(default)]
+    pub(crate) max_decode_pixels: i64,
+    /// Whether the optional `--mask` was consumed. Phase 1 detection runs on the
+    /// image's own alpha rim, so the supplied matte is advisory only (`false`).
+    #[serde(default)]
+    pub(crate) mask_consumed: bool,
 }
 
 /// Result of the **Detail Watchdog** node: the (unchanged, Phase 1) candidate

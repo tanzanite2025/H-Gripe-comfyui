@@ -174,6 +174,15 @@ pub(crate) struct RepaintReport {
     /// `[width, height]` of the fixed image.
     #[serde(default)]
     pub(crate) image_size: [i64; 2],
+    /// Pillow mode of the decoded candidate before normalising to 8-bit RGBA.
+    #[serde(default)]
+    pub(crate) source_mode: String,
+    /// Whether an EXIF orientation tag was applied to upright the candidate.
+    #[serde(default)]
+    pub(crate) exif_transposed: bool,
+    /// Decode-pixel ceiling enforced before decoding (0 disables the guard).
+    #[serde(default)]
+    pub(crate) max_decode_pixels: i64,
 }
 
 /// Exported artifact paths recorded for a finished workflow.

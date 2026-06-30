@@ -1256,4 +1256,57 @@ mod tests {
         assert_eq!(studio_param_f64(&node, "blank"), None);
         assert_eq!(studio_param_f64(&node, "missing"), None);
     }
+
+    #[test]
+    fn prepare_repaint_result_parses_hardening_fields() {
+        // The prepare manifest must carry the v1 decode-hardening fields so the
+        // composite step (and the report) can surface them.
+        let value = json!({
+            "regions": [],
+            "skipped": [],
+            "image_size": [128, 96],
+            "selected_count": 0,
+            "mask_edit_is_transparent": true,
+            "source_mode": "CMYK",
+            "exif_transposed": true,
+            "max_decode_pixels": 96_000_000
+        });
+        let result: crate::psd::PrepareRepaintResult = serde_json::from_value(value).unwrap();
+        assert_eq!(result.source_mode, "CMYK");
+        assert!(result.exif_transposed);
+        assert_eq!(result.max_decode_pixels, 96_000_000);
+    }
+
+    #[test]
+    fn repaint_report_parses_hardening_fields() {
+        let value = json!({
+            "status": "repainted",
+            "regions": [],
+            "repainted_count": 1,
+            "requested_count": 1,
+            "image_size": [64, 64],
+            "source_mode": "RGBA",
+            "exif_transposed": false,
+            "max_decode_pixels": 96_000_000
+        });
+        let report: crate::contracts::RepaintReport = serde_json::from_value(value).unwrap();
+        assert_eq!(report.source_mode, "RGBA");
+        assert!(!report.exif_transposed);
+        assert_eq!(report.max_decode_pixels, 96_000_000);
+    }
+
+    #[test]
+    fn repaint_report_defaults_for_legacy_json() {
+        // Older records lack the v1 fields; they must still deserialize with
+        // safe defaults so historical runs remain readable.
+        let report: crate::contracts::RepaintReport = serde_json::from_value(json!({
+            "status": "unchanged",
+            "repainted_count": 0,
+            "requested_count": 0
+        }))
+        .unwrap();
+        assert_eq!(report.source_mode, "");
+        assert!(!report.exif_transposed);
+        assert_eq!(report.max_decode_pixels, 0);
+    }
 }

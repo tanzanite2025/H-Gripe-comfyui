@@ -21,6 +21,22 @@ from sr_backends import BackendUnavailable, probe, resolve  # noqa: E402
 from sr_backends.realesrgan import RealEsrganBackend  # noqa: E402
 
 
+def test_onnx_providers_prefers_cuda_when_present() -> None:
+    # On a CUDA box ORT exposes the CUDA provider: it is used first, with CPU
+    # always last as the universal fallback (mirrors the torch "cuda if
+    # available else cpu" auto behaviour).
+    assert sr_backends.onnx_providers(
+        ["CUDAExecutionProvider", "CPUExecutionProvider"]
+    ) == ["CUDAExecutionProvider", "CPUExecutionProvider"]
+
+
+def test_onnx_providers_cpu_only_box() -> None:
+    # CPU-only ORT (the test/dev default): just the CPU provider, never empty.
+    assert sr_backends.onnx_providers(["CPUExecutionProvider"]) == ["CPUExecutionProvider"]
+    # An unknown accelerator we don't drive is ignored; CPU still backs it.
+    assert sr_backends.onnx_providers(["SomeOtherProvider"]) == ["CPUExecutionProvider"]
+
+
 def test_resolve_cpu_and_blank_return_none() -> None:
     assert resolve("cpu") is None
     assert resolve("") is None

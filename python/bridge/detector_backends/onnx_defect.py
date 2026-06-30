@@ -41,6 +41,8 @@ import os
 from pathlib import Path
 from typing import Any
 
+from sr_backends import onnx_providers
+
 from . import DetectorUnavailable, model_cache_dir
 
 _DEFAULT_WEIGHT_NAME = "watchdog_defect.onnx"
@@ -125,7 +127,7 @@ class OnnxDefectBackend:
         label_map = self._label_map(weight)
 
         session = ort.InferenceSession(
-            str(weight), providers=["CPUExecutionProvider"]
+            str(weight), providers=onnx_providers(ort.get_available_providers())
         )
         spec = session.get_inputs()[0]
         # Spatial dims are the trailing two axes of an NCHW input; a non-int

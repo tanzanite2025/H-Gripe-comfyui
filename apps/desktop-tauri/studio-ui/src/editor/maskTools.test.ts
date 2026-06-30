@@ -19,10 +19,16 @@ describe("mask tool registry", () => {
     }
   });
 
-  it("ships brush / eraser / wand / morphology as ready", () => {
-    for (const id of ["brush", "eraser", "wand", "rect", "ellipse", "invert", "fill_holes", "smooth", "grow", "shrink", "feather"]) {
+  it("ships brush / eraser / point / wand / morphology as ready", () => {
+    for (const id of ["brush", "eraser", "point", "wand", "rect", "ellipse", "invert", "fill_holes", "smooth", "grow", "shrink", "feather"]) {
       expect(maskTool(id)?.status, id).toBe("ready");
     }
+  });
+
+  it("exposes the SAM 2 point-prompt tool", () => {
+    const point = maskTool("point");
+    expect(point?.status).toBe("ready");
+    expect(point?.kind).toBe("point");
   });
 
   it("partitions ready vs planned and orders ready first", () => {

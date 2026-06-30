@@ -179,10 +179,17 @@ export interface EditPaths {
   brush_strokes: BrushStroke[];
   /** Ordered morphology / selection operations applied by the backend. */
   operations: MaskOperation[];
+  /**
+   * Positive SAM 2 point prompts in image-pixel space (`[x, y]`). When an auto
+   * mode runs with points present, the backend routes to the interactive SAM 2
+   * segmenter ("segment what the user clicked"); empty ⇒ the prompt-free
+   * salient / builtin pipeline. Read by the Rust backend as `edit_paths.points`.
+   */
+  points: [number, number][];
 }
 
 export function emptyEditPaths(): EditPaths {
-  return { version: 1, paths: [], brush_strokes: [], operations: [] };
+  return { version: 1, paths: [], brush_strokes: [], operations: [], points: [] };
 }
 
 /** A subject detected by a Phase 2 model (empty in Phase 1). */

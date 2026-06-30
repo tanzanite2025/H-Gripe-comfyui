@@ -78,7 +78,13 @@ the review surface stays universal and cheap, the editor stays specialised.
 | Phase | Click = | Lane |
 | --- | --- | --- |
 | 1 | magic-wand flood fill: select a contiguous region by colour similarity (`wand_tolerance`) — native Rust | `Compute` |
-| 2 | a model point-prompt (SAM-style): click points → model computes the mask — `ort` / `candle` in-process | `Compute` |
+| 2 | a model point-prompt (SAM 2): click points → model computes the mask — `ort` in-process | `Compute` |
+
+**Phase 2 point-prompt is wired (PR-4b).** The `Point (SAM 2)` tool records each
+click into `edit_paths.points` (image-space `[x, y]`); when an `auto_*` mode runs
+with points present, the backend routes to the SAM 2 segmenter ("segment what you
+clicked"). No points ⇒ the prompt-free salient cascade (BiRefNet → U²-Netp →
+`builtin-cpu`). The UI ships the same "click → region" interaction for both lanes.
 
 The UI ships "click → get a region" once; the backend is hot-swapped Phase 1 → 2
 without a frontend rewrite.
@@ -88,6 +94,7 @@ without a frontend rewrite.
 | Tool | Status | Phase 1 behaviour |
 | --- | --- | --- |
 | `brush` (add) / `eraser` (subtract) | ready | Paint mask in / out. |
+| `point` (SAM 2 prompt) | ready | Record a positive point prompt into `edit_paths.points`; routes `auto_*` modes to the SAM 2 segmenter. |
 | `wand` (click-select) | ready | Flood fill a contiguous region by colour similarity. |
 | `rect` / `ellipse` | ready | Marquee add/subtract. |
 | `invert` | ready | Invert the whole mask. |
@@ -118,7 +125,7 @@ the morphology/brush set while pen/lasso/matting stay stubbed.
 
 | Param | Type | Default | Range / values | Notes |
 | --- | --- | --- | --- | --- |
-| `mode` | enum | `hybrid` | `auto_subject` \| `auto_product` \| `auto_person` \| `auto_transparent_object` \| `manual_brush` \| `manual_pen` \| `hybrid` | Phase 1 implements `manual_*` + `hybrid` (manual layer over an empty / `previous_mask` base); the `auto_*` model modes are Phase 2. |
+| `mode` | enum | `hybrid` | `auto_subject` \| `auto_product` \| `auto_person` \| `auto_transparent_object` \| `manual_brush` \| `manual_pen` \| `hybrid` | Phase 1 implements `manual_*` + `hybrid` (manual layer over an empty / `previous_mask` base). The `auto_*` model modes are Phase 2: with `edit_paths.points` they run SAM 2, otherwise the salient cascade. |
 | `wand_tolerance` | int | `24` | `0..255` | Colour distance for the magic-wand flood fill. |
 | `feather_px` | float | `0.0` | `>= 0` | Edge feather applied last. |
 | `grow_px` | int | `0` | any | Positive dilates, negative erodes. |
@@ -174,7 +181,9 @@ the morphology/brush set while pen/lasso/matting stay stubbed.
 `rust-native` for the manual / hybrid lanes; for an `auto_*` base matte it is
 the segmenter that ran, in priority order: `birefnet` (high-quality model),
 `u2netp` (lightweight bundled model), or `builtin-cpu` when no model weight is
-resolvable.
+resolvable. When the request carries `edit_paths.points`, an `auto_*` mode
+instead runs the interactive `sam2` point-prompt segmenter (the salient cascade
+is the no-points path).
 
 ### `EditPaths`
 
@@ -189,13 +198,17 @@ resolvable.
   ],
   "brush_strokes": [
     { "id": "stroke_1", "mode": "subtract", "radius": 18, "points": [[100, 120], [105, 124]] }
-  ]
+  ],
+  "operations": [ { "type": "feather", "amount": 2 } ],
+  "points": [[420, 360], [690, 540]]
 }
 ```
 
 In Phase 1 `paths` (pen / lasso) are **stored but not rasterised** — the field is
 versioned so a workflow saved now stays loadable once Phase 3 adds rasterisation.
-`brush_strokes` and the morphology ops are applied.
+`brush_strokes` and the morphology `operations` are applied. `points` are
+positive SAM 2 point prompts (image-space `[x, y]`) consumed by the `auto_*`
+model lane (Phase 2); they are ignored by the manual lanes.
 
 ## Colour space & bit depth
 
@@ -244,23 +257,30 @@ model id in `matte_report`.
    - *Landed:* a `SubjectSegmenter` trait routes the four `auto_*` modes through
      the `Compute` lane, behind a shared `ModelSpec`-driven `ort` backend so
      multiple models share one load + inference path. Backends are tried in
-     priority order — **BiRefNet** (`provider: birefnet`, high quality) →
-     **U²-Netp** (`provider: u2netp`, lightweight default) → deterministic
-     **`builtin-cpu`** fallback when no weight resolves — so the modes always
-     work. `matte_report` carries `provider` and `detected_subjects`
-     (`label` / `bbox` / `coverage`).
+     priority order — when the request carries point prompts, **SAM 2**
+     (`provider: sam2`, interactive); otherwise **BiRefNet**
+     (`provider: birefnet`, high quality) → **U²-Netp** (`provider: u2netp`,
+     lightweight default) → deterministic **`builtin-cpu`** fallback when no
+     weight resolves — so the modes always work. `matte_report` carries
+     `provider` and `detected_subjects` (`label` / `bbox` / `coverage`).
+   - *Interactive (SAM 2):* a two-stage **SAM 2 tiny** backend (encoder +
+     prompt decoder, Apache-2.0, ~154 MB combined) implements the same trait
+     (`provider: sam2`). `segmenter_for_mode(mode, points)` is point-aware: a
+     non-empty `edit_paths.points` routes to SAM 2, otherwise the salient
+     cascade runs. The frontend `Point (SAM 2)` tool records those clicks into
+     `edit_paths.points` (PR-4b), so the node's click-to-select drives the model.
    - *Weight sourcing:* no `.onnx` is committed to git. **u2netp** (Apache-2.0,
      ~4.6 MB) is the *bundled default* — fetched at package time
      (`scripts/fetch-subject-model.*`) and shipped via `tauri.conf.json`
      `bundle.resources` under `<install>/resources/models/`. **BiRefNet lite**
-     (MIT, ~224 MB) is the *downloadable big tier* — not bundled by default;
-     `scripts/fetch-birefnet.*` places it in the same dir to ship or test with.
-     `HGRIPE_SUBJECT_MODEL` / `HGRIPE_BIREFNET_MODEL` env vars override the
-     paths for dev / tests.
-   - *Pending:* an interactive **SAM 2** point/box-prompt backend (wired to the
-     node's click-to-select) and a portrait-matting net for `auto_person` can
-     slot into `segmenter_for_mode` behind the same trait. Continuous alpha
-     matting is Phase 4 below.
+     (MIT, ~224 MB) and **SAM 2 tiny** (Apache-2.0) are the *downloadable big
+     tier* — not bundled by default; `scripts/fetch-birefnet.*` /
+     `scripts/fetch-sam2.*` place them in the same dir to ship or test with.
+     `HGRIPE_SUBJECT_MODEL` / `HGRIPE_BIREFNET_MODEL` / `HGRIPE_SAM2_ENCODER` /
+     `HGRIPE_SAM2_DECODER` env vars override the paths for dev / tests.
+   - *Pending:* a portrait-matting net for `auto_person` can slot into
+     `segmenter_for_mode` behind the same trait. Continuous alpha matting is
+     Phase 4 below.
 3. **Pen paths** — bezier rasterise, path add/subtract/intersect, re-editable.
 4. **Alpha matting** — continuous alpha (hair / glass / translucency), trimap,
    tighter `Refine Mask Edge` hand-off.
@@ -285,4 +305,6 @@ Refine Mask Edge -> receives mask / cutout, owns edge fusion
 - `exec.rs` — `subjectMask` maps to `Compute`; the `Compute` handler rejects
   foreign kinds (mirrors the existing `class_handlers_reject_foreign_kinds`).
 - studio-ui — the shared Preview modal as a stage gate, the Mask-Edit tool
-  registry (`ready` vs `planned`), and click-to-select (E2E).
+  registry (`ready` vs `planned`, incl. the `point` SAM 2 tool), the edit-state
+  model (`maskEdit` brush / op / **point** record + undo/redo), and
+  click-to-select (E2E).

@@ -14,6 +14,8 @@ export type ToolKind =
   | "paint"
   // Single click that records an `operations` entry seeded at the click point.
   | "click"
+  // Single click that records a SAM 2 point prompt (`points` entry).
+  | "point"
   // Whole-mask operation with no canvas interaction (records an `operations` entry).
   | "global"
   // Drag a marquee that records an `operations` entry with a rect region.
@@ -39,6 +41,7 @@ export interface MaskTool {
 export const MASK_TOOLS: readonly MaskTool[] = [
   { id: "brush", label: "Brush", status: "ready", kind: "paint", mode: "add", hint: "Paint mask in." },
   { id: "eraser", label: "Eraser", status: "ready", kind: "paint", mode: "subtract", hint: "Paint mask out." },
+  { id: "point", label: "Point (SAM 2)", status: "ready", kind: "point", hint: "Click the subject — SAM 2 segments what you pointed at (auto modes)." },
   { id: "wand", label: "Wand", status: "ready", kind: "click", hint: "Flood-fill a region by colour similarity (wand_tolerance)." },
   { id: "rect", label: "Rect", status: "ready", kind: "marquee", mode: "add", hint: "Marquee add a rectangle." },
   { id: "ellipse", label: "Ellipse", status: "ready", kind: "marquee", mode: "add", hint: "Marquee add an ellipse." },

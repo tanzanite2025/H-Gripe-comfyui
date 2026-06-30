@@ -8,7 +8,7 @@
 // rasterises it on run (Phase 1 stores `paths`, applies `brush_strokes` +
 // `operations`).
 
-import type { BrushStroke, EditPaths, MaskOperation } from "../types/production";
+import type { BrushStroke, EditPaths, MaskOperation, PointPrompt } from "../types/production";
 import { emptyEditPaths } from "../types/production";
 
 export interface EditState {
@@ -36,8 +36,28 @@ export function normalizeEditPaths(value: unknown): EditPaths {
     brush_strokes: Array.isArray(v.brush_strokes) ? v.brush_strokes : [],
     matte_strokes: Array.isArray(v.matte_strokes) ? v.matte_strokes : [],
     operations: Array.isArray(v.operations) ? v.operations : [],
-    points: Array.isArray(v.points) ? v.points : [],
+    points: Array.isArray(v.points) ? v.points.map(normalizePoint).filter((p): p is PointPrompt => p !== null) : [],
   };
+}
+
+/**
+ * Coerce a stored point into a `PointPrompt`. Accepts the current
+ * `{ x, y, label }` shape and the legacy `[x, y]` pair (read as positive), so
+ * workflows saved before negative points stay loadable.
+ */
+function normalizePoint(value: unknown): PointPrompt | null {
+  if (Array.isArray(value) && value.length >= 2) {
+    const [x, y] = value;
+    if (typeof x === "number" && typeof y === "number") return { x, y, label: 1 };
+    return null;
+  }
+  if (value && typeof value === "object") {
+    const v = value as { x?: unknown; y?: unknown; label?: unknown };
+    if (typeof v.x === "number" && typeof v.y === "number") {
+      return { x: v.x, y: v.y, label: v.label === 0 ? 0 : 1 };
+    }
+  }
+  return null;
 }
 
 // Commit a new `current`, pushing the previous onto the undo stack and clearing
@@ -73,8 +93,11 @@ export function addOperation(state: EditState, op: MaskOperation): EditState {
   });
 }
 
-/** Append a positive SAM 2 point prompt (image-space `[x, y]`). */
-export function addPoint(state: EditState, point: [number, number]): EditState {
+/**
+ * Append a SAM 2 point prompt (image-space). `label` is `1` for a positive
+ * (include) point and `0` for a negative (exclude) point.
+ */
+export function addPoint(state: EditState, point: PointPrompt): EditState {
   return commit(state, {
     ...state.current,
     points: [...state.current.points, point],

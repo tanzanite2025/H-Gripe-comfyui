@@ -44,7 +44,7 @@ export interface MaskTool {
 export const MASK_TOOLS: readonly MaskTool[] = [
   { id: "brush", label: "Brush", status: "ready", kind: "paint", mode: "add", hint: "Paint mask in." },
   { id: "eraser", label: "Eraser", status: "ready", kind: "paint", mode: "subtract", hint: "Paint mask out." },
-  { id: "point", label: "Point (SAM 2)", status: "ready", kind: "point", hint: "Click the subject — SAM 2 segments what you pointed at (auto modes)." },
+  { id: "point", label: "Point (SAM 2)", status: "ready", kind: "point", hint: "Left-click the subject to include, right-click to exclude — SAM 2 segments from your points (auto modes)." },
   { id: "wand", label: "Wand", status: "ready", kind: "click", hint: "Flood-fill a region by colour similarity (wand_tolerance)." },
   { id: "rect", label: "Rect", status: "ready", kind: "marquee", mode: "add", hint: "Marquee add a rectangle." },
   { id: "ellipse", label: "Ellipse", status: "ready", kind: "marquee", mode: "add", hint: "Marquee add an ellipse." },

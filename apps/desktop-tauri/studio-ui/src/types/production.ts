@@ -189,12 +189,26 @@ export interface EditPaths {
   /** Ordered morphology / selection operations applied by the backend. */
   operations: MaskOperation[];
   /**
-   * Positive SAM 2 point prompts in image-pixel space (`[x, y]`). When an auto
-   * mode runs with points present, the backend routes to the interactive SAM 2
-   * segmenter ("segment what the user clicked"); empty ⇒ the prompt-free
-   * salient / builtin pipeline. Read by the Rust backend as `edit_paths.points`.
+   * SAM 2 point prompts in image-pixel space. When an auto mode runs with at
+   * least one *positive* point, the backend routes to the interactive SAM 2
+   * segmenter ("segment what the user clicked / not"); empty ⇒ the prompt-free
+   * salient / builtin pipeline. Each point carries a `label`: `1` includes
+   * (foreground), `0` excludes (background). Read by the Rust backend as
+   * `edit_paths.points`; a legacy `[x, y]` pair is read as a positive point.
    */
-  points: [number, number][];
+  points: PointPrompt[];
+}
+
+/**
+ * A SAM 2 point prompt: an image-space location plus whether it includes or
+ * excludes that region. Mirrors SAM 2's `point_labels` (1 = positive /
+ * foreground, 0 = negative / background).
+ */
+export interface PointPrompt {
+  x: number;
+  y: number;
+  /** `1` = positive (include), `0` = negative (exclude). */
+  label: 0 | 1;
 }
 
 export function emptyEditPaths(): EditPaths {

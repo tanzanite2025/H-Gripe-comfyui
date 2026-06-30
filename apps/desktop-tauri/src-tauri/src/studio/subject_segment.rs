@@ -65,6 +65,17 @@ impl AutoMode {
     }
 }
 
+/// A click-to-select point prompt in image-pixel space. `positive` includes the
+/// region (SAM 2 `point_labels` 1 / foreground); a negative point excludes it
+/// (label 0 / background), so the user can carve a wrongly-grabbed neighbour out
+/// of the selection.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(super) struct PointPrompt {
+    pub x: u32,
+    pub y: u32,
+    pub positive: bool,
+}
+
 /// What the card hands a segmenter: the decoded image plus the optional hints
 /// the contract exposes (a PSD placeholder region to stay inside, a text prompt,
 /// and point prompts from the node's click-to-select).
@@ -74,7 +85,7 @@ pub(super) struct SegmentRequest<'a> {
     /// PSD placeholder region; when present the result is constrained to it.
     pub placeholder: Option<&'a GrayImage>,
     pub prompt: Option<&'a str>,
-    pub points: &'a [(u32, u32)],
+    pub points: &'a [PointPrompt],
 }
 
 /// A segmenter's output: the base matte plus the structured `detected_subjects`
@@ -93,17 +104,19 @@ pub(super) trait SubjectSegmenter {
     fn segment(&self, request: &SegmentRequest) -> Result<SegmentResult, String>;
 }
 
-/// Choose the segmenter for an auto mode. When the request carries point
-/// prompts, the interactive SAM 2 backend is preferred (it segments *what the
-/// user clicked*) if both its weights resolve. Otherwise the prompt-free
-/// salient model backend (BiRefNet → U²-Netp) is used when a weight resolves,
-/// and finally the deterministic builtin CPU fallback. The call site
-/// (`subject_mask`) hands the same `SegmentRequest` to whichever is returned.
+/// Choose the segmenter for an auto mode. When the request carries at least one
+/// *positive* point prompt, the interactive SAM 2 backend is preferred (it
+/// segments *what the user clicked*, then carves out the negative points) if
+/// both its weights resolve. Otherwise the prompt-free salient model backend
+/// (BiRefNet → U²-Netp) is used when a weight resolves, and finally the
+/// deterministic builtin CPU fallback. The call site (`subject_mask`) hands the
+/// same `SegmentRequest` to whichever is returned. A purely-negative point set
+/// has no subject seed, so it does not route to SAM 2.
 pub(super) fn segmenter_for_mode(
     mode: AutoMode,
-    points: &[(u32, u32)],
+    points: &[PointPrompt],
 ) -> Box<dyn SubjectSegmenter> {
-    if !points.is_empty() {
+    if points.iter().any(|p| p.positive) {
         if let Some(sam2) = super::subject_sam2::Sam2Segmenter::resolve_and_load() {
             return Box::new(sam2);
         }
@@ -221,10 +234,13 @@ fn constrain_to_placeholder(foreground: &mut GrayImage, placeholder: &GrayImage)
     }
 }
 
-/// Keep one connected component of the foreground. If point prompts are given,
-/// keep every component that any point lands in; otherwise keep the single
-/// largest. Deterministic: ties in size resolve to the earlier (top-left) seed.
-fn keep_largest_component(foreground: &GrayImage, points: &[(u32, u32)]) -> GrayImage {
+/// Keep connected components of the foreground. Positive point prompts keep
+/// every component they land in; negative points then exclude any component
+/// they land in (so a wrongly-grabbed neighbour can be carved out). With no
+/// positive points the single largest component is kept (still minus any
+/// negative-hit component); with no points at all, just the largest.
+/// Deterministic: ties in size resolve to the earlier (top-left) seed.
+fn keep_largest_component(foreground: &GrayImage, points: &[PointPrompt]) -> GrayImage {
     let (width, height) = foreground.dimensions();
     let on = |x: u32, y: u32| foreground.get_pixel(x, y).0[0] >= SELECTED_THRESHOLD;
     let mut label = vec![0u32; (width * height) as usize];
@@ -256,15 +272,21 @@ fn keep_largest_component(foreground: &GrayImage, points: &[(u32, u32)]) -> Gray
         }
     }
 
+    let label_at = |p: &PointPrompt| -> Option<u32> {
+        if p.x >= width || p.y >= height {
+            return None;
+        }
+        let l = label[(p.y * width + p.x) as usize];
+        (l != 0).then_some(l)
+    };
     let mut keep: Vec<bool> = vec![false; next_label as usize];
-    let prompted: Vec<u32> = points
+    let positive: Vec<u32> = points
         .iter()
-        .filter(|&&(x, y)| x < width && y < height)
-        .map(|&(x, y)| label[(y * width + x) as usize])
-        .filter(|&l| l != 0)
+        .filter(|p| p.positive)
+        .filter_map(&label_at)
         .collect();
-    if !prompted.is_empty() {
-        for l in prompted {
+    if !positive.is_empty() {
+        for l in positive {
             keep[l as usize] = true;
         }
     } else if let Some((largest, _)) = sizes
@@ -274,6 +296,10 @@ fn keep_largest_component(foreground: &GrayImage, points: &[(u32, u32)]) -> Gray
         .max_by_key(|&(_, &size)| size)
     {
         keep[largest] = true;
+    }
+    // Negative points carve their component back out, overriding positives.
+    for l in points.iter().filter(|p| !p.positive).filter_map(&label_at) {
+        keep[l as usize] = false;
     }
 
     let mut out = GrayImage::from_pixel(width, height, Luma([MASK_OFF]));
@@ -415,9 +441,9 @@ mod tests {
         assert_eq!(result.mask.get_pixel(10, 3).0[0], MASK_OFF);
     }
 
-    #[test]
-    fn point_prompt_keeps_pointed_component() {
-        // Two equal blocks; a point in the right block keeps only the right one.
+    /// Two equal red blocks on a grey field, left at x∈[1,4) and right at
+    /// x∈[9,12).
+    fn two_blocks() -> RgbaImage {
         let mut image = RgbaImage::from_pixel(13, 6, Rgba([120, 120, 120, 255]));
         for y in 1..5 {
             for x in 1..4 {
@@ -427,17 +453,54 @@ mod tests {
                 image.put_pixel(x, y, Rgba([220, 20, 20, 255]));
             }
         }
+        image
+    }
+
+    #[test]
+    fn point_prompt_keeps_pointed_component() {
+        // A positive point in the right block keeps only the right one.
+        let image = two_blocks();
         let result = BuiltinCpuSegmenter
             .segment(&SegmentRequest {
                 image: &image,
                 mode: AutoMode::Subject,
                 placeholder: None,
                 prompt: None,
-                points: &[(10, 3)],
+                points: &[PointPrompt { x: 10, y: 3, positive: true }],
             })
             .unwrap();
         assert_eq!(result.mask.get_pixel(10, 3).0[0], MASK_ON);
         assert_eq!(result.mask.get_pixel(2, 3).0[0], MASK_OFF);
+    }
+
+    #[test]
+    fn negative_point_excludes_its_component() {
+        // Positive on the left block, negative on the right: only the left
+        // survives even though the negative point lands on foreground.
+        let image = two_blocks();
+        let result = BuiltinCpuSegmenter
+            .segment(&SegmentRequest {
+                image: &image,
+                mode: AutoMode::Subject,
+                placeholder: None,
+                prompt: None,
+                points: &[
+                    PointPrompt { x: 2, y: 3, positive: true },
+                    PointPrompt { x: 10, y: 3, positive: false },
+                ],
+            })
+            .unwrap();
+        assert_eq!(result.mask.get_pixel(2, 3).0[0], MASK_ON);
+        assert_eq!(result.mask.get_pixel(10, 3).0[0], MASK_OFF);
+    }
+
+    #[test]
+    fn negative_only_points_do_not_route_to_sam2() {
+        // A purely-negative point set has no subject seed; routing must not
+        // prefer SAM 2 (it would have nothing to segment toward).
+        let negatives = [PointPrompt { x: 5, y: 5, positive: false }];
+        let seg = segmenter_for_mode(AutoMode::Subject, &negatives);
+        assert_eq!(seg.provider(), "builtin-cpu");
     }
 
     #[test]

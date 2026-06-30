@@ -952,6 +952,11 @@ button:disabled { opacity: 0.6; cursor: default; }
   color: var(--accent);
   border: 1px solid rgba(91, 140, 255, 0.35);
 }
+.mask-op-chip.negative {
+  background: rgba(244, 98, 98, 0.15);
+  color: #f46262;
+  border-color: rgba(244, 98, 98, 0.4);
+}
 .mask-edit-note { line-height: 1.5; }
 .mask-edit-note code {
   background: #11131a;

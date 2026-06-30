@@ -65,18 +65,30 @@ describe("maskEdit reducer-style helpers", () => {
     expect(s.current.matte_strokes).toHaveLength(0);
   });
 
-  it("records SAM 2 point prompts and counts them", () => {
+  it("records positive and negative SAM 2 point prompts and counts them", () => {
     let s = initEditState();
-    s = addPoint(s, [120, 80]);
-    s = addPoint(s, [200, 150]);
+    s = addPoint(s, { x: 120, y: 80, label: 1 });
+    s = addPoint(s, { x: 200, y: 150, label: 0 });
     expect(s.current.points).toEqual([
-      [120, 80],
-      [200, 150],
+      { x: 120, y: 80, label: 1 },
+      { x: 200, y: 150, label: 0 },
     ]);
     expect(editCount(s.current)).toBe(2);
     expect(isEmpty(s.current)).toBe(false);
     s = undo(s);
-    expect(s.current.points).toEqual([[120, 80]]);
+    expect(s.current.points).toEqual([{ x: 120, y: 80, label: 1 }]);
+  });
+
+  it("migrates legacy [x, y] points to positive prompts on load", () => {
+    const s = normalizeEditPaths({
+      version: 1,
+      points: [[10, 20], { x: 30, y: 40, label: 0 }, { x: 5, y: 6 }],
+    });
+    expect(s.points).toEqual([
+      { x: 10, y: 20, label: 1 },
+      { x: 30, y: 40, label: 0 },
+      { x: 5, y: 6, label: 1 },
+    ]);
   });
 
   it("ignores empty strokes", () => {

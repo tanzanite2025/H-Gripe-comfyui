@@ -20,7 +20,7 @@ import {
   undo,
   type EditState,
 } from "./maskEdit";
-import type { BrushStroke, EditPaths, MaskOperation } from "../types/production";
+import type { BrushStroke, EditPaths, MaskOperation, PointPrompt } from "../types/production";
 
 // Default logical canvas size when no backing image is available (browser
 // preview mocks the backend, so the connected image often has no decodable
@@ -33,7 +33,7 @@ type Action =
   | { type: "stroke"; stroke: BrushStroke }
   | { type: "matte_stroke"; stroke: BrushStroke }
   | { type: "op"; op: MaskOperation }
-  | { type: "point"; point: [number, number] }
+  | { type: "point"; point: PointPrompt }
   | { type: "undo" }
   | { type: "redo" }
   | { type: "clear" };
@@ -208,16 +208,21 @@ export function MaskEditModal({
       );
     }
 
-    // SAM 2 point prompts: numbered crosshair markers.
-    state.current.points.forEach(([x, y], i) => {
-      ctx.strokeStyle = "rgba(120,230,140,0.95)";
-      ctx.fillStyle = "rgba(120,230,140,0.95)";
+    // SAM 2 point prompts: numbered crosshair markers. Positive (include)
+    // points are green and draw a `+`; negative (exclude) points are red and
+    // draw a `−`, mirroring SAM 2's point_labels.
+    state.current.points.forEach(({ x, y, label }, i) => {
+      const colour = label === 0 ? "rgba(244,98,98,0.95)" : "rgba(120,230,140,0.95)";
+      ctx.strokeStyle = colour;
+      ctx.fillStyle = colour;
       ctx.lineWidth = 2;
       ctx.beginPath();
       ctx.moveTo(x - 9, y);
       ctx.lineTo(x + 9, y);
-      ctx.moveTo(x, y - 9);
-      ctx.lineTo(x, y + 9);
+      if (label !== 0) {
+        ctx.moveTo(x, y - 9);
+        ctx.lineTo(x, y + 9);
+      }
       ctx.stroke();
       ctx.beginPath();
       ctx.arc(x, y, 3, 0, Math.PI * 2);
@@ -262,8 +267,10 @@ export function MaskEditModal({
       // Magic-wand: record a seeded flood-fill op for the backend.
       dispatch({ type: "op", op: { type: "wand", amount: tolerance, region: pt } });
     } else if (tool.kind === "point") {
-      // SAM 2 point prompt: record the clicked point for the backend.
-      dispatch({ type: "point", point: pt });
+      // SAM 2 point prompt: left button includes (positive), right button
+      // excludes (negative). Right-click's context menu is suppressed below.
+      const label = e.button === 2 ? 0 : 1;
+      dispatch({ type: "point", point: { x: pt[0], y: pt[1], label } });
     }
   };
 
@@ -373,6 +380,7 @@ export function MaskEditModal({
               onPointerMove={onPointerMove}
               onPointerUp={onPointerUp}
               onPointerLeave={onPointerUp}
+              onContextMenu={(e) => e.preventDefault()}
             />
           </div>
 
@@ -440,9 +448,9 @@ export function MaskEditModal({
                 {points.length === 0 ? (
                   <small className="muted">none — pick Point (SAM 2) and click the subject</small>
                 ) : (
-                  points.map(([x, y], i) => (
-                    <span key={i} className="mask-op-chip">
-                      #{i + 1} {x},{y}
+                  points.map((p, i) => (
+                    <span key={i} className={`mask-op-chip${p.label === 0 ? " negative" : ""}`}>
+                      {p.label === 0 ? "−" : "+"}#{i + 1} {p.x},{p.y}
                     </span>
                   ))
                 )}
@@ -452,7 +460,8 @@ export function MaskEditModal({
             <small className="muted mask-edit-note">
               Edits ({count}) are recorded as <code>edit_paths</code> and applied by the
               backend on run. Point (SAM 2) prompts route auto modes to the SAM 2
-              segmenter; Matting paints the trimap unknown band (resolved to soft
+              segmenter — left-click includes, right-click excludes; Matting
+              paints the trimap unknown band (resolved to soft
               alpha by ViTMatte / the builtin guided filter); pen/lasso are
               planned (greyed).
             </small>

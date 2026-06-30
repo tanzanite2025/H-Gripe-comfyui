@@ -24,7 +24,7 @@ use super::graph::{
 use super::persist::studio_reject_unsafe_basename;
 use super::studio_image;
 use super::subject_matte;
-use super::subject_segment::{segmenter_for_mode, AutoMode, SegmentRequest};
+use super::subject_segment::{segmenter_for_mode, AutoMode, PointPrompt, SegmentRequest};
 
 const MASK_ON: u8 = 255;
 const MASK_OFF: u8 = 0;
@@ -653,9 +653,11 @@ fn normalise_edit_paths(value: Option<&Value>) -> Value {
 }
 
 /// Optional point prompts for the auto-subject segmenter, read from a top-level
-/// `points` array on `edit_paths` (`[[x, y], ...]` or `[{ "x", "y" }, ...]`).
-/// Absent ⇒ no prompts (the segmenter falls back to its largest component).
-fn parse_point_prompts(edit_paths: Option<&Value>) -> Vec<(u32, u32)> {
+/// `points` array on `edit_paths`. Each point is either a legacy `[x, y]` pair
+/// (read as positive) or an object `{ "x", "y", "label" }` where `label` is `0`
+/// for a negative (exclude) point and anything else (or absent) for a positive
+/// one. Absent ⇒ no prompts (the segmenter falls back to its largest component).
+fn parse_point_prompts(edit_paths: Option<&Value>) -> Vec<PointPrompt> {
     let Some(value) = parse_edit_paths(edit_paths) else {
         return Vec::new();
     };
@@ -665,10 +667,16 @@ fn parse_point_prompts(edit_paths: Option<&Value>) -> Vec<(u32, u32)> {
         .into_iter()
         .flatten()
         .filter_map(|item| match item {
-            Value::Array(pair) if pair.len() >= 2 => {
-                Some((json_u32(Some(&pair[0]))?, json_u32(Some(&pair[1]))?))
-            }
-            Value::Object(_) => Some((json_u32(item.get("x"))?, json_u32(item.get("y"))?)),
+            Value::Array(pair) if pair.len() >= 2 => Some(PointPrompt {
+                x: json_u32(Some(&pair[0]))?,
+                y: json_u32(Some(&pair[1]))?,
+                positive: true,
+            }),
+            Value::Object(_) => Some(PointPrompt {
+                x: json_u32(item.get("x"))?,
+                y: json_u32(item.get("y"))?,
+                positive: item.get("label").and_then(Value::as_f64) != Some(0.0),
+            }),
             _ => None,
         })
         .collect()
@@ -869,6 +877,30 @@ mod tests {
         assert_eq!(mask.get_pixel(1, 1).0[0], MASK_ON);
         assert_eq!(mask.get_pixel(2, 2).0[0], MASK_ON);
         assert_eq!(ops.len(), 1);
+    }
+
+    #[test]
+    fn parses_point_prompt_labels_with_legacy_fallback() {
+        // Legacy `[x, y]` pairs and label-less objects read as positive; an
+        // object with `label: 0` reads as a negative (exclude) point.
+        let value = json!({
+            "points": [
+                [10, 20],
+                { "x": 30, "y": 40, "label": 0 },
+                { "x": 5, "y": 6, "label": 1 },
+                { "x": 7, "y": 8 }
+            ]
+        });
+        let points = parse_point_prompts(Some(&value));
+        assert_eq!(
+            points,
+            vec![
+                PointPrompt { x: 10, y: 20, positive: true },
+                PointPrompt { x: 30, y: 40, positive: false },
+                PointPrompt { x: 5, y: 6, positive: true },
+                PointPrompt { x: 7, y: 8, positive: true },
+            ]
+        );
     }
 
     #[test]

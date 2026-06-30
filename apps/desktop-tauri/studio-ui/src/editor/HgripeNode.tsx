@@ -1,6 +1,8 @@
-import { memo, useEffect, useRef, useState } from "react";
+import { memo, useContext, useEffect, useRef, useState } from "react";
 import { Handle, Position, useStore, type NodeProps } from "@xyflow/react";
 import { nodeSpec } from "../graph/nodeSpecs";
+import { localizeSpec } from "../graph/nodeSpecsI18n";
+import { LangContext, useT } from "../i18n";
 import { isLodActive } from "./lod";
 import type { NodeStatus } from "../runtime/dag";
 import { generateThumbnail } from "../bridge/tauri";
@@ -50,6 +52,7 @@ export function fmtDuration(ms?: number): string {
 // light (it stores only the original path) and avoids decoding images for nodes
 // parked off-screen — the real perf/quality discipline for large media.
 function LazyThumb({ path }: { path: string }) {
+  const t = useT();
   const ref = useRef<HTMLDivElement | null>(null);
   const [src, setSrc] = useState<string | null>(null);
 
@@ -63,8 +66,8 @@ function LazyThumb({ path }: { path: string }) {
         if (!entries.some((e) => e.isIntersecting)) return;
         io.disconnect();
         generateThumbnail({ path, size: 256 })
-          .then((t) => {
-            if (!cancelled) setSrc(t.data_url || null);
+          .then((thumb) => {
+            if (!cancelled) setSrc(thumb.data_url || null);
           })
           .catch(() => {
             /* leave placeholder on failure */
@@ -84,7 +87,7 @@ function LazyThumb({ path }: { path: string }) {
       {src ? (
         <img className="node-thumb" src={src} alt="preview" />
       ) : (
-        <div className="node-thumb placeholder">loading…</div>
+        <div className="node-thumb placeholder">{t("common.loadingShort")}</div>
       )}
     </div>
   );
@@ -92,6 +95,7 @@ function LazyThumb({ path }: { path: string }) {
 
 // A single export-artifact row: label + basename, click to copy the full path.
 function PathRow({ label, path }: { label: string; path: string }) {
+  const t = useT();
   const [copied, setCopied] = useState(false);
   const copy = () => {
     void navigator.clipboard
@@ -105,9 +109,9 @@ function PathRow({ label, path }: { label: string; path: string }) {
       });
   };
   return (
-    <button className="psd-path-row nodrag" onClick={copy} title={`click to copy: ${path}`}>
+    <button className="psd-path-row nodrag" onClick={copy} title={t("node.copyHint", { path })}>
       <span className="psd-path-label">{label}</span>
-      <span className="psd-path-name">{copied ? "copied!" : basename(path)}</span>
+      <span className="psd-path-name">{copied ? t("node.copied") : basename(path)}</span>
     </button>
   );
 }
@@ -117,7 +121,9 @@ function PathRow({ label, path }: { label: string; path: string }) {
 // full params live in the Inspector and full-res media is opened there.
 function HgripeNodeImpl({ id, data, selected }: NodeProps) {
   const d = data as HgripeNodeData;
-  const spec = nodeSpec(d.kind);
+  const lang = useContext(LangContext);
+  const t = useT();
+  const spec = localizeSpec(nodeSpec(d.kind), lang);
   const status = d.status ?? "idle";
   const editing = useNodeEditing();
   // Collapse to a title-only card when zoomed far out. A boolean selector means
@@ -178,7 +184,7 @@ function HgripeNodeImpl({ id, data, selected }: NodeProps) {
           (d.imagePath ? (
             <LazyThumb path={d.imagePath} />
           ) : (
-            <div className="node-thumb placeholder">no image</div>
+            <div className="node-thumb placeholder">{t("node.noImage")}</div>
           ))}
 
         {spec.kind === "subjectMask" ? (
@@ -188,33 +194,33 @@ function HgripeNodeImpl({ id, data, selected }: NodeProps) {
             ) : (
               <div
                 className="node-thumb placeholder click-select"
-                title="Click-to-select runs the magic wand on the connected image"
+                title={t("node.clickSelectTitle")}
               >
-                {isConnected("image") ? "click-to-select" : "connect an image"}
+                {isConnected("image") ? t("node.clickSelect") : t("node.connectImage")}
               </div>
             )}
             <div className="subject-mask-actions nodrag">
               <button
                 type="button"
-                title="Auto-detect the subject (Phase 2 models; Phase 1 seeds an empty mask)"
+                title={t("node.autoTitle")}
                 onClick={() => editing?.openPreview?.(id)}
               >
-                Auto
+                {t("node.auto")}
               </button>
               <button
                 type="button"
                 className="primary"
-                title="Open the mask editor (brush / wand / morphology)"
+                title={t("node.editMaskTitle")}
                 onClick={() => editing?.openMaskEdit?.(id)}
               >
-                Edit Mask
+                {t("node.editMask")}
               </button>
               <button
                 type="button"
-                title="Preview the current mask / cutout (review gate)"
+                title={t("node.previewTitle")}
                 onClick={() => editing?.openPreview?.(id)}
               >
-                Preview
+                {t("node.preview")}
               </button>
             </div>
           </div>
@@ -229,10 +235,10 @@ function HgripeNodeImpl({ id, data, selected }: NodeProps) {
         {spec.kind === "save" ? (
           <div className="psd-conn">
             <span className={isConnected("image") ? "ok" : "warn"}>
-              image {isConnected("image") ? "✓" : "✕"}
+              {t("node.connImage")} {isConnected("image") ? "✓" : "✕"}
             </span>
             <span className={isConnected("template") ? "ok" : "muted"}>
-              template {isConnected("template") ? "✓" : "—"}
+              {t("node.connTemplate")} {isConnected("template") ? "✓" : "—"}
             </span>
           </div>
         ) : null}
@@ -241,25 +247,25 @@ function HgripeNodeImpl({ id, data, selected }: NodeProps) {
           <div className="psd-export">
             <div className="psd-conn">
               <span className={isConnected("image") ? "ok" : "warn"}>
-                image {isConnected("image") ? "✓" : "✕"}
+                {t("node.connImage")} {isConnected("image") ? "✓" : "✕"}
               </span>
               <span className={isConnected("template") ? "ok" : "warn"}>
-                template {isConnected("template") ? "✓" : "✕"}
+                {t("node.connTemplate")} {isConnected("template") ? "✓" : "✕"}
               </span>
             </div>
             {d.psdPreviewPath ? (
               <LazyThumb path={d.psdPreviewPath} />
             ) : (
-              <div className="node-thumb placeholder">no export yet</div>
+              <div className="node-thumb placeholder">{t("node.noExport")}</div>
             )}
             {d.psdPath ? <PathRow label="psd" path={d.psdPath} /> : null}
             {d.psdPreviewPath ? <PathRow label="preview" path={d.psdPreviewPath} /> : null}
             {d.psdMetadataPath ? <PathRow label="meta" path={d.psdMetadataPath} /> : null}
             {d.placeholderKind || d.smartObjectMode ? (
               <small className="psd-meta">
-                {d.placeholderKind ? `placeholder: ${d.placeholderKind}` : ""}
+                {d.placeholderKind ? `${t("node.metaPlaceholder")}: ${d.placeholderKind}` : ""}
                 {d.placeholderKind && d.smartObjectMode ? " · " : ""}
-                {d.smartObjectMode ? `smart: ${d.smartObjectMode}` : ""}
+                {d.smartObjectMode ? `${t("node.metaSmart")}: ${d.smartObjectMode}` : ""}
               </small>
             ) : null}
           </div>

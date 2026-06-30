@@ -260,6 +260,105 @@ export const messages = {
   "psd.preview": { en: "preview", zh: "原始预览" },
   "psd.tagPreview": { en: "preview", zh: "预览" },
   "psd.tagMetadata": { en: "metadata", zh: "元数据" },
+
+  // ---- node cards (HgripeNode) — hardcoded card chrome around the localized
+  // NODE_SPECS strings (titles / params / ports live in nodeSpecsI18n.ts). ----
+  "node.noImage": { en: "no image", zh: "暂无图像" },
+  "node.noExport": { en: "no export yet", zh: "尚未导出" },
+  "node.copied": { en: "copied!", zh: "已复制！" },
+  "node.copyHint": { en: "click to copy: {path}", zh: "点击复制：{path}" },
+  "node.clickSelect": { en: "click-to-select", zh: "点选" },
+  "node.connectImage": { en: "connect an image", zh: "请连接图像" },
+  "node.clickSelectTitle": {
+    en: "Click-to-select runs the magic wand on the connected image",
+    zh: "点选会对连接的图像运行魔棒",
+  },
+  "node.auto": { en: "Auto", zh: "自动" },
+  "node.autoTitle": {
+    en: "Auto-detect the subject (Phase 2 models; Phase 1 seeds an empty mask)",
+    zh: "自动检测主体（Phase 2 模型；Phase 1 生成空蒙版）",
+  },
+  "node.editMask": { en: "Edit Mask", zh: "编辑蒙版" },
+  "node.editMaskTitle": {
+    en: "Open the mask editor (brush / wand / morphology)",
+    zh: "打开蒙版编辑器（画笔 / 魔棒 / 形态学）",
+  },
+  "node.preview": { en: "Preview", zh: "预览" },
+  "node.previewTitle": {
+    en: "Preview the current mask / cutout (review gate)",
+    zh: "预览当前蒙版 / 抠像（审阅关卡）",
+  },
+  "node.connImage": { en: "image", zh: "图像" },
+  "node.connTemplate": { en: "template", zh: "模板" },
+  "node.metaPlaceholder": { en: "placeholder", zh: "占位符" },
+  "node.metaSmart": { en: "smart", zh: "智能对象" },
+
+  // ---- inspector (right-side panel) ----
+  "inspector.selectNode": {
+    en: "Select a node to edit its parameters.",
+    zh: "选择一个节点以编辑其参数。",
+  },
+  "inspector.group": { en: "Group", zh: "分组" },
+  "inspector.groupDesc": {
+    en: "A container frame. Drag nodes in/out; members move with it.",
+    zh: "容器框。将节点拖入/拖出；成员随之移动。",
+  },
+  "inspector.label": { en: "Label", zh: "标签" },
+  "inspector.output": { en: "Output", zh: "输出" },
+  "inspector.viewFull": { en: "View full size", zh: "查看原图" },
+
+  // ---- palette (left node catalogue rail) ----
+  "palette.heading": { en: "Nodes", zh: "节点" },
+  "palette.searchPh": { en: "Search nodes…  ( / )", zh: "搜索节点…  ( / )" },
+  "palette.catInput": { en: "Inputs", zh: "输入" },
+  "palette.catGenerate": { en: "Generate", zh: "生成" },
+  "palette.catControl": { en: "Control", zh: "控制" },
+  "palette.catUtility": { en: "Utility", zh: "工具" },
+  "palette.catOutput": { en: "Outputs", zh: "输出" },
+  "palette.containers": { en: "Containers", zh: "容器" },
+  "palette.group": { en: "Group", zh: "分组" },
+  "palette.noMatch": { en: "No nodes match “{query}”.", zh: "没有匹配「{query}」的节点。" },
+  "palette.hint": { en: "Drag onto the canvas, or click to add.", zh: "拖到画布上，或点击添加。" },
+
+  // ---- Mask-Edit modal (MaskEditModal) — tool labels/hints live in maskToolsI18n.ts ----
+  "mask.titleSubject": { en: "Subject Mask / Matte", zh: "主体蒙版 / 抠像" },
+  "mask.titleDefault": { en: "Mask editor", zh: "蒙版编辑器" },
+  "mask.editor": { en: "mask editor", zh: "蒙版编辑器" },
+  "mask.undo": { en: "Undo", zh: "撤销" },
+  "mask.undoTitle": { en: "Undo (Ctrl+Z)", zh: "撤销（Ctrl+Z）" },
+  "mask.redo": { en: "Redo", zh: "重做" },
+  "mask.redoTitle": { en: "Redo (Ctrl+Y)", zh: "重做（Ctrl+Y）" },
+  "mask.clear": { en: "Clear", zh: "清除" },
+  "mask.clearTitle": { en: "Discard all edits", zh: "丢弃全部编辑" },
+  "mask.showImage": { en: "Show image", zh: "显示图像" },
+  "mask.maskOnly": { en: "Mask only", zh: "仅蒙版" },
+  "mask.togglePreviewTitle": { en: "Toggle transparency preview", zh: "切换透明度预览" },
+  "mask.apply": { en: "Apply", zh: "应用" },
+  "mask.applyTitle": { en: "Apply edits to the node", zh: "将编辑应用到节点" },
+  "mask.closeTitle": { en: "Close without applying (Esc)", zh: "不应用直接关闭（Esc）" },
+  "mask.comingSoon": { en: "coming soon", zh: "即将推出" },
+  "mask.soon": { en: "soon", zh: "即将" },
+  "mask.brushSize": { en: "Brush size", zh: "笔刷大小" },
+  "mask.amount": { en: "Amount (px)", zh: "数量（px）" },
+  "mask.wandTolerance": { en: "Wand tolerance", zh: "魔棒容差" },
+  "mask.queuedOps": { en: "Queued ops ({count})", zh: "排队操作（{count}）" },
+  "mask.opsEmpty": { en: "none — paint or pick a tool", zh: "无 —— 涂抹或选择工具" },
+  "mask.mattingBand": { en: "Matting band ({count})", zh: "抠像带（{count}）" },
+  "mask.matteEmpty": {
+    en: "none — pick Matting and paint over hair / fur / glass",
+    zh: "无 —— 选择 抠像 并在 头发 / 绒毛 / 玻璃 上涂抹",
+  },
+  "mask.bandRadius": { en: "band r{radius}", zh: "带 r{radius}" },
+  "mask.samPoints": { en: "SAM 2 points ({count})", zh: "SAM 2 点（{count}）" },
+  "mask.pointsEmpty": {
+    en: "none — pick Point (SAM 2) and click the subject",
+    zh: "无 —— 选择 点 (SAM 2) 并点击主体",
+  },
+  "mask.notePrefix": { en: "Edits ({count}) are recorded as ", zh: "编辑（{count}）记录为 " },
+  "mask.noteSuffix": {
+    en: " and applied by the backend on run. Point (SAM 2) prompts route auto modes to the SAM 2 segmenter — left-click includes, right-click excludes; Matting paints the trimap unknown band (resolved to soft alpha by ViTMatte / the builtin guided filter); pen/lasso are planned (greyed).",
+    zh: "，在运行时由后端应用。点 (SAM 2) 提示会把 auto 模式路由到 SAM 2 分割器——左键包含、右键排除；抠像 在三分图未知带上涂抹（由 ViTMatte / 内置引导滤波解算为软 alpha）；钢笔/套索 为计划中（置灰）。",
+  },
 } satisfies Record<string, { en: string; zh: string }>;
 
 export type MsgKey = keyof typeof messages;

@@ -45,6 +45,7 @@ import { loadPersistedGraph } from "./editor/persist";
 import { defaultParams } from "./graph/nodeSpecs";
 import { topoLevels, validateGraph } from "./runtime/dag";
 import { isTauri } from "./bridge/tauri";
+import { useT } from "./i18n";
 
 function makeNode(id: string, kind: string, x: number, y: number, params?: Record<string, unknown>): Node {
   const data: HgripeNodeData = { kind, params: { ...defaultParams(kind), ...params }, status: "idle" };
@@ -63,6 +64,7 @@ const initialEdges: Edge[] = [
 ];
 
 function Studio({ onToggleLang }: { onToggleLang: () => void }) {
+  const t = useT();
   // Restore the last autosaved workflow from this workspace; fall back to the
   // pre-wired sample graph on a fresh / unreadable workspace.
   const initial = useMemo(() => {
@@ -661,7 +663,7 @@ function Studio({ onToggleLang }: { onToggleLang: () => void }) {
 
       {maskEditNode && (
         <MaskEditModal
-          title={(maskEditNode.data as HgripeNodeData).kind === "subjectMask" ? "Subject Mask / Matte" : "Mask editor"}
+          title={t((maskEditNode.data as HgripeNodeData).kind === "subjectMask" ? "mask.titleSubject" : "mask.titleDefault")}
           imagePath={connectedImagePath(maskEditNode.id)}
           initial={normalizeEditPaths((maskEditNode.data as HgripeNodeData).params.edit_paths)}
           wandTolerance={Number((maskEditNode.data as HgripeNodeData).params.wand_tolerance ?? 24)}

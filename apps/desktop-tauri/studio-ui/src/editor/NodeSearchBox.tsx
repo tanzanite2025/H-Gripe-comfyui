@@ -1,8 +1,8 @@
-import { useEffect, useRef, useState } from "react";
+import { useContext, useEffect, useRef, useState } from "react";
 import type { Node } from "@xyflow/react";
 
 import { searchNodes } from "./nodesearch";
-import { useT } from "../i18n";
+import { LangContext, useT } from "../i18n";
 
 export interface NodeSearchBoxProps {
   nodes: Node[];
@@ -16,11 +16,12 @@ export interface NodeSearchBoxProps {
  */
 export function NodeSearchBox({ nodes, onJump }: NodeSearchBoxProps) {
   const t = useT();
+  const lang = useContext(LangContext);
   const [query, setQuery] = useState("");
   const [open, setOpen] = useState(false);
   const boxRef = useRef<HTMLDivElement | null>(null);
 
-  const matches = searchNodes(nodes, query);
+  const matches = searchNodes(nodes, query, lang);
 
   // Close the results when clicking elsewhere.
   useEffect(() => {

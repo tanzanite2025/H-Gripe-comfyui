@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useReducer, useRef, useState } from "react";
+import { useCallback, useContext, useEffect, useMemo, useReducer, useRef, useState } from "react";
 import { generateThumbnail } from "../bridge/tauri";
 import {
   MASK_TOOLS,
@@ -6,6 +6,8 @@ import {
   DEFAULT_TOOL_ID,
   type MaskTool,
 } from "./maskTools";
+import { localizeTool } from "./maskToolsI18n";
+import { LangContext, useT } from "../i18n";
 import {
   addBrushStroke,
   addMatteStroke,
@@ -79,6 +81,8 @@ export function MaskEditModal({
   onCommit,
   onClose,
 }: MaskEditModalProps) {
+  const t = useT();
+  const lang = useContext(LangContext);
   const [state, dispatch] = useReducer(reducer, initial, initEditState);
   const [toolId, setToolId] = useState<string>(DEFAULT_TOOL_ID);
   const [brushSize, setBrushSize] = useState(24);
@@ -104,10 +108,10 @@ export function MaskEditModal({
     if (!imagePath) return;
     let cancelled = false;
     generateThumbnail({ path: imagePath, size: 1280 })
-      .then((t) => {
+      .then((thumb) => {
         if (cancelled) return;
-        if (t.data_url) setUnderlay(t.data_url);
-        if (t.width && t.height) setDims({ w: t.width, h: t.height });
+        if (thumb.data_url) setUnderlay(thumb.data_url);
+        if (thumb.width && thumb.height) setDims({ w: thumb.width, h: thumb.height });
       })
       .catch(() => {
         /* keep checkerboard */
@@ -331,25 +335,25 @@ export function MaskEditModal({
       <div className="media-viewer mask-edit" onClick={(e) => e.stopPropagation()}>
         <div className="media-viewer-bar">
           <span className="media-viewer-name" title={title}>
-            {title} <span className="muted">· mask editor</span>
+            {title} <span className="muted">· {t("mask.editor")}</span>
           </span>
           <div className="media-viewer-actions">
-            <button disabled={!canUndo(state)} onClick={() => dispatch({ type: "undo" })} title="Undo (Ctrl+Z)">
-              ↶ Undo
+            <button disabled={!canUndo(state)} onClick={() => dispatch({ type: "undo" })} title={t("mask.undoTitle")}>
+              ↶ {t("mask.undo")}
             </button>
-            <button disabled={!canRedo(state)} onClick={() => dispatch({ type: "redo" })} title="Redo (Ctrl+Y)">
-              ↷ Redo
+            <button disabled={!canRedo(state)} onClick={() => dispatch({ type: "redo" })} title={t("mask.redoTitle")}>
+              ↷ {t("mask.redo")}
             </button>
-            <button disabled={count === 0} onClick={() => dispatch({ type: "clear" })} title="Discard all edits">
-              Clear
+            <button disabled={count === 0} onClick={() => dispatch({ type: "clear" })} title={t("mask.clearTitle")}>
+              {t("mask.clear")}
             </button>
-            <button className={overlayOnly ? "active" : ""} onClick={() => setOverlayOnly((v) => !v)} title="Toggle transparency preview">
-              {overlayOnly ? "Show image" : "Mask only"}
+            <button className={overlayOnly ? "active" : ""} onClick={() => setOverlayOnly((v) => !v)} title={t("mask.togglePreviewTitle")}>
+              {overlayOnly ? t("mask.showImage") : t("mask.maskOnly")}
             </button>
-            <button className="primary" onClick={() => { onCommit(state.current); onClose(); }} title="Apply edits to the node">
-              Apply
+            <button className="primary" onClick={() => { onCommit(state.current); onClose(); }} title={t("mask.applyTitle")}>
+              {t("mask.apply")}
             </button>
-            <button onClick={onClose} title="Close without applying (Esc)">
+            <button onClick={onClose} title={t("mask.closeTitle")}>
               ✕
             </button>
           </div>
@@ -357,18 +361,21 @@ export function MaskEditModal({
 
         <div className="mask-edit-body">
           <div className="mask-edit-tools">
-            {MASK_TOOLS.map((t) => (
-              <button
-                key={t.id}
-                className={`mask-tool ${t.status === "planned" ? "planned" : ""} ${toolId === t.id && t.kind !== "global" ? "active" : ""}`}
-                disabled={t.status === "planned"}
-                title={t.status === "planned" ? `${t.hint} (coming soon)` : t.hint}
-                onClick={() => onToolClick(t)}
-              >
-                {t.label}
-                {t.status === "planned" ? <em className="soon">soon</em> : null}
-              </button>
-            ))}
+            {MASK_TOOLS.map((mt) => {
+              const loc = localizeTool(mt, lang);
+              return (
+                <button
+                  key={mt.id}
+                  className={`mask-tool ${mt.status === "planned" ? "planned" : ""} ${toolId === mt.id && mt.kind !== "global" ? "active" : ""}`}
+                  disabled={mt.status === "planned"}
+                  title={mt.status === "planned" ? `${loc.hint}（${t("mask.comingSoon")}）` : loc.hint}
+                  onClick={() => onToolClick(mt)}
+                >
+                  {loc.label}
+                  {mt.status === "planned" ? <em className="soon">{t("mask.soon")}</em> : null}
+                </button>
+              );
+            })}
           </div>
 
           <div className="mask-edit-stage">
@@ -386,7 +393,7 @@ export function MaskEditModal({
 
           <div className="mask-edit-controls">
             <label className="field">
-              <span>Brush size</span>
+              <span>{t("mask.brushSize")}</span>
               <span className="slider-row">
                 <input type="range" min={1} max={96} value={brushSize} onChange={(e) => setBrushSize(Number(e.target.value))} />
                 <output>{brushSize}</output>
@@ -394,7 +401,7 @@ export function MaskEditModal({
             </label>
             {showAmount ? (
               <label className="field">
-                <span>Amount (px)</span>
+                <span>{t("mask.amount")}</span>
                 <span className="slider-row">
                   <input type="range" min={0} max={16} value={amount} onChange={(e) => setAmount(Number(e.target.value))} />
                   <output>{amount}</output>
@@ -403,7 +410,7 @@ export function MaskEditModal({
             ) : null}
             {tool.id === "wand" ? (
               <label className="field">
-                <span>Wand tolerance</span>
+                <span>{t("mask.wandTolerance")}</span>
                 <span className="slider-row">
                   <input type="range" min={0} max={255} value={tolerance} onChange={(e) => setTolerance(Number(e.target.value))} />
                   <output>{tolerance}</output>
@@ -412,10 +419,10 @@ export function MaskEditModal({
             ) : null}
 
             <div className="field">
-              <span>Queued ops ({ops.length})</span>
+              <span>{t("mask.queuedOps", { count: ops.length })}</span>
               <div className="mask-op-list">
                 {ops.length === 0 ? (
-                  <small className="muted">none — paint or pick a tool</small>
+                  <small className="muted">{t("mask.opsEmpty")}</small>
                 ) : (
                   ops.map((op, i) => (
                     <span key={i} className="mask-op-chip">
@@ -428,14 +435,14 @@ export function MaskEditModal({
             </div>
 
             <div className="field">
-              <span>Matting band ({matteStrokes.length})</span>
+              <span>{t("mask.mattingBand", { count: matteStrokes.length })}</span>
               <div className="mask-op-list">
                 {matteStrokes.length === 0 ? (
-                  <small className="muted">none — pick Matting and paint over hair / fur / glass</small>
+                  <small className="muted">{t("mask.matteEmpty")}</small>
                 ) : (
                   matteStrokes.map((s, i) => (
                     <span key={s.id ?? i} className="mask-op-chip">
-                      band r{s.radius}
+                      {t("mask.bandRadius", { radius: s.radius })}
                     </span>
                   ))
                 )}
@@ -443,10 +450,10 @@ export function MaskEditModal({
             </div>
 
             <div className="field">
-              <span>SAM 2 points ({points.length})</span>
+              <span>{t("mask.samPoints", { count: points.length })}</span>
               <div className="mask-op-list">
                 {points.length === 0 ? (
-                  <small className="muted">none — pick Point (SAM 2) and click the subject</small>
+                  <small className="muted">{t("mask.pointsEmpty")}</small>
                 ) : (
                   points.map((p, i) => (
                     <span key={i} className={`mask-op-chip${p.label === 0 ? " negative" : ""}`}>
@@ -458,12 +465,9 @@ export function MaskEditModal({
             </div>
 
             <small className="muted mask-edit-note">
-              Edits ({count}) are recorded as <code>edit_paths</code> and applied by the
-              backend on run. Point (SAM 2) prompts route auto modes to the SAM 2
-              segmenter — left-click includes, right-click excludes; Matting
-              paints the trimap unknown band (resolved to soft
-              alpha by ViTMatte / the builtin guided filter); pen/lasso are
-              planned (greyed).
+              {t("mask.notePrefix", { count })}
+              <code>edit_paths</code>
+              {t("mask.noteSuffix")}
             </small>
           </div>
         </div>

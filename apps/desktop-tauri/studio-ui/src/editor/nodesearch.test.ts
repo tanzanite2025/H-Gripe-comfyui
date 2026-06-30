@@ -35,6 +35,6 @@ describe("searchNodes", () => {
 
   it("respects the result cap", () => {
     const many = Array.from({ length: 30 }, (_, i) => node(`p${i}`, "prompt"));
-    expect(searchNodes(many, "prompt", 5)).toHaveLength(5);
+    expect(searchNodes(many, "prompt", "en", 5)).toHaveLength(5);
   });
 });

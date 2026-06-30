@@ -51,6 +51,12 @@ def test_probe_reports_cpu_available_and_realesrgan_entry() -> None:
     # The CPU baseline is not GPU-accelerated; the ML engine is.
     assert engines["cpu"]["accelerated"] is False
     assert engines["realesrgan"]["accelerated"] is True
+    # Cached-weight inventory: the CPU baseline loads none; the ML engine names
+    # its (not-yet-downloaded) weight.
+    assert "weight" not in engines["cpu"]
+    weight = engines["realesrgan"]["weight"]
+    assert weight["path"].endswith("RealESRGAN_x4plus.pth")
+    assert isinstance(weight["present"], bool)
     assert "model_cache_dir" in report
 
 

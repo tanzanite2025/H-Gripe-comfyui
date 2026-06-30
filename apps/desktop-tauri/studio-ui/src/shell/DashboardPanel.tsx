@@ -126,6 +126,17 @@ export function DashboardPanel() {
                           : t("dashboard.engineUnavailable")}
                       </span>
                       {state.reason && <small className="hint"> {state.reason}</small>}
+                      {state.weight && (
+                        <small className={state.weight.present ? "hint ok" : "hint missing"}>
+                          {" "}
+                          {state.weight.present
+                            ? t("dashboard.weightCached") +
+                              (state.weight.size_mb != null
+                                ? ` (${state.weight.size_mb} MB)`
+                                : "")
+                            : t("dashboard.weightMissing")}
+                        </small>
+                      )}
                     </div>
                   ))
                 )}

@@ -1112,6 +1112,20 @@ pub(crate) fn detect_quality_issues(
     })
 }
 
+/// Cached-weight inventory for one engine: the non-bundled weight it would load
+/// and whether it is already present on this box. Lets the UI show what is
+/// downloaded vs still missing instead of only "engine unavailable". A directory
+/// weight (e.g. a diffusers snapshot) reports `present` with `size_mb` null.
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub(crate) struct WeightInfo {
+    #[serde(default)]
+    pub(crate) path: String,
+    #[serde(default)]
+    pub(crate) present: bool,
+    #[serde(default)]
+    pub(crate) size_mb: Option<u64>,
+}
+
 /// Availability of one `engine` option for a card, as reported by a CLI
 /// `--probe-engines` call. `available=false` carries a human `reason` the UI
 /// shows when greying the option out.
@@ -1126,6 +1140,10 @@ pub(crate) struct EngineAvailability {
     /// CUDA device is present; the CPU/`rules`/`provider` baseline is `false`.
     #[serde(default)]
     pub(crate) accelerated: bool,
+    /// Cached-weight inventory for this engine (`None` for the CPU/`rules`/
+    /// `provider` baseline, which loads no downloadable weight).
+    #[serde(default)]
+    pub(crate) weight: Option<WeightInfo>,
 }
 
 /// Engine capability probe for one card (node kind): which `engine` values its
@@ -1766,7 +1784,8 @@ mod tests {
         let raw = r#"{
             "engines": {
                 "rules": {"available": true, "reason": "built-in CPU rule layer", "accelerated": false},
-                "onnx_defect": {"available": false, "reason": "missing optional dependency: onnxruntime", "native_scale": null, "accelerated": true}
+                "onnx_defect": {"available": false, "reason": "missing optional dependency: onnxruntime", "native_scale": null, "accelerated": true,
+                    "weight": {"path": "/cache/models/watchdog_defect.onnx", "present": false, "size_mb": null}}
             },
             "model_cache_dir": "/cache/models"
         }"#;
@@ -1774,9 +1793,16 @@ mod tests {
         assert_eq!(probe.model_cache_dir.as_deref(), Some("/cache/models"));
         assert!(probe.engines["rules"].available);
         assert!(!probe.engines["rules"].accelerated);
+        // The CPU/rule baseline loads no downloadable weight.
+        assert!(probe.engines["rules"].weight.is_none());
         assert!(!probe.engines["onnx_defect"].available);
         assert!(probe.engines["onnx_defect"].accelerated);
         assert!(probe.engines["onnx_defect"].reason.contains("onnxruntime"));
+        // The cached-weight inventory parses: the ML weight is not present yet.
+        let weight = probe.engines["onnx_defect"].weight.as_ref().unwrap();
+        assert!(weight.path.ends_with("watchdog_defect.onnx"));
+        assert!(!weight.present);
+        assert!(weight.size_mb.is_none());
     }
 
     #[test]

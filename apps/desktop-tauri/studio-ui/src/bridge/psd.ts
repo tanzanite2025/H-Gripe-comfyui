@@ -850,6 +850,16 @@ export async function detectQualityIssues(
 // missing on this box (the CPU/`rules` baseline always stays available), and
 // the Dashboard surfaces it as a capability report.
 
+/** Cached-weight inventory for one engine (mirrors Rust `WeightInfo`). */
+export interface WeightInfo {
+  /** Path of the non-bundled weight this engine would load. */
+  path: string;
+  /** Whether that weight is already present on this box. */
+  present: boolean;
+  /** Size in MB for a file weight; `null` for a directory weight (HF snapshot). */
+  size_mb?: number | null;
+}
+
 /** Availability of one `engine` option (mirrors Rust `EngineAvailability`). */
 export interface EngineAvailability {
   available: boolean;
@@ -860,6 +870,11 @@ export interface EngineAvailability {
    * CPU/`rules`/`provider` baseline is `false`.
    */
   accelerated?: boolean;
+  /**
+   * Cached-weight inventory: which non-bundled weight this engine loads and
+   * whether it is present. Absent for the CPU/`rules`/`provider` baseline.
+   */
+  weight?: WeightInfo | null;
 }
 
 /** Per-card engine probe (mirrors Rust `CardEngineProbe`). */

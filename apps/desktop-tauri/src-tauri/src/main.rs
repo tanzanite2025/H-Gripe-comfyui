@@ -535,6 +535,7 @@ fn main() {
             psd::enhance_image,
             psd::detect_quality_issues,
             psd::probe_engines,
+            psd::video_probe,
             psd::prepare_repaint_regions,
             psd::local_repaint_regions,
             psd::composite_repaint

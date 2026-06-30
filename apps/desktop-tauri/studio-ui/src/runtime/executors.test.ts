@@ -16,6 +16,13 @@ describe("source executors", () => {
     expect(await defaultExecutors.imageSource(ctx("imageSource", { path: "" }))).toEqual({ image: null });
   });
 
+  it("videoSource emits its path as a video (or null when empty)", async () => {
+    expect(await defaultExecutors.videoSource(ctx("videoSource", { path: "/a/clip.mp4" }))).toEqual({
+      video: "/a/clip.mp4",
+    });
+    expect(await defaultExecutors.videoSource(ctx("videoSource", { path: "" }))).toEqual({ video: null });
+  });
+
   it("number coerces its param to a number", async () => {
     expect(await defaultExecutors.number(ctx("number", { value: "42" }))).toEqual({ value: 42 });
   });

@@ -1416,6 +1416,114 @@ pub(crate) fn probe_engines(dir: Option<String>) -> Result<EngineProbeReport, St
     })
 }
 
+/// Metadata + poster-frame path for a dropped video, surfaced on the generic
+/// video card. Fields are `snake_case` to match the TS `VideoProbeResult`.
+#[derive(Debug, Clone, Serialize)]
+pub(crate) struct VideoProbeResult {
+    pub(crate) width: u32,
+    pub(crate) height: u32,
+    /// Clip length in seconds; `None` when the container reports none.
+    pub(crate) duration_sec: Option<f64>,
+    /// Frame rate; `None` when unknown rather than guessed.
+    pub(crate) fps: Option<f64>,
+    pub(crate) codec: Option<String>,
+    /// On-disk PNG of the poster frame (rendered via the image thumbnail path).
+    pub(crate) poster_path: String,
+}
+
+/// Shape of `video_probe_cli.py`'s stdout JSON. The poster path is decided by
+/// Rust (the cache location), so the CLI only echoes the metadata back.
+#[derive(Debug, Deserialize)]
+struct VideoProbeCli {
+    #[serde(default)]
+    width: u32,
+    #[serde(default)]
+    height: u32,
+    #[serde(default)]
+    duration_sec: Option<f64>,
+    #[serde(default)]
+    fps: Option<f64>,
+    #[serde(default)]
+    codec: Option<String>,
+}
+
+/// Probe a dropped video and extract a poster frame for the video card.
+///
+/// Rust has no video decoder, so this shells out to the bundled Python's
+/// `video_probe_cli.py` (PyAV, which ships ffmpeg) to read the metadata and
+/// decode one frame to a cached PNG. The card then renders that PNG through the
+/// existing `generate_thumbnail` pipeline, and the original `path` stays the
+/// source of truth for the workflow. The poster is cached under the project
+/// output dir keyed by `path + timestamp`.
+#[tauri::command]
+pub(crate) fn video_probe(
+    path: String,
+    timestamp: Option<f64>,
+    dir: Option<String>,
+) -> Result<VideoProbeResult, String> {
+    let trimmed = path.trim();
+    if trimmed.is_empty() {
+        return Err("path is empty".to_string());
+    }
+    let video = Path::new(trimmed);
+    if !video.is_file() {
+        return Err(format!("file does not exist: {trimmed}"));
+    }
+    let dir = resolve_project_dir(&dir)?;
+    let python = project_python(&dir);
+    let script = dir
+        .join("python")
+        .join("bridge")
+        .join("video_probe_cli.py");
+    if !script.is_file() {
+        return Err(format!("video_probe_cli.py not found at {}", script.display()));
+    }
+
+    let ts = timestamp.unwrap_or(0.0).max(0.0);
+    let poster_dir = crate::runtime_paths()?.output_dir.join(".posters");
+    fs::create_dir_all(&poster_dir)
+        .map_err(|err| format!("failed to create {}: {err}", poster_dir.display()))?;
+    let key = format!("{trimmed}|{}", (ts * 1000.0).round() as i64);
+    let mut hasher = std::collections::hash_map::DefaultHasher::new();
+    std::hash::Hash::hash(&key, &mut hasher);
+    let poster_path = poster_dir.join(format!("{:016x}.png", std::hash::Hasher::finish(&hasher)));
+
+    let mut cmd = std::process::Command::new(&python);
+    cmd.arg(&script)
+        .arg("--video")
+        .arg(video)
+        .arg("--poster-out")
+        .arg(&poster_path)
+        .arg("--timestamp")
+        .arg(format!("{ts}"))
+        .current_dir(&dir);
+    #[cfg(windows)]
+    {
+        use std::os::windows::process::CommandExt;
+        // CREATE_NO_WINDOW: don't pop a console window for the child.
+        cmd.creation_flags(0x0800_0000);
+    }
+    let output = cmd
+        .output()
+        .map_err(|err| format!("failed to launch {}: {err}", python.display()))?;
+    if !output.status.success() {
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        return Err(format!("video probe failed: {}", stderr.trim()));
+    }
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let parsed: VideoProbeCli = serde_json::from_str(stdout.trim())
+        .map_err(|err| format!("could not parse video probe: {err} (raw: {})", stdout.trim()))?;
+
+    Ok(VideoProbeResult {
+        width: parsed.width,
+        height: parsed.height,
+        duration_sec: parsed.duration_sec,
+        fps: parsed.fps,
+        codec: parsed.codec,
+        poster_path: poster_path.to_string_lossy().to_string(),
+    })
+}
+
 /// One issue region prepared for repaint: the padded crop + same-size inpaint
 /// mask the orchestrator sends to the provider, plus the geometry the composite
 /// step needs to paste the result back. Fields are `snake_case` to match the

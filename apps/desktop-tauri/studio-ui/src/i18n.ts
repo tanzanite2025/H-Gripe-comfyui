@@ -307,18 +307,16 @@ export const messages = {
     zh: "预览当前蒙版 / 抠像（审阅关卡）",
   },
   "canvas.dropImages": { en: "added {n} image card(s)", zh: "已添加 {n} 张图片卡" },
-  "canvas.dropImagesAndVideo": {
-    en: "added {n} image card(s); video drop is not supported yet",
-    zh: "已添加 {n} 张图片卡；暂不支持拖入视频",
-  },
-  "canvas.dropVideoSoon": {
-    en: "video card is coming soon — drop an image for now",
-    zh: "视频卡即将推出 — 目前请拖入图片",
+  "canvas.dropVideos": { en: "added {n} video card(s)", zh: "已添加 {n} 张视频卡" },
+  "canvas.dropMedia": {
+    en: "added {images} image + {videos} video card(s)",
+    zh: "已添加 {images} 张图片卡、{videos} 张视频卡",
   },
   "canvas.dropUnsupported": {
-    en: "unsupported file type — drop an image",
-    zh: "不支持的文件类型 — 请拖入图片",
+    en: "unsupported file type — drop an image or video",
+    zh: "不支持的文件类型 — 请拖入图片或视频",
   },
+  "video.probeFailed": { en: "could not read video", zh: "无法读取视频" },
   "node.mediaEditMask": { en: "Edit (Mask)", zh: "编辑（蒙版）" },
   "node.mediaEditMaskTitle": {
     en: "Create a bound mask-edit node from this image and open its editor",

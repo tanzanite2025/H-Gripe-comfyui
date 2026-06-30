@@ -789,8 +789,9 @@ pub(crate) enum StudioExecutor {
 pub(crate) fn studio_executor_for_kind(kind: &str) -> Option<StudioExecutor> {
     use StudioExecutor::*;
     Some(match kind {
-        "prompt" | "batch" | "imageSource" | "psdTemplate" | "number" | "reroute" | "group"
-        | "compare" | "logic" | "if" | "switch" | "preview" | "save" => Graph,
+        "prompt" | "batch" | "imageSource" | "videoSource" | "psdTemplate" | "number"
+        | "reroute" | "group" | "compare" | "logic" | "if" | "switch" | "preview"
+        | "save" => Graph,
         "psdContextAnalyze" | "matchLightColor" | "refineMaskEdge" | "imageEnhance"
         | "detailWatchdog" | "psdExport" => Local,
         "subjectMask" | "crop" => Compute,
@@ -851,6 +852,15 @@ fn execute_studio_graph_node(
                 json!(path)
             };
             Ok(studio_output_map([("image", image)]))
+        }
+        "videoSource" => {
+            let path = studio_value_to_string(node.params.get("path"));
+            let video = if path.is_empty() {
+                Value::Null
+            } else {
+                json!(path)
+            };
+            Ok(studio_output_map([("video", video)]))
         }
         "psdTemplate" => {
             let path = studio_value_to_string(node.params.get("path"));
@@ -1229,6 +1239,7 @@ mod tests {
             "prompt",
             "batch",
             "imageSource",
+            "videoSource",
             "psdTemplate",
             "number",
             "reroute",

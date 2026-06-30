@@ -38,6 +38,33 @@ export async function generateThumbnail(req: ThumbnailRequest): Promise<Thumbnai
   })) as ThumbnailResult;
 }
 
+// Fields are snake_case to match the Rust `VideoProbeResult` serialization.
+export interface VideoProbeResult {
+  width: number;
+  height: number;
+  /** Clip length in seconds; `null` when the container reports none. */
+  duration_sec: number | null;
+  /** Frame rate; `null` when unknown. */
+  fps: number | null;
+  codec: string | null;
+  /** On-disk PNG of the poster frame (render it via `generateThumbnail`). */
+  poster_path: string;
+}
+
+/**
+ * Probe a video for the generic video card: read its metadata and decode a
+ * poster frame to a cached PNG. Rust has no video decoder, so this shells out
+ * to the bundled Python (PyAV). Outside Tauri there is no backend, so this
+ * returns a mock with an empty poster path (browser preview shows a placeholder).
+ */
+export async function videoProbe(path: string, timestamp = 0): Promise<VideoProbeResult> {
+  const invoke = tauriInvoke();
+  if (!invoke) {
+    return { width: 0, height: 0, duration_sec: null, fps: null, codec: null, poster_path: "" };
+  }
+  return (await invoke("video_probe", { path, timestamp })) as VideoProbeResult;
+}
+
 export interface PickFileOptions {
   title?: string;
   /** Display name for the extension filter (e.g. "Images"). */

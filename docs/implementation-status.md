@@ -28,7 +28,7 @@
 | PSD Export (`compose_psd_cli.py`) | ✅ Landed | Smart-object replacement + `.psd`/preview/metadata triplet. |
 | Refine Mask Edge (`edge_refine_cli.py`) | 🟡 Partial | CPU clean/feather + trimap-aware hand-off (protects the matte unknown band) landed. A learned-matting / `guidedFilter` `profile_ref` **engine mode** is ⛔ planned. |
 | Image Enhance (`image_enhance_cli.py`) | 🟡 Partial | CPU Lanczos upscale + denoise + unsharp default, plus an opt-in **`engine` seam** (`python/bridge/sr_backends/`) with a **Real-ESRGAN** backend + capability probe + CPU fallback. Real GPU inference is opt-in (deps/weight not bundled). See §2. |
-| Detail Watchdog (`detail_watchdog_cli.py`) | 🟡 Partial | Rule heuristics only; semantic targets reported `skipped`. See §2. |
+| Detail Watchdog (`detail_watchdog_cli.py`) | 🟡 Partial | Always-on CPU rule layer, plus an opt-in **`engine` seam** (`python/bridge/detector_backends/`) with an **`onnx_defect`** detector + capability probe + rule-only fallback. The trained models behind it are not bundled; semantic targets stay `skipped` until a detector covers them. See §2. |
 | Detail Repaint (`detail_repaint_cli.py`) | 🟡 Partial | `prepare`/`composite` around a provider `image.edit` call; no local backend. See §2. |
 
 ## 2. Phase 2 algorithm backends — [`phase2-algorithm-roadmap.md`](phase2-algorithm-roadmap.md)
@@ -41,9 +41,9 @@ concept), with the CPU path remaining the default and fallback.
 | Item | Status | What's missing |
 | --- | --- | --- |
 | **Super-resolution** GPU backend | 🟡 Partial | `engine` seam + `python/bridge/sr_backends/` registry + **Real-ESRGAN** backend (lazy torch, weight from `HGRIPE_MODEL_CACHE`) + `--probe-engines` capability probe + graceful CPU fallback **landed**. Still ⛔: CCSR / SupIR backends, real-inference CI (opt-in like ViTMatte), installer weight story, UI greying via the probe. |
-| **Detail Watchdog** ML/VLM passes | ⛔ Planned | Face/hand quality model, OCR + logo/template matching, VLM defect pass. Currently-`skipped` semantic targets graduate to real findings only once these land. |
+| **Detail Watchdog** ML/VLM passes | 🟡 Partial | `engine` seam + `python/bridge/detector_backends/` registry + **`onnx_defect`** detector (lazy `onnxruntime`, weight from `HGRIPE_WATCHDOG_MODEL` / `HGRIPE_MODEL_CACHE`, hands/text/logo) + `--probe-engines` probe + graceful rule-only fallback **landed**. Still ⛔: the actual trained face/hand-quality, OCR + logo/template, and VLM defect models behind it, plus real-inference CI (opt-in like ViTMatte) and UI greying via the probe. Currently-`skipped` targets graduate to real findings only once a real weight lands. |
 | **Detail Repaint** local inpaint backend | ⛔ Planned | Local GPU diffusion inpaint (SD/SDXL/Flux Fill) consuming the existing crop+mask+prompt manifest, optional ControlNet, Poisson/gradient-domain seam blending. |
-| **Capability probe / weight cache** | 🟡 Partial | Per-engine `--probe-engines` + `HGRIPE_MODEL_CACHE` resolution **landed for Image Enhance**. Still ⛔: a `doctor`-style cross-card GPU/CUDA/backend report and the UI wiring that greys unavailable engines. |
+| **Capability probe / weight cache** | 🟡 Partial | Per-engine `--probe-engines` + `HGRIPE_MODEL_CACHE` resolution **landed for Image Enhance and Detail Watchdog**. Still ⛔: a `doctor`-style cross-card GPU/CUDA/backend report and the UI wiring that greys unavailable engines. |
 
 ## 3. Subject Mask / Matte — [`subject-mask-matte.md`](cards/subject-mask-matte.md)
 

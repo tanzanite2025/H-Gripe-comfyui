@@ -8,10 +8,14 @@ Scans a candidate image for local quality breakdowns and emits a structured
 repaint a region before composing into the PSD. This document is the card's
 contract: what it accepts, what it guarantees, and how it behaves at the edges.
 Phase 1 is **detect + report only** (it never repaints — `fixed_image` is the
-input unchanged) and dependency-light (no OpenCV, no ML). Semantic detection of
-hands, packaging text and logo deformation needs the later GPU/VLM backend and
-is intentionally **not** attempted here; those watch targets are recorded as
-skipped rather than guessed at.
+input unchanged). The CPU **rule layer** (Pillow + numpy, no ML) is the
+always-available baseline and always runs. Semantic detection of hands,
+packaging text and logo deformation needs a learned detector: the rule layer
+never guesses at them, recording them as `skipped` instead. They graduate to
+real findings through an **opt-in** ML detector selected by the `engine` param
+(see *Engine seam* below); when the chosen detector's optional dependency or
+weight is missing, the node falls back to the rule-only report and records why
+(`engine_fallback_reason`) — it never hard-fails for lack of a model.
 
 ## Inputs (ports)
 
@@ -27,7 +31,8 @@ skipped rather than guessed at.
 | Param | Type | Default | Range / values | Notes |
 | --- | --- | --- | --- | --- |
 | `mode` | enum | `balanced` | `strict` \| `balanced` \| `lenient` | Detection aggressiveness (thresholds below). |
-| `watch_targets` | csv | all | `face,hands,text,logo,product_edges` | Empty = all. `hands`/`text`/`logo` are recorded in `skipped_targets`. |
+| `watch_targets` | csv | all | `face,hands,text,logo,product_edges` | Empty = all. `hands`/`text`/`logo` stay in `skipped_targets` unless an `engine` covers them. |
+| `engine` | enum | `rules` | `rules` \| `onnx_defect` | Detection engine. `rules` = built-in CPU rule layer (always on). `onnx_defect` = opt-in ML detector for hands/text/logo, falls back to `rules` when its dep/weight is missing. |
 | `max_decode_pixels` | int | `96_000_000` | `>= 0` (0 disables) | Rejects an **input** image larger than this before decoding (decompression-bomb guard). |
 | `no_overlay` | bool | `false` | | Skip writing the issue-overlay PNG. |
 | `output_dir` | path | run output dir | | Validated server-side. |
@@ -69,6 +74,8 @@ source's original mode is recorded as `source_mode`:
 | Input larger than `max_decode_pixels` | `ValueError: input image too large to decode safely: WxH ...` (before decode). |
 | Unknown `mode` | `ValueError: unknown mode ...; expected one of [...]`. |
 | Unknown `watch_targets` entry | `ValueError: unknown watch target(s): [...]; expected [...]`. |
+| Unknown `engine` | Rule-only report; `engine: rules`, `engine_fallback_reason: "unknown engine '...'"` (no error). |
+| ML `engine` requested, dep/weight missing | Rule-only report; `engine: rules`, `engine_fallback_reason` explains (missing `onnxruntime` or weight); covered targets stay `skipped`. |
 | EXIF-rotated input | Orientation normalised via the orientation tag; `exif_transposed: true`. |
 | No issues found | `status: passed`, `issues: []`, no overlay PNG written. |
 | `mask` connected | Ignored by detection (`mask_consumed: false`). |
@@ -82,7 +89,37 @@ source's original mode is recorded as `source_mode`:
 
 `watchdog_report` (diagnostics): `mode`, `watch_targets`, `skipped_targets`,
 `image_size`, `target_size`, `global_sharpness`, `source_mode`,
-`exif_transposed`, `max_decode_pixels`, `mask_consumed`.
+`exif_transposed`, `max_decode_pixels`, `mask_consumed`, and the engine-seam
+telemetry: `engine` (what actually ran — `rules` or a detector id),
+`engine_requested` (what was asked for), `engine_fallback_reason` (why the
+rule-only path was used, else `null`), `detectors` (learned passes that ran on
+top of the rule layer), `backend_model` (the loaded weight file name, else
+`null`).
+
+## Engine seam (opt-in ML detectors)
+
+The rule layer is the always-on baseline; learned detectors are **additive**
+passes selected by `engine` and registered in `python/bridge/detector_backends/`
+(mirroring the Image Enhance `sr_backends` super-resolution seam). A detector
+declares the watch targets it covers, an `available()` probe (lazy — it never
+imports `onnxruntime`/`torch` just to report availability), and a `detect()`
+that emits issues into the **same** `QualityReport` contract, so the downstream
+Detail Repaint consumer needs no change. Findings merge on top of the rule
+findings; the targets a detector covers graduate out of `skipped_targets`.
+
+| Engine | Deps | Weight | Covers | Emits |
+| --- | --- | --- | --- | --- |
+| `rules` | none | none | `face`, `product_edges` (+ global blur / colour) | `low_resolution`, `face_blur`, `edge_halo`, `color_mismatch` |
+| `onnx_defect` | `onnxruntime` | `watchdog_defect.onnx` | `hands`, `text`, `logo` | `malformed_hands`, `garbled_text`, `deformed_logo` (all `suggested_action: detail_redraw`) |
+
+`onnx_defect` resolves its weight from `HGRIPE_WATCHDOG_MODEL` (explicit path)
+or `<model cache>/watchdog_defect.onnx` (`HGRIPE_MODEL_CACHE`, else the bundled
+`resources/models`); the weight is **not** shipped in the installer. Model
+contract: input `[1,3,H,W]` float32 RGB `0..1` (letterboxed), outputs `boxes`
+`[N,4]` xyxy / `scores` `[N]` / `labels` `[N]`, with an optional sidecar
+`<weight>.labels.json` mapping class ids to target names. Run
+`detail_watchdog_cli.py --probe-engines` for the UI capability probe (which
+engines are usable right now).
 
 ## Outputs (ports)
 
@@ -102,5 +139,11 @@ source's original mode is recorded as `source_mode`:
   transposed (Pillow 12), the advisory mask, invalid mode / watch target,
   missing image (run: `pytest python/bridge/tests`).
 - `src-tauri/src/studio/detail_watchdog.rs` — the connected-image-input guard
-  and `WatchdogReport` deserialization of the v1 hardening fields (plus legacy
-  JSON defaults).
+  and `WatchdogReport` deserialization of the v1 hardening fields, the engine-
+  seam telemetry fields, and legacy JSON defaults.
+- `python/bridge/tests/test_detector_backends.py` — the detector registry /
+  probe, unknown-engine and missing-weight fallback, the sidecar label map, and
+  a gated end-to-end pass that synthesises a tiny ONNX detector (skipped unless
+  `onnx` + `onnxruntime` import, mirroring the ViTMatte opt-in gate).
+- `python/bridge/tests/test_detail_watchdog_cli.py` — also the `--engine`
+  dispatch: default `rules`, unknown-engine fallback, unavailable-ML fallback.

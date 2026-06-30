@@ -660,6 +660,16 @@ export interface WatchdogReport {
   target_size?: [number, number] | null;
   /** Laplacian-variance sharpness of the whole image (higher = sharper). */
   global_sharpness: number;
+  /** Detection engine that actually ran: `rules` (CPU baseline) or an ML id. */
+  engine?: string;
+  /** Engine the node asked for (may differ from `engine` on fallback). */
+  engine_requested?: string;
+  /** Why the rule-only path was used when an ML engine could not run; else null. */
+  engine_fallback_reason?: string | null;
+  /** Learned detector passes that ran on top of the rule layer. */
+  detectors?: string[];
+  /** File name of the weight the ML detector loaded, when one ran. */
+  backend_model?: string | null;
 }
 
 /** Result of the Detail Watchdog node (`detect_quality_issues`). */
@@ -683,6 +693,8 @@ export interface DetectQualityRequest {
   watchTargets?: string;
   /** `strict | balanced | lenient` detection sensitivity. */
   mode?: string;
+  /** Detection engine: `rules` (default CPU layer) or an opt-in ML detector id. */
+  engine?: string;
   /** Directory for the written overlay PNG. */
   outputDir?: string;
   /** Base name for the written overlay PNG. */
@@ -771,6 +783,14 @@ export async function detectQualityIssues(
         image_size: src,
         target_size: target,
         global_sharpness: 142.0,
+        engine: "rules",
+        engine_requested: req.engine ?? "rules",
+        engine_fallback_reason:
+          (req.engine ?? "rules") === "rules"
+            ? null
+            : "ML detector unavailable in browser dev (mock)",
+        detectors: [],
+        backend_model: null,
       },
     };
   }
@@ -780,6 +800,7 @@ export async function detectQualityIssues(
     targetBounds: req.targetBounds ? JSON.stringify(req.targetBounds) : null,
     watchTargets: req.watchTargets ?? null,
     mode: req.mode ?? null,
+    engine: req.engine ?? null,
     outputDir: req.outputDir ?? null,
     outputName: req.outputName ?? null,
   })) as DetectQualityResult;

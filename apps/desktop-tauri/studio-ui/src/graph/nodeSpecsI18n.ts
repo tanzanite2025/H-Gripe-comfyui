@@ -286,12 +286,16 @@ export const NODE_ZH: Record<string, NodeSpecZh> = {
   detailWatchdog: {
     title: "细节看护",
     description:
-      "扫描候选图像中的局部劣化（全局/区域模糊、alpha 边缘光晕、与所连背景的颜色不匹配、低于目标的分辨率）并输出 QualityReport，让工作流决定是重跑还是手工修。Phase 1 仅检测（不自动重绘）：`fixed_image` 即未改动的输入。仅 CPU（无 ML）——需要 GPU/VLM 的语义目标（手/文字/logo）会标记为跳过。接入 VisualContext 和/或占位符边界以进行分辨率与颜色检查。",
+      "扫描候选图像中的局部劣化（全局/区域模糊、alpha 边缘光晕、与所连背景的颜色不匹配、低于目标的分辨率）并输出 QualityReport，让工作流决定是重跑还是手工修。Phase 1 仅检测（不自动重绘）：`fixed_image` 即未改动的输入。CPU 规则层始终运行；手/文字/logo 等语义目标默认标记为跳过，除非通过 `engine` 选用可选的 ML 检测器来覆盖。接入 VisualContext 和/或占位符边界以进行分辨率与颜色检查。",
     params: {
       mode: { label: "模式", hint: "检测灵敏度：strict = 标记更多，lenient = 标记更少" },
       watch_targets: {
         label: "看护目标",
-        hint: "face,hands,text,logo,product_edges 的逗号列表（空 = 全部）；Phase 1 跳过 hands/text/logo",
+        hint: "face,hands,text,logo,product_edges 的逗号列表（空 = 全部）；未启用 ML 引擎时跳过 hands/text/logo",
+      },
+      engine: {
+        label: "引擎",
+        hint: "rules = 内置 CPU 规则层（始终可用）；onnx_defect = 可选 ML 检测器，覆盖 手/文字/logo，权重/依赖缺失时回落 rules",
       },
       output_dir: { label: "输出目录", hint: OUTPUT_DIR_HINT },
       output_name: { label: "输出名", hint: "问题叠加 PNG 的基础名（空 = <image>_issues）" },

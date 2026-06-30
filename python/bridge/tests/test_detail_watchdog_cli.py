@@ -174,3 +174,42 @@ def test_unknown_watch_target_rejected(tmp_path: Path) -> None:
 def test_missing_image_raises(tmp_path: Path) -> None:
     with pytest.raises(FileNotFoundError):
         _run(tmp_path / "nope.png", tmp_path)
+
+
+# --- ML detector engine seam ------------------------------------------------
+
+
+def test_default_engine_is_rules(tmp_path: Path) -> None:
+    img = _sharp_rgb(tmp_path / "s.png")
+    report = _run(img, tmp_path)["watchdog_report"]
+    assert report["engine"] == "rules"
+    assert report["engine_requested"] == "rules"
+    assert report["engine_fallback_reason"] is None
+    assert report["detectors"] == []
+    assert report["backend_model"] is None
+
+
+def test_unknown_engine_falls_back_to_rules(tmp_path: Path) -> None:
+    img = _sharp_rgb(tmp_path / "s.png")
+    report = _run(img, tmp_path, engine="bogus")["watchdog_report"]
+    assert report["engine"] == "rules"
+    assert report["engine_requested"] == "bogus"
+    assert "unknown engine" in report["engine_fallback_reason"]
+    # The unsupported semantic targets stay skipped on the rule-only path.
+    assert {"hands", "text", "logo"}.issubset(set(report["skipped_targets"]))
+
+
+def test_unavailable_ml_engine_falls_back_to_rules(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # onnx_defect with no weight present -> rule-only path + recorded reason; the
+    # node never hard-fails for lack of the model.
+    monkeypatch.delenv("HGRIPE_WATCHDOG_MODEL", raising=False)
+    monkeypatch.setenv("HGRIPE_MODEL_CACHE", str(tmp_path / "empty_cache"))
+    img = _sharp_rgb(tmp_path / "s.png")
+    report = _run(img, tmp_path, engine="onnx_defect")["watchdog_report"]
+    assert report["engine"] == "rules"
+    assert report["engine_requested"] == "onnx_defect"
+    assert report["engine_fallback_reason"]
+    assert report["detectors"] == []
+    assert "hands" in report["skipped_targets"]

@@ -103,14 +103,31 @@ skipped semantic targets:
   rule layer.
 
 ### 2.3 Integration plan
-- Keep the rule layer as the always-on baseline; ML detectors are additive
-  passes gated by a `profile_ref` / watch-target list, each emitting into the
-  **same `QualityReport` contract** (so `issue_masks` + `suggested_action`
-  consumers — notably Detail Repaint — need no change).
-- Newly-covered targets graduate from `skipped` to real findings; confidence and
-  detector provenance are added as optional report fields.
-- Detectors run behind a capability probe; missing weights ⇒ that pass is
-  reported `skipped` exactly as today (no hard failure).
+**Status: the seam has landed** (the rest of this section is the design it was
+built to; ⛔ items are the concrete face/hand/OCR/VLM models + real-inference CI).
+As with Image Enhance, the selector is the local card's **`engine` param**
+(`rules` | `onnx_defect` | …), not `--profile-ref` (Detail Watchdog is a `local`
+card).
+
+- ✅ Keep the rule layer as the always-on baseline; ML detectors are additive
+  passes selected by `engine`, each emitting into the **same `QualityReport`
+  contract** (so `issue_masks` + `suggested_action` consumers — notably Detail
+  Repaint — need no change). The detectors register under
+  `python/bridge/detector_backends/` (mirroring `sr_backends`).
+- ✅ Newly-covered targets graduate from `skipped` to real findings; detector
+  provenance is added as optional report fields (`engine` / `engine_requested` /
+  `engine_fallback_reason` / `detectors` / `backend_model`).
+- ✅ Detectors run behind a capability probe (`detail_watchdog_cli.py
+  --probe-engines`); missing deps/weights ⇒ the rule-only report runs and the
+  uncovered targets stay `skipped` exactly as today (no hard failure), with the
+  reason recorded.
+- 🟡 `onnx_defect` is the first concrete detector: a generic ONNX object
+  detector seam covering hands/text/logo (`malformed_hands` / `garbled_text` /
+  `deformed_logo`). Its weight is not bundled; ⛔ the actual trained
+  face/hand-quality, OCR/logo and VLM models behind it.
+- ⛔ A real-inference CI job (opt-in like the ViTMatte e2e), since CI does not
+  install `onnxruntime` + a weight. A gated unit test synthesises a tiny ONNX
+  detector to exercise the path when the deps are present.
 
 ### 2.4 Dependencies & risks
 `onnxruntime`/`torch`, OCR + detection weights. Risks: false positives causing

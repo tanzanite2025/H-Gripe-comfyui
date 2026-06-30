@@ -41,7 +41,7 @@ import os
 from pathlib import Path
 from typing import Any
 
-from sr_backends import onnx_providers
+from sr_backends import onnx_providers, provider_device
 
 from . import DetectorUnavailable, model_cache_dir
 
@@ -131,11 +131,17 @@ class OnnxDefectBackend:
                     return mapped
         return {idx: name for idx, name in enumerate(self.targets)}
 
-    def detect(self, rgb: Any, alpha: Any, watch: set[str]) -> list[dict[str, Any]]:
+    def detect(
+        self, rgb: Any, alpha: Any, watch: set[str], device: str | None = None
+    ) -> tuple[list[dict[str, Any]], str]:
         """Run the detector and map detections of watched targets to issues.
 
-        Raises :class:`DetectorUnavailable` if deps / weights vanished since the
-        probe. Detections of targets not in ``watch`` are dropped.
+        ``device`` selects the ONNX execution provider (``auto`` by default --
+        see :func:`onnx_providers`). Returns ``(issues, device_used)`` so the
+        caller reports the device the session actually bound (an explicit
+        ``cuda`` degrades to ``cpu`` when ORT exposes no accelerator). Raises
+        :class:`DetectorUnavailable` if deps / weights vanished since the probe.
+        Detections of targets not in ``watch`` are dropped.
         """
         ok, reason = self.available()
         if not ok:
@@ -148,8 +154,10 @@ class OnnxDefectBackend:
         label_map = self._label_map(weight)
 
         session = ort.InferenceSession(
-            str(weight), providers=onnx_providers(ort.get_available_providers())
+            str(weight),
+            providers=onnx_providers(ort.get_available_providers(), device=device),
         )
+        device_used = provider_device(session.get_providers())
         spec = session.get_inputs()[0]
         # Spatial dims are the trailing two axes of an NCHW input; a non-int
         # (dynamic) axis falls back to the default square size.
@@ -162,7 +170,7 @@ class OnnxDefectBackend:
         raw = session.run(None, {spec.name: tensor})
         boxes, scores, labels = _named_outputs(session, raw)
         if boxes is None or boxes.size == 0:
-            return []
+            return [], device_used
 
         issues: list[dict[str, Any]] = []
         for box, score, label in zip(boxes, scores, labels):
@@ -193,7 +201,7 @@ class OnnxDefectBackend:
                     "suggested_action": _SUGGESTED_ACTION.get(target, "detail_redraw"),
                 }
             )
-        return issues
+        return issues, device_used
 
 
 def _letterbox(rgb: Any, net_w: int, net_h: int, np: Any) -> tuple[Any, float, tuple[float, float]]:

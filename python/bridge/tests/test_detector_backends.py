@@ -201,7 +201,12 @@ def test_onnx_defect_detects_with_synthetic_model(
     alpha = np.ones((96, 80), dtype=np.float32)
 
     # Watching hands -> the detection graduates into a real issue.
-    issues = backend.detect(rgb, alpha, {"hands"})
+    issues, device_used = backend.detect(rgb, alpha, {"hands"})
+    # CPU-only ORT in CI: the session binds the CPU provider, reported truthfully
+    # even when cuda is requested (it degrades rather than crashing the run).
+    assert device_used == "cpu"
+    _, forced = backend.detect(rgb, alpha, {"hands"}, device="cuda")
+    assert forced == "cpu"
     assert len(issues) == 1
     issue = issues[0]
     assert issue["type"] == "malformed_hands"
@@ -212,7 +217,7 @@ def test_onnx_defect_detects_with_synthetic_model(
     assert 0 <= y1 < y2 <= 96
 
     # The same detection is dropped when its target is not being watched.
-    assert backend.detect(rgb, alpha, {"text"}) == []
+    assert backend.detect(rgb, alpha, {"text"})[0] == []
 
 
 @requires_onnx
@@ -256,6 +261,9 @@ def test_onnx_defect_dispatch_via_watch(
     assert report["engine_fallback_reason"] is None
     assert report["detectors"] == ["onnx_defect"]
     assert report["backend_model"] == "watchdog_defect.onnx"
+    # device defaults to auto; on CPU-only ORT the session ran on cpu.
+    assert report["device_requested"] == "auto"
+    assert report["device"] == "cpu"
     # hands is covered and graduates out of skipped; text stays skipped.
     assert "hands" not in report["skipped_targets"]
     assert "text" in report["skipped_targets"]

@@ -622,19 +622,19 @@ function Studio({ onToggleLang }: { onToggleLang: () => void }) {
       const connected = edges.some((e) => e.source === id || e.target === id);
       const kind = (nodes.find((n) => n.id === id)?.data as HgripeNodeData | undefined)?.kind;
       const items: MenuItem[] = [];
-      // Auto (computed) crop entry: image cards spawn a bound crop node in
-      // auto_subject mode and run it straight away — no editor. The manual box
-      // lives on the card's "Crop" button instead. See generic-media-card.md.
+      // Auto (computed) entries: image cards spawn a bound compute node and run
+      // it straight away — no editor. Each is purely algorithm-derived from the
+      // single input image (the manual / human-spatial lanes live on the card's
+      // action-row buttons instead). See generic-media-card.md.
       if (kind === "imageSource") {
-        items.push({
-          label: t("node.cropAuto"),
-          onClick: () =>
-            addBoundEdit(id, "crop", {
-              params: { mode: "auto_subject" },
-              openEditor: false,
-              run: true,
-            }),
-        });
+        const auto = (editKind: string, params?: Record<string, unknown>) =>
+          addBoundEdit(id, editKind, { params, openEditor: false, run: true });
+        items.push(
+          { label: t("node.cropAuto"), onClick: () => auto("crop", { mode: "auto_subject" }) },
+          { label: t("node.maskAuto"), onClick: () => auto("subjectMask", { mode: "auto_subject" }) },
+          { label: t("node.enhanceAuto"), onClick: () => auto("imageEnhance") },
+          { label: t("node.watchdogAuto"), onClick: () => auto("detailWatchdog") },
+        );
       }
       items.push(
         { label: "复制", onClick: () => duplicateNode(id) },

@@ -287,7 +287,11 @@ real-inference CI is gated like ViTMatte.
   probe — Dashboard **Compute** section + the inspector's per-engine "runs on
   GPU / falls back to CPU" badge) and a **cached-weight inventory** per engine
   (each ML engine's non-bundled `weight` path / `present` / `size_mb`, surfaced
-  in the Dashboard so it is clear what is downloaded vs still missing). ⛔ still:
+  in the Dashboard so it is clear what is downloaded vs still missing). The ONNX
+  engines honour that badge: a shared `sr_backends.onnx_providers()` selects
+  `CUDAExecutionProvider` first when ONNX Runtime exposes it (CPU always last),
+  mirroring the torch backends' "cuda if available else cpu" auto behaviour
+  instead of the old hard-coded CPU provider. ⛔ still:
   an explicit per-node `device` / `precision` selection (the "local model
   manager" surface).
 - **Determinism & safety:** seedable backends; keep the text/logo guards; require

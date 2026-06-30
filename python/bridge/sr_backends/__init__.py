@@ -105,6 +105,32 @@ def weight_info(path: Path) -> dict[str, Any]:
         return {"path": str(path), "present": False, "size_mb": None, "reason": f"{type(err).__name__}: {err}"}
 
 
+#: ONNX Runtime execution providers we know how to accelerate on, best first.
+#: CPU is always appended as the fallback so a session never fails to build.
+_PREFERRED_ONNX_PROVIDERS = ("CUDAExecutionProvider",)
+
+
+def onnx_providers(available: list[str] | None = None) -> list[str]:
+    """Execution providers for an ONNX session, preferring a GPU when present.
+
+    The ONNX engines (matting / colour harmonise / defect) used to hard-code the
+    CPU provider, so they ran on CPU even on a CUDA box — making the device probe
+    and the inspector's "runs on GPU" badge lie. This mirrors the torch backends'
+    "cuda if available else cpu" auto behaviour: a known accelerator provider is
+    used first when ONNX Runtime exposes it, with ``CPUExecutionProvider`` always
+    last as the universal fallback.
+
+    ``available`` is the ORT-reported provider list; it is injected for testing
+    and queried lazily (``onnxruntime.get_available_providers()``) when omitted.
+    """
+    if available is None:
+        import onnxruntime as ort
+
+        available = [str(p) for p in ort.get_available_providers()]
+    preferred = [p for p in _PREFERRED_ONNX_PROVIDERS if p in available]
+    return [*preferred, "CPUExecutionProvider"]
+
+
 def _engine_weight(backend: Any) -> dict[str, Any] | None:
     """Weight inventory for a registered backend, or ``None`` if it has none.
 

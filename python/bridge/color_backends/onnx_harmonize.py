@@ -39,6 +39,8 @@ import os
 from pathlib import Path
 from typing import Any
 
+from sr_backends import onnx_providers
+
 from . import MatcherUnavailable, model_cache_dir
 
 _DEFAULT_WEIGHT_NAME = "color_harmonize.onnx"
@@ -88,7 +90,7 @@ class OnnxHarmonizeBackend:
 
         weight = self.weight_path()
         session = ort.InferenceSession(
-            str(weight), providers=["CPUExecutionProvider"]
+            str(weight), providers=onnx_providers(ort.get_available_providers())
         )
         inputs = session.get_inputs()
         image_spec = _pick_input(inputs, "image", "input")

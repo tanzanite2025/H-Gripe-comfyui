@@ -5,7 +5,7 @@ import { localizeSpec } from "../graph/nodeSpecsI18n";
 import { LangContext, useT } from "../i18n";
 import { isLodActive } from "./lod";
 import type { NodeStatus } from "../runtime/dag";
-import { generateThumbnail } from "../bridge/tauri";
+import { generateThumbnail, videoProbe } from "../bridge/tauri";
 import { ParamField } from "./ParamField";
 import { useNodeEditing } from "./editingContext";
 import { psdTemplatePathWarning } from "./psdcheck";
@@ -173,6 +173,90 @@ function ImageSourceCard({ id, path }: { id: string; path: string }) {
   );
 }
 
+// Format a clip length in seconds as `m:ss` (or `h:mm:ss`), e.g. 75 -> "1:15".
+function formatDuration(sec: number): string {
+  const total = Math.max(0, Math.round(sec));
+  const h = Math.floor(total / 3600);
+  const m = Math.floor((total % 3600) / 60);
+  const s = total % 60;
+  const mm = h > 0 ? String(m).padStart(2, "0") : String(m);
+  return `${h > 0 ? `${h}:` : ""}${mm}:${String(s).padStart(2, "0")}`;
+}
+
+// Generic video media card body: a poster frame + `name · W×H · m:ss · fps` info
+// row. Rust has no video decoder, so a backend probe (PyAV) decodes one frame to
+// a PNG; the poster is then shown through the same image-thumbnail pipeline. The
+// original `path` carries downstream unchanged. See docs/cards/generic-media-card.md.
+function VideoSourceCard({ path, posterTimestamp }: { path: string; posterTimestamp: number }) {
+  const t = useT();
+  const ref = useRef<HTMLDivElement | null>(null);
+  const [src, setSrc] = useState<string | null>(null);
+  const [meta, setMeta] = useState<{
+    w: number;
+    h: number;
+    duration: number | null;
+    fps: number | null;
+  } | null>(null);
+  const [failed, setFailed] = useState(false);
+
+  useEffect(() => {
+    setSrc(null);
+    setMeta(null);
+    setFailed(false);
+    const el = ref.current;
+    if (!el) return;
+    let cancelled = false;
+    const io = new IntersectionObserver(
+      (entries) => {
+        if (!entries.some((e) => e.isIntersecting)) return;
+        io.disconnect();
+        videoProbe(path, posterTimestamp)
+          .then(async (probe) => {
+            if (cancelled) return;
+            setMeta({ w: probe.width, h: probe.height, duration: probe.duration_sec, fps: probe.fps });
+            if (probe.poster_path) {
+              const thumb = await generateThumbnail({ path: probe.poster_path, size: 256 });
+              if (!cancelled) setSrc(thumb.data_url || null);
+            }
+          })
+          .catch(() => {
+            if (!cancelled) setFailed(true);
+          });
+      },
+      { threshold: 0.1 },
+    );
+    io.observe(el);
+    return () => {
+      cancelled = true;
+      io.disconnect();
+    };
+  }, [path, posterTimestamp]);
+
+  return (
+    <div ref={ref} className="media-card">
+      {src ? (
+        <img className="node-thumb" src={src} alt="poster" />
+      ) : (
+        <div className="node-thumb placeholder">
+          {failed ? t("video.probeFailed") : t("common.loadingShort")}
+        </div>
+      )}
+      <div className="media-info">
+        <span className="media-name" title={path}>
+          {basename(path)}
+        </span>
+        {meta ? (
+          <span className="media-dims">
+            {meta.w}×{meta.h}
+            {meta.duration != null ? ` · ${formatDuration(meta.duration)}` : ""}
+            {meta.fps != null ? ` · ${Math.round(meta.fps)}fps` : ""}
+          </span>
+        ) : null}
+      </div>
+    </div>
+  );
+}
+
 // A single export-artifact row: label + basename, click to copy the full path.
 function PathRow({ label, path }: { label: string; path: string }) {
   const t = useT();
@@ -330,6 +414,13 @@ function HgripeNodeImpl({ id, data, selected }: NodeProps) {
 
         {spec.kind === "imageSource" && d.params.path ? (
           <ImageSourceCard id={id} path={String(d.params.path)} />
+        ) : null}
+
+        {spec.kind === "videoSource" && d.params.path ? (
+          <VideoSourceCard
+            path={String(d.params.path)}
+            posterTimestamp={Number(d.params.poster_timestamp ?? 0)}
+          />
         ) : null}
 
         {spec.kind === "psdTemplate" && templateWarn ? (

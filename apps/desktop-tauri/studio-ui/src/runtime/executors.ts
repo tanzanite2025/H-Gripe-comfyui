@@ -122,6 +122,8 @@ export const defaultExecutors: ExecutorRegistry = {
 
   imageSource: async (ctx) => ({ image: String(ctx.params.path ?? "") || null }),
 
+  videoSource: async (ctx) => ({ video: String(ctx.params.path ?? "") || null }),
+
   psdTemplate: async (ctx) => ({ template: String(ctx.params.path ?? "") || null }),
 
   number: async (ctx) => ({ value: Number(ctx.params.value ?? 0) }),

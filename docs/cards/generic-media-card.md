@@ -100,8 +100,14 @@ have:
   class) for the card thumbnail, and its edits (trim, frame-crop, …) are a
   distinct op set.
 
-Phase 1 of this contract ships the **image** path end-to-end; the video card is
-specified here as the bound-node sibling and implemented on its own track.
+The **first version** of the video card is now implemented: dropping a video
+file creates a `videoSource` node whose `video_probe` Tauri command shells out
+to `python/bridge/video_probe_cli.py` (PyAV, which bundles ffmpeg — no system
+install) to read metadata (duration / resolution / fps / codec) and decode a
+**poster frame** to a cached PNG. The card shows that poster through the
+existing `generate_thumbnail` pipeline plus a `name · W×H · m:ss · fps` info
+row, and carries the original path downstream on a `video` output port. Video
+**editing** (trim / frame-crop) is still a later track.
 
 ## Auto (computed) vs Manual — how the split is decided
 

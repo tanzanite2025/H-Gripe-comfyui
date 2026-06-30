@@ -8,6 +8,7 @@
 /** Typed port data kinds. `any` is compatible with every other type. */
 export type PortDataType =
   | "image"
+  | "video"
   | "text"
   | "model"
   | "number"

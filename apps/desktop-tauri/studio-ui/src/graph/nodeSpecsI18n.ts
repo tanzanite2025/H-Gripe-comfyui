@@ -70,6 +70,15 @@ export const NODE_ZH: Record<string, NodeSpecZh> = {
     params: { path: { label: "图像路径", hint: "图像文件的绝对路径" } },
     ports: { image: "图像" },
   },
+  videoSource: {
+    title: "视频源",
+    description: "磁盘上的视频文件；显示海报帧并将路径透传给下游。",
+    params: {
+      path: { label: "视频路径", hint: "视频文件的绝对路径" },
+      poster_timestamp: { label: "海报时间（秒）", hint: "海报帧的时间点（秒）" },
+    },
+    ports: { video: "视频" },
+  },
   psdTemplate: {
     title: "PSD 模板",
     description: "贯穿到导出的 .psd 模板路径。",

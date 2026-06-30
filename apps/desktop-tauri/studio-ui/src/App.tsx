@@ -54,9 +54,9 @@ function makeNode(id: string, kind: string, x: number, y: number, params?: Recor
 }
 
 // Canvas file-drop ingestion: which dropped files become a media card. Images
-// land on the generic image card (`imageSource`); video is a separate card on
-// its own track (see docs/cards/generic-media-card.md), so it is recognised but
-// not yet ingested.
+// land on the generic image card (`imageSource`); videos land on the generic
+// video card (`videoSource`), a separate track that shows a poster frame +
+// metadata (see docs/cards/generic-media-card.md).
 const IMAGE_DROP_EXTS = new Set(["png", "jpg", "jpeg", "webp", "gif", "bmp", "tif", "tiff"]);
 const VIDEO_DROP_EXTS = new Set(["mp4", "mov", "mkv", "webm", "avi", "m4v"]);
 
@@ -237,33 +237,40 @@ function Studio({ onToggleLang }: { onToggleLang: () => void }) {
     [setNodes, takeSnapshot, newNodeId],
   );
 
-  // Ingest OS files dropped onto the canvas: create a generic image card per
-  // image (path pre-filled at the drop point), cascading multiple drops. Video
-  // is recognised but routed to a status note until the video card lands. The
-  // Tauri drop position is physical px, so divide by the device pixel ratio
-  // before mapping to flow space.
+  // Ingest OS files dropped onto the canvas: create a generic media card per
+  // recognised file (an `imageSource` for images, a `videoSource` for videos),
+  // path pre-filled at the drop point and cascading multiple drops in drop
+  // order. The Tauri drop position is physical px, so divide by the device pixel
+  // ratio before mapping to flow space.
   const ingestDroppedFiles = useCallback(
     (paths: string[], physical: { x: number; y: number }) => {
       const dpr = window.devicePixelRatio || 1;
       const origin = screenToFlowPosition({ x: physical.x / dpr, y: physical.y / dpr });
-      const images = paths.filter((p) => IMAGE_DROP_EXTS.has(dropExtension(p)));
-      const videos = paths.filter((p) => VIDEO_DROP_EXTS.has(dropExtension(p)));
-      if (images.length === 0) {
-        if (videos.length > 0) setMessage(t("canvas.dropVideoSoon"));
-        else setMessage(t("canvas.dropUnsupported"));
+      const media = paths.flatMap((path) => {
+        const ext = dropExtension(path);
+        if (IMAGE_DROP_EXTS.has(ext)) return [{ path, kind: "imageSource" }];
+        if (VIDEO_DROP_EXTS.has(ext)) return [{ path, kind: "videoSource" }];
+        return [];
+      });
+      if (media.length === 0) {
+        setMessage(t("canvas.dropUnsupported"));
         return;
       }
       takeSnapshot();
-      const created = images.map((path, i) => ({
-        ...makeNode(newNodeId("imageSource"), "imageSource", origin.x + i * 28, origin.y + i * 28, { path }),
-        selected: i === images.length - 1,
+      const created = media.map(({ path, kind }, i) => ({
+        ...makeNode(newNodeId(kind), kind, origin.x + i * 28, origin.y + i * 28, { path }),
+        selected: i === media.length - 1,
       }));
       setNodes((ns) => [...ns.map((n) => ({ ...n, selected: false })), ...created]);
       setSelectedId(created[created.length - 1]?.id ?? null);
+      const images = media.filter((m) => m.kind === "imageSource").length;
+      const videos = media.length - images;
       const note =
-        videos.length > 0
-          ? t("canvas.dropImagesAndVideo", { n: images.length })
-          : t("canvas.dropImages", { n: images.length });
+        images > 0 && videos > 0
+          ? t("canvas.dropMedia", { images, videos })
+          : videos > 0
+            ? t("canvas.dropVideos", { n: videos })
+            : t("canvas.dropImages", { n: images });
       setMessage(note);
     },
     [screenToFlowPosition, setNodes, takeSnapshot, newNodeId, setMessage, t],

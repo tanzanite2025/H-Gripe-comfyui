@@ -303,7 +303,11 @@ model id in `matte_report`.
      deterministic `builtin-cpu-matte` **guided filter** (He et al., image-guided)
      resolves the unknown band along real edges, so the toggle always works
      without the weight. The op is recorded in `matte_report.operations` and
-     the soft matte hands off to `Refine Mask Edge`.
+     the soft matte hands off to `Refine Mask Edge`. The real ViTMatte path is
+     covered by a weight-gated test (`vitmatte_inference_when_weight_present`)
+     that skips when no blob resolves; the opt-in `tauri (vitmatte e2e)` CI job
+     (`workflow_dispatch`) fetches the weight and runs it. See
+     `resources/models/README.md` → *Verify ViTMatte end-to-end*.
    - *Landed (cascade 4, UI):* a dedicated `matting` paint tool in the Mask-Edit
      modal records `matte_strokes` (per-region trimap-unknown painting); the
      backend stamps them onto the trimap before matting (`parse_matte_strokes`).

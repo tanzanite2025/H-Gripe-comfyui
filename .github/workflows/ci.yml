@@ -9,6 +9,11 @@ on:
     paths-ignore:
       - '**/*.md'
       - 'docs/**'
+  # Opt-in end-to-end check that actually runs ViTMatte: the ~104 MB weight is
+  # never committed, so the gated `vitmatte_inference_when_weight_present` test
+  # skips on every normal run. Trigger this manually to fetch the weight and
+  # exercise the real `ort` inference path.
+  workflow_dispatch:
 
 concurrency:
   group: ci-${{ github.workflow }}-${{ github.ref }}
@@ -66,6 +71,44 @@ jobs:
       - name: cargo test
         working-directory: apps/desktop-tauri/src-tauri
         run: cargo test
+
+  vitmatte-e2e:
+    name: tauri (vitmatte e2e)
+    # Only on manual dispatch: fetches the ~104 MB weight and runs the real
+    # ViTMatte inference test. Kept out of the per-PR matrix to avoid the
+    # download on every run while still giving a verifiable execution path.
+    if: github.event_name == 'workflow_dispatch'
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: 'npm'
+          cache-dependency-path: apps/desktop-tauri/studio-ui/package-lock.json
+
+      # The Tauri build script embeds the frontend at compile time, so the
+      # studio-ui bundle (apps/desktop-tauri/dist) must exist before cargo test.
+      - name: Build frontend
+        working-directory: apps/desktop-tauri
+        run: npm --prefix studio-ui ci && npm --prefix studio-ui run build
+
+      - uses: dtolnay/rust-toolchain@stable
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: apps/desktop-tauri/src-tauri
+
+      # Fetches into resources/models/vitmatte.onnx (sha256-checked), which
+      # resolve_model_file picks up in-repo so the gated test stops skipping.
+      - name: Fetch ViTMatte weight
+        shell: bash
+        run: bash scripts/fetch-vitmatte.sh
+
+      - name: cargo test (vitmatte inference)
+        working-directory: apps/desktop-tauri/src-tauri
+        run: cargo test vitmatte_inference_when_weight_present -- --nocapture
 
   python-bridge:
     name: python bridge (pytest)

@@ -110,3 +110,22 @@ export HGRIPE_SAM2_ENCODER=/path/to/sam2_tiny.encoder.onnx
 export HGRIPE_SAM2_DECODER=/path/to/sam2_tiny.decoder.onnx
 export HGRIPE_VITMATTE_MODEL=/path/to/vitmatte.onnx
 ```
+
+## Verify ViTMatte end-to-end
+
+The matting backends are weight-resolution-driven, so the real ViTMatte path
+only runs once its blob is present. The Rust test
+`subject_matte::tests::vitmatte_inference_when_weight_present` runs the actual
+`ort` inference (definite-FG core stays opaque, definite-BG corner transparent)
+and **skips** when no weight resolves — so the default CI matrix never exercises
+it. To run it:
+
+```sh
+bash scripts/fetch-vitmatte.sh           # into resources/models/vitmatte.onnx
+cd apps/desktop-tauri/src-tauri
+cargo test vitmatte_inference_when_weight_present -- --nocapture
+```
+
+In CI, trigger the opt-in **`tauri (vitmatte e2e)`** job (the CI workflow's
+`workflow_dispatch`): it fetches the weight and runs exactly this test, keeping
+the ~104 MB download off every PR run while still giving a verifiable path.

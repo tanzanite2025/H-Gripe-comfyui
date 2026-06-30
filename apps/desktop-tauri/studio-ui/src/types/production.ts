@@ -117,6 +117,108 @@ export interface ExportedArtifacts {
   metadata: string;
 }
 
+/**
+ * A single bezier/lasso path edit (Subject Mask). Phase 1 stores these but does
+ * NOT rasterise them — the field is versioned so a workflow saved now stays
+ * loadable once Phase 3 adds rasterisation. Mirrors the Rust `EditPaths` schema
+ * in `docs/cards/subject-mask-matte.md`.
+ */
+export interface EditPathPoint {
+  x: number;
+  y: number;
+  /** Bezier in-control handle, when the path is a pen curve. */
+  in?: [number, number];
+  /** Bezier out-control handle, when the path is a pen curve. */
+  out?: [number, number];
+}
+
+export interface EditPath {
+  id: string;
+  /** `add` | `subtract` | `intersect`. */
+  mode: string;
+  /** `pen` | `lasso`. */
+  tool: string;
+  closed: boolean;
+  points: EditPathPoint[];
+}
+
+/** A freehand brush/eraser stroke (applied by the Rust backend on run). */
+export interface BrushStroke {
+  id: string;
+  /** `add` (brush) | `subtract` (eraser). */
+  mode: string;
+  /** Stroke radius in image pixels. */
+  radius: number;
+  /** Polyline of `[x, y]` points the stroke passes through. */
+  points: [number, number][];
+}
+
+/**
+ * A recorded morphology / selection operation queued for the backend to apply
+ * (in order) when the node runs. Phase 1 records the *intent* here rather than
+ * re-implementing the exact Rust morphology in the webview, so the preview and
+ * the executed result cannot drift.
+ */
+export interface MaskOperation {
+  /** `wand` | `invert` | `fill_holes` | `smooth` | `grow` | `shrink` | `feather` | `rect` | `ellipse`. */
+  type: string;
+  /** Operation-specific scalar (tolerance / px / radius), when relevant. */
+  amount?: number;
+  /** `[x, y]` seed for `wand`, or `[x1, y1, x2, y2]` for marquee ops. */
+  region?: number[];
+}
+
+/**
+ * Re-editable record of all manual edits for the Subject Mask card. Stored on
+ * the node as the `edit_paths` param and round-tripped through the workflow
+ * file. Mirrors the Rust `EditPaths` struct.
+ */
+export interface EditPaths {
+  version: 1;
+  paths: EditPath[];
+  brush_strokes: BrushStroke[];
+  /** Ordered morphology / selection operations applied by the backend. */
+  operations: MaskOperation[];
+}
+
+export function emptyEditPaths(): EditPaths {
+  return { version: 1, paths: [], brush_strokes: [], operations: [] };
+}
+
+/** A subject detected by a Phase 2 model (empty in Phase 1). */
+export interface DetectedSubject {
+  label: string;
+  confidence: number;
+  /** `[x1, y1, x2, y2]` in image pixels. */
+  bbox: [number, number, number, number];
+}
+
+/** Provenance + operations record for a matte run (mirrors Rust `matte_report`). */
+export interface MatteReport {
+  mode: string;
+  /** `rust-native` in Phase 1, the model id (e.g. `birefnet`) in Phase 2. */
+  provider: string;
+  source_mode: string;
+  exif_transposed: boolean;
+  max_decode_pixels: number;
+  image_size: [number, number];
+  mask_coverage: number;
+  detected_subjects: DetectedSubject[];
+  operations: { type: string; [k: string]: unknown }[];
+  /** Completeness flag for the mask / alpha / cutout triplet. */
+  triplet: { mask: boolean; alpha_image: boolean; cutout_image: boolean };
+  processing_time_ms: number;
+}
+
+/** Result of a Subject Mask run (mirrors Rust `SubjectMaskResult`). */
+export interface SubjectMaskResult {
+  mask_path: string;
+  alpha_image_path: string;
+  cutout_image_path: string;
+  edit_paths_path: string;
+  matte_report: MatteReport;
+}
+
 /** End-to-end production workflow tracking, written alongside an export. */
 export interface ProductionMetadata {
   workflow_id: string;

@@ -27,6 +27,10 @@ export interface HgripeNodeData extends Record<string, unknown> {
   /** Resolved placeholder kind / smart-object mode reported by the backend. */
   placeholderKind?: string | null;
   smartObjectMode?: string | null;
+  /** Subject Mask outputs from the last run (subjectMask node only). */
+  maskPath?: string | null;
+  alphaImagePath?: string | null;
+  cutoutImagePath?: string | null;
 }
 
 function basename(p: string): string {
@@ -176,6 +180,45 @@ function HgripeNodeImpl({ id, data, selected }: NodeProps) {
           ) : (
             <div className="node-thumb placeholder">no image</div>
           ))}
+
+        {spec.kind === "subjectMask" ? (
+          <div className="subject-mask">
+            {d.maskPath ? (
+              <LazyThumb path={d.maskPath} />
+            ) : (
+              <div
+                className="node-thumb placeholder click-select"
+                title="Click-to-select runs the magic wand on the connected image"
+              >
+                {isConnected("image") ? "click-to-select" : "connect an image"}
+              </div>
+            )}
+            <div className="subject-mask-actions nodrag">
+              <button
+                type="button"
+                title="Auto-detect the subject (Phase 2 models; Phase 1 seeds an empty mask)"
+                onClick={() => editing?.openPreview?.(id)}
+              >
+                Auto
+              </button>
+              <button
+                type="button"
+                className="primary"
+                title="Open the mask editor (brush / wand / morphology)"
+                onClick={() => editing?.openMaskEdit?.(id)}
+              >
+                Edit Mask
+              </button>
+              <button
+                type="button"
+                title="Preview the current mask / cutout (review gate)"
+                onClick={() => editing?.openPreview?.(id)}
+              >
+                Preview
+              </button>
+            </div>
+          </div>
+        ) : null}
 
         {spec.kind === "psdTemplate" && templateWarn ? (
           <div className="node-warn nodrag" title={templateWarn}>

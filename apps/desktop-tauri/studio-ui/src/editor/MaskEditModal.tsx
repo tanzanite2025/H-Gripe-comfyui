@@ -8,6 +8,7 @@ import {
 } from "./maskTools";
 import {
   addBrushStroke,
+  addMatteStroke,
   addOperation,
   addPoint,
   canRedo,
@@ -30,6 +31,7 @@ const DEFAULT_H = 640;
 
 type Action =
   | { type: "stroke"; stroke: BrushStroke }
+  | { type: "matte_stroke"; stroke: BrushStroke }
   | { type: "op"; op: MaskOperation }
   | { type: "point"; point: [number, number] }
   | { type: "undo" }
@@ -40,6 +42,8 @@ function reducer(state: EditState, action: Action): EditState {
   switch (action.type) {
     case "stroke":
       return addBrushStroke(state, action.stroke);
+    case "matte_stroke":
+      return addMatteStroke(state, action.stroke);
     case "op":
       return addOperation(state, action.op);
     case "point":
@@ -168,8 +172,16 @@ export function MaskEditModal({
       ctx.fillRect(0, 0, dims.w, dims.h);
     }
 
-    const paintStroke = (s: { mode: string; radius: number; points: [number, number][] }) => {
-      ctx.strokeStyle = s.mode === "subtract" ? "rgba(244,98,98,0.55)" : "rgba(86,168,255,0.55)";
+    const paintStroke = (
+      s: { mode: string; radius: number; points: [number, number][] },
+      kind: "paint" | "matte" = "paint",
+    ) => {
+      ctx.strokeStyle =
+        kind === "matte"
+          ? "rgba(244,196,84,0.6)"
+          : s.mode === "subtract"
+            ? "rgba(244,98,98,0.55)"
+            : "rgba(86,168,255,0.55)";
       ctx.fillStyle = ctx.strokeStyle;
       ctx.lineWidth = s.radius * 2;
       ctx.lineCap = "round";
@@ -186,9 +198,15 @@ export function MaskEditModal({
       ctx.stroke();
     };
 
-    state.current.brush_strokes.forEach(paintStroke);
+    state.current.brush_strokes.forEach((s) => paintStroke(s));
+    state.current.matte_strokes.forEach((s) => paintStroke(s, "matte"));
     const live = drawing.current;
-    if (live) paintStroke({ mode: tool.mode ?? "add", radius: brushSize, points: live.points });
+    if (live) {
+      paintStroke(
+        { mode: tool.mode ?? "add", radius: brushSize, points: live.points },
+        tool.kind === "matte" ? "matte" : "paint",
+      );
+    }
 
     // SAM 2 point prompts: numbered crosshair markers.
     state.current.points.forEach(([x, y], i) => {
@@ -224,7 +242,7 @@ export function MaskEditModal({
       }
       ctx.setLineDash([]);
     }
-  }, [dims.w, dims.h, underlay, overlayOnly, state.current.brush_strokes, state.current.points, tool.mode, tool.id, brushSize]);
+  }, [dims.w, dims.h, underlay, overlayOnly, state.current.brush_strokes, state.current.matte_strokes, state.current.points, tool.mode, tool.kind, tool.id, brushSize]);
 
   useEffect(() => {
     redraw();
@@ -234,7 +252,7 @@ export function MaskEditModal({
     if (tool.status !== "ready") return;
     (e.target as Element).setPointerCapture?.(e.pointerId);
     const pt = toImage(e);
-    if (tool.kind === "paint") {
+    if (tool.kind === "paint" || tool.kind === "matte") {
       drawing.current = { points: [pt] };
       forceRedraw((n) => n + 1);
     } else if (tool.kind === "marquee") {
@@ -268,7 +286,7 @@ export function MaskEditModal({
         points: drawing.current.points,
       };
       drawing.current = null;
-      dispatch({ type: "stroke", stroke });
+      dispatch({ type: tool.kind === "matte" ? "matte_stroke" : "stroke", stroke });
     } else if (marquee.current) {
       const { start, end } = marquee.current;
       marquee.current = null;
@@ -295,6 +313,7 @@ export function MaskEditModal({
   const count = editCount(state.current);
   const ops = state.current.operations;
   const points = state.current.points;
+  const matteStrokes = state.current.matte_strokes;
   const showAmount = useMemo(
     () => tool.kind === "global" || ["grow", "shrink", "feather", "smooth"].includes(toolId),
     [tool.kind, toolId],
@@ -401,6 +420,21 @@ export function MaskEditModal({
             </div>
 
             <div className="field">
+              <span>Matting band ({matteStrokes.length})</span>
+              <div className="mask-op-list">
+                {matteStrokes.length === 0 ? (
+                  <small className="muted">none — pick Matting and paint over hair / fur / glass</small>
+                ) : (
+                  matteStrokes.map((s, i) => (
+                    <span key={s.id ?? i} className="mask-op-chip">
+                      band r{s.radius}
+                    </span>
+                  ))
+                )}
+              </div>
+            </div>
+
+            <div className="field">
               <span>SAM 2 points ({points.length})</span>
               <div className="mask-op-list">
                 {points.length === 0 ? (
@@ -418,7 +452,9 @@ export function MaskEditModal({
             <small className="muted mask-edit-note">
               Edits ({count}) are recorded as <code>edit_paths</code> and applied by the
               backend on run. Point (SAM 2) prompts route auto modes to the SAM 2
-              segmenter; pen/lasso/matting are planned (greyed).
+              segmenter; Matting paints the trimap unknown band (resolved to soft
+              alpha by ViTMatte / the builtin guided filter); pen/lasso are
+              planned (greyed).
             </small>
           </div>
         </div>

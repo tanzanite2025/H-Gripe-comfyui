@@ -16,6 +16,9 @@ export type ToolKind =
   | "click"
   // Single click that records a SAM 2 point prompt (`points` entry).
   | "point"
+  // Freehand paint that records a `matte_strokes` entry: the trimap unknown
+  // band the matter resolves into soft alpha (hair / fur / glass).
+  | "matte"
   // Whole-mask operation with no canvas interaction (records an `operations` entry).
   | "global"
   // Drag a marquee that records an `operations` entry with a rect region.
@@ -51,9 +54,9 @@ export const MASK_TOOLS: readonly MaskTool[] = [
   { id: "grow", label: "Grow", status: "ready", kind: "global", hint: "Dilate the mask by N px." },
   { id: "shrink", label: "Shrink", status: "ready", kind: "global", hint: "Erode the mask by N px." },
   { id: "feather", label: "Feather", status: "ready", kind: "global", hint: "Gaussian-feather the mask edge." },
+  { id: "matting", label: "Matting", status: "ready", kind: "matte", hint: "Paint the trimap unknown band over hair / fur / glass — the matter resolves it into soft alpha." },
   { id: "pen", label: "Pen", status: "planned", kind: "path", hint: "Phase 3 — bezier path, rasterised + boolean-combined." },
   { id: "lasso", label: "Lasso", status: "planned", kind: "path", hint: "Phase 3 — freehand path selection." },
-  { id: "matting", label: "Matting", status: "planned", kind: "global", hint: "Phase 4 — continuous alpha (hair / glass / translucency)." },
 ] as const;
 
 export const READY_TOOLS = MASK_TOOLS.filter((t) => t.status === "ready");

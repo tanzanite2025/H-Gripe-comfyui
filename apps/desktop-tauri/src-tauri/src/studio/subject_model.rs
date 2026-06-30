@@ -7,12 +7,18 @@
 //! additive.
 //!
 //! Models are described by a [`ModelSpec`] (input size, normalisation, weight
-//! file / env override) so the load + inference path is shared. Two are wired,
-//! tried in `MODEL_PRIORITY` order:
+//! file / env override) so the load + inference path is shared. Three are
+//! wired; the prompt-free `auto_*` modes pick a priority list via
+//! [`model_segmenter_for_mode`]:
 //! - **BiRefNet** (MIT, ~224 MB lite) — higher-quality background removal, the
 //!   *downloadable big tier*; `provider: birefnet`.
 //! - **U²-Netp** (Apache-2.0, ~4.6 MB) — the lightweight bundled default;
 //!   `provider: u2netp`.
+//! - **U²-Net human-seg** (Apache-2.0, ~168 MB) — a U²-Net trained on human
+//!   segmentation; `auto_person` prefers it so a person matte tracks people
+//!   rather than generic saliency. Same architecture / preprocessing as
+//!   U²-Netp, so it reuses the shared path unchanged; `provider:
+//!   u2net_human_seg`.
 //!
 //! Each model takes an RGB `1x3xSxS` input and emits a `1x1xSxS` map; the map is
 //! min-max normalised then thresholded, so the same post-processing works for
@@ -83,9 +89,24 @@ const BIREFNET: ModelSpec = ModelSpec {
     norm: Norm::Rescale255,
 };
 
+/// U²-Net trained for human segmentation (rembg `u2net_human_seg`). Same
+/// architecture / preprocessing as [`U2NETP`], so it rides the shared path; it
+/// is only *preferred* for the `auto_person` mode.
+const U2NET_HUMAN: ModelSpec = ModelSpec {
+    provider: "u2net_human_seg",
+    input_size: 320,
+    file_name: "u2net_human_seg.onnx",
+    env_var: "HGRIPE_PERSON_MODEL",
+    norm: Norm::MaxChannel,
+};
+
 /// Highest quality first, then the lightweight default; the caller falls back to
 /// `builtin-cpu` when none resolve.
 const MODEL_PRIORITY: [ModelSpec; 2] = [BIREFNET, U2NETP];
+
+/// `auto_person` priority: the human-segmentation net first so a person matte
+/// tracks people, then the generic salient models, then `builtin-cpu`.
+const PERSON_PRIORITY: [ModelSpec; 3] = [U2NET_HUMAN, BIREFNET, U2NETP];
 
 /// The Tauri resource directory captured at startup (see `set_resource_dir`),
 /// mirroring `psd::set_resource_dir`: in a packaged install the bundled model
@@ -300,16 +321,27 @@ pub(super) fn coverage(mask: &GrayImage) -> f64 {
 
 /// Try to build a model-backed segmenter for `mode`, preferring the highest
 /// quality wired model whose weight resolves; `None` when none do (the caller
-/// then uses the builtin CPU fallback).
-pub(super) fn model_segmenter_for_mode(_mode: AutoMode) -> Option<ModelSegmenter> {
-    for spec in MODEL_PRIORITY {
-        if let Some(path) = resolve_weight(&spec) {
-            if let Ok(segmenter) = ModelSegmenter::load(&path, spec) {
+/// then uses the builtin CPU fallback). `auto_person` prefers the
+/// human-segmentation net before the generic salient models; other modes use
+/// the generic priority.
+pub(super) fn model_segmenter_for_mode(mode: AutoMode) -> Option<ModelSegmenter> {
+    for spec in priority_for(mode) {
+        if let Some(path) = resolve_weight(spec) {
+            if let Ok(segmenter) = ModelSegmenter::load(&path, *spec) {
                 return Some(segmenter);
             }
         }
     }
     None
+}
+
+/// The wired-model priority list for an auto mode: `auto_person` leads with the
+/// human-segmentation net; every other mode uses the generic salient priority.
+fn priority_for(mode: AutoMode) -> &'static [ModelSpec] {
+    match mode {
+        AutoMode::Person => &PERSON_PRIORITY,
+        _ => &MODEL_PRIORITY,
+    }
 }
 
 #[cfg(test)]
@@ -399,5 +431,36 @@ mod tests {
     #[test]
     fn birefnet_inference_when_weight_present() {
         inference_smoke(BIREFNET);
+    }
+
+    #[test]
+    fn person_mode_prefers_human_seg_net() {
+        // auto_person leads with the human-segmentation net before the generic
+        // salient models, so a person matte tracks people rather than saliency.
+        let person: Vec<&str> = priority_for(AutoMode::Person)
+            .iter()
+            .map(|s| s.provider)
+            .collect();
+        assert_eq!(person, ["u2net_human_seg", "birefnet", "u2netp"]);
+    }
+
+    #[test]
+    fn non_person_modes_keep_generic_priority() {
+        // Every other auto mode uses the generic salient priority unchanged
+        // (the human-seg net is person-only).
+        for mode in [
+            AutoMode::Subject,
+            AutoMode::Product,
+            AutoMode::TransparentObject,
+        ] {
+            let providers: Vec<&str> =
+                priority_for(mode).iter().map(|s| s.provider).collect();
+            assert_eq!(providers, ["birefnet", "u2netp"]);
+        }
+    }
+
+    #[test]
+    fn human_seg_inference_when_weight_present() {
+        inference_smoke(U2NET_HUMAN);
     }
 }

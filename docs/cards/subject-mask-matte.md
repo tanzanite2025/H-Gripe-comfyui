@@ -278,11 +278,15 @@ model id in `matte_report`.
      the `Compute` lane, behind a shared `ModelSpec`-driven `ort` backend so
      multiple models share one load + inference path. Backends are tried in
      priority order — when the request carries point prompts, **SAM 2**
-     (`provider: sam2`, interactive); otherwise **BiRefNet**
-     (`provider: birefnet`, high quality) → **U²-Netp** (`provider: u2netp`,
-     lightweight default) → deterministic **`builtin-cpu`** fallback when no
-     weight resolves — so the modes always work. `matte_report` carries
-     `provider` and `detected_subjects` (`label` / `bbox` / `coverage`).
+     (`provider: sam2`, interactive); otherwise the prompt-free salient cascade
+     runs. `auto_person` leads that cascade with the **U²-Net human-seg** net
+     (`provider: u2net_human_seg`, person-tracking) before the generic
+     **BiRefNet** (`provider: birefnet`, high quality) → **U²-Netp**
+     (`provider: u2netp`, lightweight default) → deterministic **`builtin-cpu`**
+     fallback; every other mode uses the generic priority. No weight resolving
+     always degrades to `builtin-cpu`, so the modes always work. `matte_report`
+     carries `provider` and `detected_subjects` (`label` / `bbox` /
+     `coverage`).
    - *Interactive (SAM 2):* a two-stage **SAM 2 tiny** backend (encoder +
      prompt decoder, Apache-2.0, ~154 MB combined) implements the same trait
      (`provider: sam2`). `segmenter_for_mode(mode, points)` is point-aware: a
@@ -293,15 +297,17 @@ model id in `matte_report`.
      ~4.6 MB) is the *bundled default* — fetched at package time
      (`scripts/fetch-subject-model.*`) and shipped via `tauri.conf.json`
      `bundle.resources` under `<install>/resources/models/`. **BiRefNet lite**
-     (MIT, ~224 MB), **SAM 2 tiny** (Apache-2.0) and **ViTMatte small**
-     (Apache-2.0, ~104 MB) are the *downloadable big tier* — not bundled by
-     default; `scripts/fetch-birefnet.*` / `scripts/fetch-sam2.*` /
-     `scripts/fetch-vitmatte.*` place them in the same dir to ship or test with.
-     `HGRIPE_SUBJECT_MODEL` / `HGRIPE_BIREFNET_MODEL` / `HGRIPE_SAM2_ENCODER` /
-     `HGRIPE_SAM2_DECODER` / `HGRIPE_VITMATTE_MODEL` env vars override the paths
-     for dev / tests.
-   - *Pending:* a portrait-matting net for `auto_person` can slot into
-     `segmenter_for_mode` behind the same trait.
+     (MIT, ~224 MB), **U²-Net human-seg** (Apache-2.0, ~168 MB, `auto_person`),
+     **SAM 2 tiny** (Apache-2.0) and **ViTMatte small** (Apache-2.0, ~104 MB)
+     are the *downloadable big tier* — not bundled by default;
+     `scripts/fetch-birefnet.*` / `scripts/fetch-person-model.*` /
+     `scripts/fetch-sam2.*` / `scripts/fetch-vitmatte.*` place them in the same
+     dir to ship or test with. `HGRIPE_SUBJECT_MODEL` / `HGRIPE_BIREFNET_MODEL`
+     / `HGRIPE_PERSON_MODEL` / `HGRIPE_SAM2_ENCODER` / `HGRIPE_SAM2_DECODER` /
+     `HGRIPE_VITMATTE_MODEL` env vars override the paths for dev / tests.
+   - *Landed:* the `auto_person` portrait/human-matting net
+     (`u2net_human_seg`) slots into `segmenter_for_mode` behind the same trait,
+     preferred only for that mode.
 3. **Pen paths** — bezier rasterise, path add/subtract/intersect, re-editable.
 4. **Alpha matting** — continuous alpha (hair / glass / translucency), trimap,
    tighter `Refine Mask Edge` hand-off.

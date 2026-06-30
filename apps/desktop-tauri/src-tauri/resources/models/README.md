@@ -22,9 +22,15 @@ always works.
 | Priority | Model | `provider` | License | Size | Tier |
 | --- | --- | --- | --- | --- | --- |
 | prompt | SAM 2 (tiny) | `sam2` | Apache-2.0 | ~154 MB | downloadable big tier (point-prompted) |
+| `auto_person` 1 | U²-Net human-seg | `u2net_human_seg` | Apache-2.0 | ~168 MB | downloadable big tier (person-only) |
 | 1 | BiRefNet (lite) | `birefnet` | MIT | ~224 MB | downloadable big tier |
 | 2 | U²-Netp | `u2netp` | Apache-2.0 | ~4.6 MB | bundled default |
 | — | builtin CPU | `builtin-cpu` | — | — | always-on fallback |
+
+The `auto_person` mode leads its priority list with the human-segmentation net
+(`u2net_human_seg`) so a person matte tracks people rather than generic
+saliency, then falls through to BiRefNet → U²-Netp → builtin-cpu like the other
+modes. Every other auto mode uses the generic priority unchanged.
 
 ### Alpha matting (continuous alpha, opt-in)
 
@@ -46,6 +52,11 @@ by the scripts below into this directory; `bundle.resources` in
   (~224 MB). Place it here to bundle it for a release, or point
   `HGRIPE_BIREFNET_MODEL` at a local copy for dev; when present it is preferred
   over u2netp for higher-quality background removal.
+- **u2net_human_seg** is the `auto_person` *downloadable big tier* — not bundled
+  by default (~168 MB). Place it here to bundle it for a release, or point
+  `HGRIPE_PERSON_MODEL` at a local copy for dev; the `auto_person` mode prefers
+  it (same U²-Net architecture / preprocessing as u2netp) and only that mode
+  uses it.
 - **sam2_tiny.encoder / sam2_tiny.decoder** are the interactive *downloadable
   big tier* (~154 MB combined) — not bundled by default. Place both here to
   bundle for a release, or point `HGRIPE_SAM2_ENCODER` / `HGRIPE_SAM2_DECODER`
@@ -68,6 +79,13 @@ by the scripts below into this directory; `bundle.resources` in
 - **Input:** RGB `1x3x1024x1024`, `1/255` rescaled + ImageNet-normalised
 - **Output:** `1x1x1024x1024` map (min-max normalised + thresholded)
 - **sha256:** `5600024376f572a557870a5eb0afb1e5961636bef4e1e22132025467d0f03333`
+
+### U²-Net human-seg (downloadable big tier, `auto_person`)
+- **License:** Apache-2.0 (https://github.com/xuebinqin/U-2-Net, rembg export)
+- **Input:** RGB `1x3x320x320`, max-channel scaled + ImageNet-normalised (same
+  preprocessing as U²-Netp)
+- **Output:** `1x1x320x320` saliency map in roughly `[0, 1]`
+- **sha256:** `01eb6a29a5c4d8edb30b56adad9bb3a2a0535338e480724a213e0acfd2d1c73c`
 
 ### ViTMatte small (downloadable big tier, continuous alpha)
 - **License:** Apache-2.0 (https://huggingface.co/Xenova/vitmatte-small-distinctions-646)
@@ -97,6 +115,7 @@ by the scripts below into this directory; `bundle.resources` in
 # from the repo root
 bash scripts/fetch-subject-model.sh   # u2netp  (or .ps1)
 bash scripts/fetch-birefnet.sh        # birefnet (or .ps1)
+bash scripts/fetch-person-model.sh    # u2net_human_seg / auto_person (or .ps1)
 bash scripts/fetch-sam2.sh            # sam2 encoder + decoder (or .ps1)
 bash scripts/fetch-vitmatte.sh        # vitmatte continuous-alpha (or .ps1)
 ```
@@ -106,6 +125,7 @@ Or point the segmenter at any local weight without bundling:
 ```sh
 export HGRIPE_SUBJECT_MODEL=/path/to/u2netp.onnx
 export HGRIPE_BIREFNET_MODEL=/path/to/birefnet_lite.onnx
+export HGRIPE_PERSON_MODEL=/path/to/u2net_human_seg.onnx
 export HGRIPE_SAM2_ENCODER=/path/to/sam2_tiny.encoder.onnx
 export HGRIPE_SAM2_DECODER=/path/to/sam2_tiny.decoder.onnx
 export HGRIPE_VITMATTE_MODEL=/path/to/vitmatte.onnx

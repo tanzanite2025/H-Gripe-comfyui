@@ -92,11 +92,20 @@ manual entry points for the same edit kind:
 - **Manual** lives on the card action row. The `Crop` button calls
   `addBoundEdit(id, "crop", { params: { mode: "manual" }, openEditor: true })` —
   spawns the bound crop node and opens `CropEditModal` to draw the box.
-- **Auto** lives on the node's **right-click menu**. For an `imageSource` node
-  the menu shows `Crop to subject (auto)`, which calls
-  `addBoundEdit(id, "crop", { params: { mode: "auto_subject" }, openEditor: false, run: true })`
-  — spawns the bound crop node and runs its ancestor subgraph (run-up-to-node)
-  straight away, surfacing the cropped result with no editor.
+- **Auto** lives on the node's **right-click menu**. For an `imageSource` node the
+  menu lists the purely-computed edits, each calling
+  `addBoundEdit(id, editKind, { params, openEditor: false, run: true })` — spawns
+  the bound node and runs its ancestor subgraph (run-up-to-node) straight away,
+  surfacing the result with no editor:
+  - `Crop to subject (auto)` → `crop` `{ mode: "auto_subject" }`
+  - `Subject mask (auto)` → `subjectMask` `{ mode: "auto_subject" }`
+  - `Enhance quality (auto)` → `imageEnhance`
+  - `Detect defects (auto)` → `detailWatchdog`
+
+  These are the edits derivable from the single input image alone. Edits needing a
+  second input (`matchLightColor` wants a background, `refineMaskEdge` a mask,
+  `detailRepaint` a quality report) are **not** single-image auto entries — wire
+  them up explicitly.
 
 This is the general shape for every edit kind: the human-spatial-intent lane is a
 card button (opens an editor), the algorithm-derived lane is a right-click entry

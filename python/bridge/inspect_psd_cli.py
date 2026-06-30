@@ -42,6 +42,11 @@ for _candidate in (_ROOT_DIR, _ROOT_DIR / "third_party"):
 # source of truth with the nodes.
 from custom_nodes.hgripe_psd_nodes import _layer_descriptor  # noqa: E402
 
+# Refuse to open a PSD whose declared canvas is larger than this many pixels
+# (decompression-bomb guard, aligned with ``analyze_psd_cli`` / ``compose_psd_cli``).
+# 0 disables the check. Tunable via ``--max-decode-pixels``.
+_DEFAULT_MAX_DECODE_PIXELS = 96_000_000
+
 
 def _flatten_layers(descriptors: list[dict[str, Any]]) -> list[dict[str, str]]:
     """Flatten the nested ``_layer_descriptor`` tree into ``{name, kind}`` rows,
@@ -89,6 +94,13 @@ def inspect(args: argparse.Namespace) -> dict[str, Any]:
     from psd_tools import PSDImage
 
     psd = PSDImage.open(template_path)
+    canvas_w, canvas_h = int(psd.width), int(psd.height)
+    max_decode_pixels = int(max(0, args.max_decode_pixels))
+    if max_decode_pixels > 0 and canvas_w * canvas_h > max_decode_pixels:
+        raise ValueError(
+            f"PSD canvas too large to inspect safely: {canvas_w}x{canvas_h} "
+            f"({canvas_w * canvas_h} px > max {max_decode_pixels})"
+        )
     layers = _flatten_layers([_layer_descriptor(layer) for layer in psd])
     names = {row["name"] for row in layers}
     missing = [name for name in requested if name and name not in names]
@@ -96,8 +108,8 @@ def inspect(args: argparse.Namespace) -> dict[str, Any]:
     return {
         "status": "succeeded",
         "exists": True,
-        "width": int(psd.width),
-        "height": int(psd.height),
+        "width": canvas_w,
+        "height": canvas_h,
         "layers": layers,
         "missing": missing,
     }
@@ -110,6 +122,13 @@ def build_parser() -> argparse.ArgumentParser:
         "--names",
         default="",
         help="JSON array of placeholder layer names to check for existence",
+    )
+    parser.add_argument(
+        "--max-decode-pixels",
+        dest="max_decode_pixels",
+        type=int,
+        default=_DEFAULT_MAX_DECODE_PIXELS,
+        help="reject a PSD whose canvas exceeds this many pixels (0 disables)",
     )
     return parser
 

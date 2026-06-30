@@ -54,6 +54,7 @@ The PSD chain is a set of small, CPU-only cards. Each shells out to a
 | [Image Enhance](docs/cards/image-enhance.md) | `image_enhance_cli.py` | Global sharpen / tone enhancement. |
 | [Detail Watchdog](docs/cards/detail-watchdog.md) | `detail_watchdog_cli.py` | Detect-only quality analysis (blur / halo / colour mismatch) → `QualityReport`. |
 | [Detail Repaint](docs/cards/detail-repaint.md) | `detail_repaint_cli.py` | Two-stage localized repaint of flagged regions (prepare → provider `image.edit` → composite). |
+| [PSD Export](docs/cards/psd-export.md) | `compose_psd_cli.py` | Compose the generated image into the template placeholder (smart-object replacement) and export the `.psd` + preview + metadata triplet. |
 
 These cards are **input-hardened**: candidate decodes normalise CMYK (via
 embedded ICC), 16-bit / float, palette and grayscale sources to an 8-bit working

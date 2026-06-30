@@ -806,6 +806,52 @@ export async function detectQualityIssues(
   })) as DetectQualityResult;
 }
 
+// --- Engine capability probe ------------------------------------------------
+// The `doctor`-style cross-card probe behind the opt-in ML `engine` seams. The
+// inspector uses it to grey out engines whose optional deps / weights are
+// missing on this box (the CPU/`rules` baseline always stays available), and
+// the Dashboard surfaces it as a capability report.
+
+/** Availability of one `engine` option (mirrors Rust `EngineAvailability`). */
+export interface EngineAvailability {
+  available: boolean;
+  reason: string;
+}
+
+/** Per-card engine probe (mirrors Rust `CardEngineProbe`). */
+export interface CardEngineProbe {
+  /** Node kind whose `engine` param these cover, e.g. `imageEnhance`. */
+  node_kind: string;
+  /** Bridge CLI that produced the probe. */
+  cli: string;
+  /** Engine id -> availability (e.g. `cpu`/`realesrgan`, `rules`/`onnx_defect`). */
+  engines: Record<string, EngineAvailability>;
+  /** Why the probe could not run, when `engines` is empty. */
+  error?: string | null;
+}
+
+/** Cross-card engine capability report (mirrors Rust `EngineProbeReport`). */
+export interface EngineProbeReport {
+  cards: CardEngineProbe[];
+  /** Shared weight cache (`HGRIPE_MODEL_CACHE` or the bundled dir). */
+  model_cache_dir?: string | null;
+}
+
+/**
+ * Probe the opt-in ML `engine` seams across local cards (`probe_engines`).
+ *
+ * Outside the desktop shell (browser preview) there is no Python bridge, so we
+ * return an empty report; the inspector then leaves every engine enabled rather
+ * than greying options out from a probe that never ran.
+ */
+export async function probeEngines(): Promise<EngineProbeReport> {
+  const invoke = tauriInvoke();
+  if (!invoke) {
+    return { cards: [], model_cache_dir: null };
+  }
+  return (await invoke("probe_engines", { dir: null })) as EngineProbeReport;
+}
+
 // --- Detail Repaint ---------------------------------------------------------
 // The two pixel halves of the Detail Repaint node, wrapping the Rust
 // `prepare_repaint_regions` / `composite_repaint` commands (which shell out to

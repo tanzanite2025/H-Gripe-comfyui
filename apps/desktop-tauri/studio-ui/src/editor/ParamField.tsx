@@ -10,12 +10,20 @@ interface ParamFieldProps {
    * canvas, so they carry React Flow's `nodrag` / `nowheel` classes.
    */
   compact?: boolean;
+  /**
+   * Per-option availability for a `select` control. When an option maps to
+   * `available: false` it renders disabled (greyed) with `reason` as its
+   * tooltip — used by the inspector to grey out ML `engine` choices whose
+   * deps/weights are missing (from the capability probe). Omitted ⇒ all
+   * options enabled.
+   */
+  optionStates?: Record<string, { available: boolean; reason?: string }>;
 }
 
 // Single source of truth for rendering a param control. Used by both the
 // Inspector (full form) and the node card (inline editing) so the two never
 // drift apart.
-export function ParamField({ spec, value, onChange, compact }: ParamFieldProps) {
+export function ParamField({ spec, value, onChange, compact, optionStates }: ParamFieldProps) {
   const cls = compact ? "nodrag nowheel" : undefined;
 
   switch (spec.control) {
@@ -89,11 +97,20 @@ export function ParamField({ spec, value, onChange, compact }: ParamFieldProps) 
     case "select":
       return (
         <select className={cls} value={String(value ?? "")} onChange={(e) => onChange(e.target.value)}>
-          {(spec.options ?? []).map((o) => (
-            <option key={o} value={o}>
-              {o}
-            </option>
-          ))}
+          {(spec.options ?? []).map((o) => {
+            const state = optionStates?.[o];
+            const unavailable = state ? !state.available : false;
+            return (
+              <option
+                key={o}
+                value={o}
+                disabled={unavailable}
+                title={unavailable ? state?.reason : undefined}
+              >
+                {o}
+              </option>
+            );
+          })}
         </select>
       );
     default:

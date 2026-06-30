@@ -4,6 +4,7 @@
 //! when present, otherwise PATH `python`) so the proven psd-tools pipeline runs
 //! without any separate runtime install.
 
+use std::collections::BTreeMap;
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::sync::OnceLock;
@@ -1077,6 +1078,131 @@ pub(crate) fn detect_quality_issues(
     })
 }
 
+/// Availability of one `engine` option for a card, as reported by a CLI
+/// `--probe-engines` call. `available=false` carries a human `reason` the UI
+/// shows when greying the option out.
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub(crate) struct EngineAvailability {
+    #[serde(default)]
+    pub(crate) available: bool,
+    #[serde(default)]
+    pub(crate) reason: String,
+}
+
+/// Engine capability probe for one card (node kind): which `engine` values its
+/// CLI can actually run right now. `error` is set (engines empty) when the probe
+/// itself could not run, so the UI degrades to "all enabled" rather than hiding
+/// the always-available CPU path.
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub(crate) struct CardEngineProbe {
+    /// The node kind whose `engine` param these cover (e.g. `imageEnhance`).
+    pub(crate) node_kind: String,
+    /// The bridge CLI that produced the probe.
+    pub(crate) cli: String,
+    /// Engine id -> availability (e.g. `cpu`/`realesrgan`, `rules`/`onnx_defect`).
+    pub(crate) engines: BTreeMap<String, EngineAvailability>,
+    /// Why the probe could not run, when `engines` is empty.
+    #[serde(default)]
+    pub(crate) error: Option<String>,
+}
+
+/// Cross-card engine capability report (the `doctor`-style probe). Aggregates
+/// every local card that exposes an opt-in ML `engine` seam so the UI can grey
+/// out engines whose deps/weights are missing on this box.
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub(crate) struct EngineProbeReport {
+    pub(crate) cards: Vec<CardEngineProbe>,
+    /// The shared weight cache (`HGRIPE_MODEL_CACHE` or the bundled dir).
+    #[serde(default)]
+    pub(crate) model_cache_dir: Option<String>,
+}
+
+/// Shape of a single CLI's `--probe-engines` JSON. `engines` carries extra
+/// per-engine fields (e.g. `native_scale`) that the UI does not need, so we
+/// only pull `available` + `reason`.
+#[derive(Debug, Clone, Deserialize)]
+struct CliEngineProbe {
+    #[serde(default)]
+    engines: BTreeMap<String, EngineAvailability>,
+    #[serde(default)]
+    model_cache_dir: Option<String>,
+}
+
+/// Run one card CLI's `--probe-engines` and parse its JSON.
+fn run_engine_probe(python: &Path, dir: &Path, cli_name: &str) -> Result<CliEngineProbe, String> {
+    let script = dir.join("python").join("bridge").join(cli_name);
+    if !script.is_file() {
+        return Err(format!("{cli_name} not found at {}", script.display()));
+    }
+    let mut cmd = std::process::Command::new(python);
+    cmd.arg(&script).arg("--probe-engines").current_dir(dir);
+    #[cfg(windows)]
+    {
+        use std::os::windows::process::CommandExt;
+        // CREATE_NO_WINDOW: don't pop a console window for the child.
+        cmd.creation_flags(0x0800_0000);
+    }
+    let output = cmd
+        .output()
+        .map_err(|err| format!("failed to launch {}: {err}", python.display()))?;
+    if !output.status.success() {
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        return Err(format!("{cli_name} --probe-engines failed: {}", stderr.trim()));
+    }
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    serde_json::from_str::<CliEngineProbe>(stdout.trim())
+        .map_err(|err| format!("could not parse {cli_name} probe: {err} (raw: {})", stdout.trim()))
+}
+
+/// Probe the opt-in ML `engine` seams across the local cards (the `doctor`
+/// cross-card capability report). The CPU/rule baseline is always available; a
+/// learned engine reports `available=false` with a reason when its optional
+/// dependency or weight is missing, which the inspector uses to grey out the
+/// option (and fall back to the baseline). A card whose probe fails to run
+/// returns an `error` and no engines, so the UI leaves its select untouched.
+#[tauri::command]
+pub(crate) fn probe_engines(dir: Option<String>) -> Result<EngineProbeReport, String> {
+    let dir = resolve_project_dir(&dir)?;
+    let python = project_python(&dir);
+
+    // (node kind, CLI) for every card that exposes an `engine` param.
+    const CARDS: [(&str, &str); 2] = [
+        ("imageEnhance", "image_enhance_cli.py"),
+        ("detailWatchdog", "detail_watchdog_cli.py"),
+    ];
+
+    let mut cards = Vec::with_capacity(CARDS.len());
+    let mut model_cache_dir = None;
+    for (node_kind, cli_name) in CARDS {
+        let probe = run_engine_probe(&python, &dir, cli_name);
+        let card = match probe {
+            Ok(parsed) => {
+                if model_cache_dir.is_none() {
+                    model_cache_dir = parsed.model_cache_dir.clone();
+                }
+                CardEngineProbe {
+                    node_kind: node_kind.to_string(),
+                    cli: cli_name.to_string(),
+                    engines: parsed.engines,
+                    error: None,
+                }
+            }
+            Err(err) => CardEngineProbe {
+                node_kind: node_kind.to_string(),
+                cli: cli_name.to_string(),
+                engines: BTreeMap::new(),
+                error: Some(err),
+            },
+        };
+        cards.push(card);
+    }
+
+    Ok(EngineProbeReport {
+        cards,
+        model_cache_dir,
+    })
+}
+
 /// One issue region prepared for repaint: the padded crop + same-size inpaint
 /// mask the orchestrator sends to the provider, plus the geometry the composite
 /// step needs to paste the result back. Fields are `snake_case` to match the
@@ -1306,6 +1432,7 @@ pub(crate) fn composite_repaint(
 mod tests {
     use super::{
         is_project_root, reject_unsafe_output_name, require_project_root, resolve_project_dir,
+        CliEngineProbe, EngineProbeReport,
     };
     use std::fs;
     use std::path::PathBuf;
@@ -1375,6 +1502,46 @@ mod tests {
         assert!(reject_unsafe_output_name("matched").is_ok());
         assert!(reject_unsafe_output_name("  result  ").is_ok());
         assert!(reject_unsafe_output_name("my.output").is_ok());
+    }
+
+    #[test]
+    fn cli_engine_probe_parses_card_probe_json() {
+        // Mirror a `detail_watchdog_cli.py --probe-engines` payload: the CPU/rule
+        // baseline is available, the ML engine is not, and extra per-engine
+        // fields (e.g. native_scale) are tolerated.
+        let raw = r#"{
+            "engines": {
+                "rules": {"available": true, "reason": "built-in CPU rule layer"},
+                "onnx_defect": {"available": false, "reason": "missing optional dependency: onnxruntime", "native_scale": null}
+            },
+            "model_cache_dir": "/cache/models"
+        }"#;
+        let probe: CliEngineProbe = serde_json::from_str(raw).unwrap();
+        assert_eq!(probe.model_cache_dir.as_deref(), Some("/cache/models"));
+        assert!(probe.engines["rules"].available);
+        assert!(!probe.engines["onnx_defect"].available);
+        assert!(probe.engines["onnx_defect"].reason.contains("onnxruntime"));
+    }
+
+    #[test]
+    fn engine_probe_report_round_trips() {
+        // The cross-card report serialises to the shape the UI bridge expects.
+        let raw = r#"{
+            "cards": [
+                {"node_kind": "imageEnhance", "cli": "image_enhance_cli.py",
+                 "engines": {"cpu": {"available": true, "reason": "built-in CPU path"}}},
+                {"node_kind": "detailWatchdog", "cli": "detail_watchdog_cli.py",
+                 "engines": {}, "error": "probe failed"}
+            ],
+            "model_cache_dir": null
+        }"#;
+        let report: EngineProbeReport = serde_json::from_str(raw).unwrap();
+        assert_eq!(report.cards.len(), 2);
+        assert_eq!(report.cards[0].node_kind, "imageEnhance");
+        assert!(report.cards[0].engines["cpu"].available);
+        assert!(report.cards[0].error.is_none());
+        assert_eq!(report.cards[1].error.as_deref(), Some("probe failed"));
+        assert!(report.cards[1].engines.is_empty());
     }
 
     #[test]

@@ -1,8 +1,9 @@
-import { useContext, useState } from "react";
+import { useContext, useEffect, useState } from "react";
 import type { Node } from "@xyflow/react";
 import { nodeSpec } from "../graph/nodeSpecs";
 import { localizeSpec } from "../graph/nodeSpecsI18n";
 import { LangContext, useT } from "../i18n";
+import { probeEngines, type EngineProbeReport } from "../bridge/psd";
 import { ParamField } from "./ParamField";
 import { ProfilePicker } from "./ProfilePicker";
 import { OutputPicker } from "./OutputPicker";
@@ -18,8 +19,22 @@ interface InspectorProps {
 // node card), so the canvas stays light and previews never blow up node size.
 export function Inspector({ node, onParamChange }: InspectorProps) {
   const [viewerPath, setViewerPath] = useState<string | null>(null);
+  const [engineProbe, setEngineProbe] = useState<EngineProbeReport | null>(null);
   const lang = useContext(LangContext);
   const t = useT();
+
+  // Probe the opt-in ML `engine` seams once so the inspector can grey out
+  // engines whose deps/weights are missing on this box. Failures are non-fatal:
+  // we leave every option enabled rather than blocking selection on a probe.
+  useEffect(() => {
+    let alive = true;
+    probeEngines()
+      .then((report) => alive && setEngineProbe(report))
+      .catch(() => alive && setEngineProbe(null));
+    return () => {
+      alive = false;
+    };
+  }, []);
 
   if (!node) {
     return (
@@ -79,15 +94,28 @@ export function Inspector({ node, onParamChange }: InspectorProps) {
       {spec.params.filter(isVisible).map((p) => {
         const raw = data.params[p.key];
         const onChange = (v: unknown) => onParamChange(node.id, p.key, v);
+        // For the opt-in `engine` select, grey out engines the probe reports as
+        // unavailable on this box (the CPU/`rules` baseline stays enabled). A
+        // probe that did not run (browser preview, error) leaves all enabled.
+        const card = engineProbe?.cards.find((c) => c.node_kind === data.kind);
+        const optionStates =
+          p.key === "engine" && card && !card.error && Object.keys(card.engines).length > 0
+            ? card.engines
+            : undefined;
+        const selectedUnavailable =
+          optionStates?.[String(raw ?? "")] && !optionStates[String(raw ?? "")].available;
         return (
           <label key={p.key} className="field">
             <span>{p.label}</span>
-            <ParamField spec={p} value={raw} onChange={onChange} />
+            <ParamField spec={p} value={raw} onChange={onChange} optionStates={optionStates} />
             {p.control === "path" && (
               <OutputPicker
                 kind={spec.kind === "psdTemplate" ? "template" : "image"}
                 onPick={(path) => onChange(path)}
               />
+            )}
+            {selectedUnavailable && (
+              <small className="hint warn">{t("inspector.engineUnavailable")}</small>
             )}
             {p.hint && <small className="hint">{p.hint}</small>}
           </label>

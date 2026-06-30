@@ -520,6 +520,7 @@ button:disabled { opacity: 0.6; cursor: default; }
 .slider-row output { min-width: 28px; text-align: right; color: var(--muted); }
 .field input[type="checkbox"] { width: 16px; height: 16px; align-self: flex-start; }
 .field small.hint { color: var(--muted); font-size: 11px; }
+.field small.hint.warn { color: var(--err); }
 
 /* toolbar validation marker */
 .issues { color: var(--running); font-size: 12px; cursor: help; }

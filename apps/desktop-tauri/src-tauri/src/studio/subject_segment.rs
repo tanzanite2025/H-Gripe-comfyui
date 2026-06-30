@@ -55,7 +55,7 @@ impl AutoMode {
     }
 
     /// The label echoed onto each detected subject in `matte_report`.
-    fn label(self) -> &'static str {
+    pub(super) fn label(self) -> &'static str {
         match self {
             Self::Subject => "subject",
             Self::Product => "product",
@@ -93,10 +93,13 @@ pub(super) trait SubjectSegmenter {
     fn segment(&self, request: &SegmentRequest) -> Result<SegmentResult, String>;
 }
 
-/// Choose the segmenter for an auto mode. Today every mode resolves to the
-/// deterministic builtin fallback; a model backend is slotted in here once its
-/// weights are available, keeping the call site (`subject_mask`) unchanged.
-pub(super) fn segmenter_for_mode(_mode: AutoMode) -> Box<dyn SubjectSegmenter> {
+/// Choose the segmenter for an auto mode: the ONNX model backend when a weight
+/// is resolvable, else the deterministic builtin CPU fallback. The call site
+/// (`subject_mask`) is unchanged either way.
+pub(super) fn segmenter_for_mode(mode: AutoMode) -> Box<dyn SubjectSegmenter> {
+    if let Some(model) = super::subject_model::model_segmenter_for_mode(mode) {
+        return Box::new(model);
+    }
     Box::new(BuiltinCpuSegmenter)
 }
 

@@ -30,6 +30,28 @@ from typing import Any, Protocol
 
 CPU_ENGINE = "cpu"
 
+#: The default ``device`` selection: pick the best accelerator that is present.
+DEVICE_AUTO = "auto"
+#: Selectable ``device`` values for the GPU-capable engines.
+KNOWN_DEVICES = (DEVICE_AUTO, "cpu", "cuda")
+
+
+def resolve_device(requested: str | None, cuda_available: bool) -> str:
+    """Concrete torch device for a requested ``device`` selection.
+
+    ``auto`` (the default) keeps the long-standing behaviour the torch backends
+    hard-coded -- ``cuda`` when a CUDA device is present, else ``cpu``. An
+    explicit ``cpu`` always runs on CPU. An explicit ``cuda`` is honoured only
+    when a CUDA device is actually available; on a CPU-only box it degrades to
+    ``cpu`` (which the caller reports truthfully) rather than crashing the run.
+    An unknown value is treated as ``auto`` so a stale saved graph never fails.
+    """
+    name = (requested or DEVICE_AUTO).strip().lower() or DEVICE_AUTO
+    if name == "cpu":
+        return "cpu"
+    # ``cuda`` and ``auto`` both want the accelerator when it exists, else CPU.
+    return "cuda" if cuda_available else "cpu"
+
 
 class BackendUnavailable(RuntimeError):
     """Raised by a backend that was asked to run without its deps / weights.
@@ -64,11 +86,15 @@ class SrBackend(Protocol):
         """
         ...
 
-    def upscale(self, rgb: Any, scale: float) -> Any:
+    def upscale(self, rgb: Any, scale: float, device: str | None = None) -> tuple[Any, str]:
         """Upscale a PIL ``RGB`` image by ``scale`` (no alpha — handled by the caller).
 
-        Raises :class:`BackendUnavailable` if deps/weights vanished between the
-        probe and the call.
+        ``device`` selects the compute device (``auto`` by default — see
+        :func:`resolve_device`). Returns ``(image, device_used)`` so the caller
+        can report truthfully which device actually ran (an explicit ``cuda``
+        degrades to ``cpu`` on a box with no CUDA device). Raises
+        :class:`BackendUnavailable` if deps/weights vanished between the probe
+        and the call.
         """
         ...
 

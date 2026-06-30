@@ -26,7 +26,7 @@ import os
 from pathlib import Path
 from typing import Any
 
-from . import BackendUnavailable, model_cache_dir
+from . import BackendUnavailable, model_cache_dir, resolve_device
 
 _DEFAULT_WEIGHT_NAME = "RealESRGAN_x4plus.pth"
 
@@ -59,14 +59,16 @@ class RealEsrganBackend:
             )
         return True, "ready"
 
-    def upscale(self, rgb: Any, scale: float) -> Any:
+    def upscale(self, rgb: Any, scale: float, device: str | None = None) -> tuple[Any, str]:
         """Upscale a PIL ``RGB`` image by ``scale`` using Real-ESRGAN x4.
 
         The model has a fixed native ``x4`` factor; we run it once and then
         Lanczos-resize to the exact requested factor so the caller's
         target-size contract is unchanged. Tiling keeps VRAM bounded on large
-        inputs. Raises :class:`BackendUnavailable` if deps/weights vanished
-        since the probe.
+        inputs. ``device`` selects the compute device (``auto`` by default);
+        returns ``(image, device_used)`` so the caller reports the device that
+        actually ran. Raises :class:`BackendUnavailable` if deps/weights
+        vanished since the probe.
         """
         ok, reason = self.available()
         if not ok:
@@ -78,7 +80,7 @@ class RealEsrganBackend:
         from PIL import Image
         from realesrgan import RealESRGANer
 
-        device = "cuda" if torch.cuda.is_available() else "cpu"
+        device = resolve_device(device, torch.cuda.is_available())
         model = RRDBNet(
             num_in_ch=3,
             num_out_ch=3,
@@ -111,4 +113,4 @@ class RealEsrganBackend:
         target_h = max(1, int(round(rgb.height * scale)))
         if enhanced.size != (target_w, target_h):
             enhanced = enhanced.resize((target_w, target_h), Image.LANCZOS)
-        return enhanced
+        return enhanced, device

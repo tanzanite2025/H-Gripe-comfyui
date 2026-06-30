@@ -231,10 +231,12 @@ def test_backend_dispatch_success_records_telemetry(
         def weight_path(self):
             return Path("/models/fake_x2.pth")
 
-        def upscale(self, rgb, scale):
+        def upscale(self, rgb, scale, device=None):
             w = max(1, round(rgb.width * scale))
             h = max(1, round(rgb.height * scale))
-            return rgb.resize((w, h), Image.LANCZOS)
+            # Mimic a CPU-only box so an explicit ``cuda`` request degrades to
+            # ``cpu`` exactly like the real torch backend reports it.
+            return rgb.resize((w, h), Image.LANCZOS), sr_backends.resolve_device(device, False)
 
     monkeypatch.setattr(sr_backends, "resolve", lambda name: _FakeBackend() if name == "fake" else None)
 
@@ -245,10 +247,53 @@ def test_backend_dispatch_success_records_telemetry(
     assert report["engine_requested"] == "fake"
     assert report["engine_fallback_reason"] is None
     assert report["backend_model"] == "fake_x2.pth"
+    # device defaults to auto; on this (faked) CPU-only box it runs on cpu.
+    assert report["device_requested"] == "auto"
+    assert report["device"] == "cpu"
     # The model path replaces the CPU denoise/sharpen, so those are reported off.
     assert report["denoise_method"] == "fake"
     assert report["texture_strength"] == 0.0
     assert Image.open(out["enhanced_image"]).size == (40, 40)
+
+
+def test_backend_dispatch_device_request_degrades_truthfully(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # An explicit ``cuda`` request on a box with no CUDA device is reported as
+    # the ``cpu`` it actually ran on -- the device telemetry never lies.
+    import sr_backends
+
+    class _FakeBackend:
+        id = "fake"
+        native_scale = 2
+
+        def available(self):
+            return True, "ready"
+
+        def weight_path(self):
+            return Path("/models/fake_x2.pth")
+
+        def upscale(self, rgb, scale, device=None):
+            w = max(1, round(rgb.width * scale))
+            h = max(1, round(rgb.height * scale))
+            return rgb.resize((w, h), Image.LANCZOS), sr_backends.resolve_device(device, False)
+
+    monkeypatch.setattr(
+        sr_backends, "resolve", lambda name: _FakeBackend() if name == "fake" else None
+    )
+
+    src = _make_rgb(tmp_path / "in.png", (20, 20))
+    out = _run(
+        src,
+        target_width=40,
+        target_height=40,
+        engine="fake",
+        device="cuda",
+        output_dir=tmp_path,
+    )
+    report = out["enhance_report"]
+    assert report["device_requested"] == "cuda"
+    assert report["device"] == "cpu"
 
 
 def test_probe_engines_flag_emits_capability_json(tmp_path: Path, capsys) -> None:

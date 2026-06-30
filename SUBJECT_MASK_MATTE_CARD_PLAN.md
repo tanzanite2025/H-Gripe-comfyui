@@ -250,14 +250,17 @@ U2Net / rembg
 远端 segmentation API
 ```
 
-不要把模型塞进前端。推荐走：
+不要把模型塞进前端。模型在 Rust 内进程跑（已定方向）：
 
 ```text
-Tauri / Rust
-  -> provider/profile
-  -> Python local worker or remote API
+React UI
+  -> 节点点选 / 编辑
+Tauri / Rust（Compute 执行通道，无网络）
+  -> ort / candle 内进程推理（SAM / RMBG / BiRefNet）
   -> mask result
 ```
+
+仅当走*远端* segmentation API 时，该模式才落到 `Api` / `Hybrid` 通道。
 
 ### Phase 3：钢笔路径
 
@@ -291,11 +294,10 @@ Tauri / Rust
 React UI
   -> mask 编辑器、钢笔路径、预览、撤销重做
 
-Rust / Tauri
-  -> 文件读写、任务调度、缓存、历史、路径校验、provider 调用
-
-Python bridge / local worker
-  -> segmentation 模型、matting 模型、复杂图像处理
+Rust / Tauri（本卡 = 原生 Rust，不走 python/bridge）
+  -> studio_image（解码守卫 + 色彩空间归一化）、形态学 / 魔棒 / 羽化
+  -> segmentation / matting 模型（ort / candle 内进程）
+  -> 文件读写、路径校验、缓存、历史
 
 Refine Mask Edge
   -> 接收 mask/cutout，负责边缘融合
@@ -353,17 +355,18 @@ PSD Export
 冻结契约见 [`docs/cards/subject-mask-matte.md`](docs/cards/subject-mask-matte.md)。
 关键决定：
 
-**节点本体要轻，重编辑放共享弹窗。** graph 已有 LOD（按缩放渲染）+ 懒加载缩略图
+**节点本体要轻，重编辑放弹窗。** graph 已有 LOD（按缩放渲染）+ 懒加载缩略图
 （media discipline），把画笔/钢笔 canvas 塞进节点 body 会和这两个优化直接冲突。
 
 ```text
 节点 body  = 缩略图预览 + Auto / Edit / Apply + 轻量"点选"
-共享弹窗   = 完整 canvas（画笔/橡皮/魔棒/羽化/撤销重做）—— 复用组件，非本卡专属
+预览弹窗   = 通用只读评审闸门，每个阶段都能放一张 —— 复用组件，非本卡专属
+精修弹窗   = 完整 canvas（画笔/橡皮/魔棒/羽化/撤销重做），从预览 `编辑` 按需调出
 节点只持有结果（mask / cutout / edit_paths），不持有编辑器
 ```
 
-**共享弹窗 = 可复用组件，不是 Subject Mask 专属。** `Refine Mask Edge` /
-`Detail Repaint` 将来也要"预览 + 局部编辑"，应打开同一个弹窗、注册不同工具集。
+**预览弹窗 = 可复用组件，不是 Subject Mask 专属。** `Refine Mask Edge` /
+`Detail Repaint` 将来也要"预览 + 局部编辑"，可复用同一个预览弹窗，再从中调出各自的精修弹窗 / 工具集。
 
 **工具注册表（ready / planned）支撑增量上线。** 弹窗不写死工具，渲染一张注册表，
 每个工具带状态：`ready` 正常显示，`planned` 灰掉。这就是"做好的放一个、没做的先放
@@ -373,11 +376,15 @@ PSD Export
 **"节点上点选计算选中的块" = 同一交互、两阶段后端。**
 
 ```text
-Phase 1（无模型，CPU）：点选 = 魔棒 / 洪水填充，按颜色相似度选一块连通区域
-Phase 2（接模型）   ：点选 = SAM point-prompt，模型算 mask（executor: api/hybrid）
+Phase 1（无模型，原生 Rust）：点选 = 魔棒 / 洪水填充，按颜色相似度选一块连通区域
+Phase 2（接模型，ort/candle）：点选 = SAM point-prompt，模型算 mask
 ```
 
-UI 先按"点 → 得到一块选区"做好，后端 Phase 1/2 热替换，前端不重写。
+两阶段都在 Rust `Compute` 执行通道内进程跑（无网络）；UI 先按"点 → 得到一块选区"做好，后端 Phase 1/2 热替换，前端不重写。
+
+**预览弹窗 vs 精修弹窗 = 拆成两个。** 预览弹窗是通用只读"评审闸门"，可插在每个阶段；精修弹窗（钢笔/画笔/魔棒/羽化）从预览的 `编辑` 按钮按需调出，工具走 ready/planned 注册表。
+
+**后端语言 = 原生 Rust（已定）。** 本卡不走 `python/bridge`，图像处理用 `image` + `imageproc` 在进程内做；新增可复用 `studio_image`（解码守卫 + 色彩空间归一化），为后续 Rust 卡共用。因现有 `StudioExecutor::Local` 结构上等价于"python-bridge"，本卡走新增的 `Compute` 通道（内进程 Rust，无网络）。
 
 ## 结论
 

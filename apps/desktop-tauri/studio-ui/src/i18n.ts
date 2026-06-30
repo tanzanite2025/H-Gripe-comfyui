@@ -306,6 +306,26 @@ export const messages = {
     en: "Preview the current mask / cutout (review gate)",
     zh: "预览当前蒙版 / 抠像（审阅关卡）",
   },
+  "canvas.dropImages": { en: "added {n} image card(s)", zh: "已添加 {n} 张图片卡" },
+  "canvas.dropImagesAndVideo": {
+    en: "added {n} image card(s); video drop is not supported yet",
+    zh: "已添加 {n} 张图片卡；暂不支持拖入视频",
+  },
+  "canvas.dropVideoSoon": {
+    en: "video card is coming soon — drop an image for now",
+    zh: "视频卡即将推出 — 目前请拖入图片",
+  },
+  "canvas.dropUnsupported": {
+    en: "unsupported file type — drop an image",
+    zh: "不支持的文件类型 — 请拖入图片",
+  },
+  "node.mediaEditMask": { en: "Edit (Mask)", zh: "编辑（蒙版）" },
+  "node.mediaEditMaskTitle": {
+    en: "Create a bound mask-edit node from this image and open its editor",
+    zh: "基于此图新建一个绑定的蒙版编辑节点并打开编辑器",
+  },
+  "node.mediaCrop": { en: "Crop", zh: "裁剪" },
+  "node.mediaCropSoon": { en: "Crop — coming soon", zh: "裁剪 — 即将推出" },
   "node.connImage": { en: "image", zh: "图像" },
   "node.connTemplate": { en: "template", zh: "模板" },
   "node.metaPlaceholder": { en: "placeholder", zh: "占位符" },

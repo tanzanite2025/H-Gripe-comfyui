@@ -144,6 +144,34 @@ export function wouldCreateCycle(
   return false;
 }
 
+/**
+ * The subgraph of `targetId` and all of its transitive inputs (ancestors),
+ * preserving only edges between retained nodes. Used by "run up to this node"
+ * so confirming an edit executes just the chain that feeds it. Returns the
+ * graph unchanged when `targetId` is not present.
+ */
+export function ancestorSubgraph(graph: WorkflowGraph, targetId: string): WorkflowGraph {
+  if (!graph.nodes.some((n) => n.id === targetId)) return graph;
+  const upstream = new Map<string, string[]>();
+  for (const node of graph.nodes) upstream.set(node.id, []);
+  for (const edge of graph.edges) upstream.get(edge.target)?.push(edge.source);
+
+  const keep = new Set<string>();
+  const stack = [targetId];
+  while (stack.length) {
+    const cur = stack.pop()!;
+    if (keep.has(cur)) continue;
+    keep.add(cur);
+    for (const up of upstream.get(cur) ?? []) stack.push(up);
+  }
+
+  return {
+    ...graph,
+    nodes: graph.nodes.filter((n) => keep.has(n.id)),
+    edges: graph.edges.filter((e) => keep.has(e.source) && keep.has(e.target)),
+  };
+}
+
 /** Static validation: port type compatibility + cycle freedom. */
 export function validateGraph(graph: WorkflowGraph): ValidationIssue[] {
   const issues: ValidationIssue[] = [];

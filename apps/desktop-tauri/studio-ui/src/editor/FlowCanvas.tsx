@@ -20,6 +20,7 @@ import { HgripeNode, type HgripeNodeData } from "./HgripeNode";
 import { GroupNode } from "./GroupNode";
 import { HelperLineOverlay } from "./HelperLineOverlay";
 import { SmartEdge } from "./SmartEdge";
+import { BindingEdge } from "./BindingEdge";
 import { miniMapColor } from "./minimap";
 import { DND_NODE_KIND } from "./Palette";
 import { nodeSpec } from "../graph/nodeSpecs";
@@ -77,7 +78,7 @@ export function FlowCanvas({
 }: FlowCanvasProps) {
   // Declared once so React does not re-create the map each render.
   const nodeTypes = useMemo(() => ({ hgripe: HgripeNode, group: GroupNode }), []);
-  const edgeTypes = useMemo(() => ({ smart: SmartEdge }), []);
+  const edgeTypes = useMemo(() => ({ smart: SmartEdge, binding: BindingEdge }), []);
   const { screenToFlowPosition } = useReactFlow();
 
   const portType = useCallback(

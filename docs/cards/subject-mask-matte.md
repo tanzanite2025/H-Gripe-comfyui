@@ -81,10 +81,16 @@ the review surface stays universal and cheap, the editor stays specialised.
 | 2 | a model point-prompt (SAM 2): click points → model computes the mask — `ort` in-process | `Compute` |
 
 **Phase 2 point-prompt is wired (PR-4b).** The `Point (SAM 2)` tool records each
-click into `edit_paths.points` (image-space `[x, y]`); when an `auto_*` mode runs
-with points present, the backend routes to the SAM 2 segmenter ("segment what you
-clicked"). No points ⇒ the prompt-free salient cascade (BiRefNet → U²-Netp →
-`builtin-cpu`). The UI ships the same "click → region" interaction for both lanes.
+click into `edit_paths.points` as `{ x, y, label }` (image-space); a **left-click**
+adds a positive / include point (`label: 1`, green), a **right-click** adds a
+negative / exclude point (`label: 0`, red) that carves a wrongly-grabbed
+neighbour out. When an `auto_*` mode runs with at least one *positive* point, the
+backend routes to the SAM 2 segmenter ("segment what you clicked, not what you
+right-clicked") — the labels feed SAM 2's `point_labels` tensor (1 / 0). No
+positive point ⇒ the prompt-free salient cascade (BiRefNet → U²-Netp →
+`builtin-cpu`). A legacy `[x, y]` pair is read as a positive point, so older
+workflows stay loadable. The UI ships the same "click → region" interaction for
+both lanes.
 
 The UI ships "click → get a region" once; the backend is hot-swapped Phase 1 → 2
 without a frontend rewrite.
@@ -94,7 +100,7 @@ without a frontend rewrite.
 | Tool | Status | Phase 1 behaviour |
 | --- | --- | --- |
 | `brush` (add) / `eraser` (subtract) | ready | Paint mask in / out. |
-| `point` (SAM 2 prompt) | ready | Record a positive point prompt into `edit_paths.points`; routes `auto_*` modes to the SAM 2 segmenter. |
+| `point` (SAM 2 prompt) | ready | Left-click records a positive (include) point, right-click a negative (exclude) point, into `edit_paths.points`; routes `auto_*` modes (with a positive point) to the SAM 2 segmenter. |
 | `wand` (click-select) | ready | Flood fill a contiguous region by colour similarity. |
 | `rect` / `ellipse` | ready | Marquee add/subtract. |
 | `invert` | ready | Invert the whole mask. |
@@ -207,7 +213,7 @@ is the no-points path).
     { "id": "matte_1", "radius": 16, "points": [[300, 200], [312, 214]] }
   ],
   "operations": [ { "type": "feather", "amount": 2 } ],
-  "points": [[420, 360], [690, 540]]
+  "points": [ { "x": 420, "y": 360, "label": 1 }, { "x": 690, "y": 540, "label": 0 } ]
 }
 ```
 
@@ -217,8 +223,12 @@ versioned so a workflow saved now stays loadable once Phase 3 adds rasterisation
 trimap *unknown-band* strokes painted by the **Matting** tool: the backend
 stamps them as the unknown level on top of the auto `matting_band_px` ring, and
 their presence runs matting even when the `alpha_matting` flag is off. `points`
-are positive SAM 2 point prompts (image-space `[x, y]`) consumed by the `auto_*`
-model lane (Phase 2); they are ignored by the manual lanes.
+are SAM 2 point prompts (image-space `{ x, y, label }`, `label: 1` positive /
+include, `label: 0` negative / exclude) consumed by the `auto_*` model lane
+(Phase 2): a positive point routes to SAM 2 and seeds the selection, a negative
+point carves a region back out (SAM 2 `point_labels` 0, or component exclusion in
+the builtin fallback). A legacy `[x, y]` pair is read as positive. They are
+ignored by the manual lanes.
 
 ## Colour space & bit depth
 

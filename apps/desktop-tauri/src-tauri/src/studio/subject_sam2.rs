@@ -34,7 +34,7 @@ use serde_json::json;
 use super::subject_model::{
     constrain_to_placeholder, coverage, resolve_model_file, selection_bbox,
 };
-use super::subject_segment::{SegmentRequest, SegmentResult, SubjectSegmenter};
+use super::subject_segment::{PointPrompt, SegmentRequest, SegmentResult, SubjectSegmenter};
 
 const PROVIDER: &str = "sam2";
 /// SAM 2 is trained at 1024x1024.
@@ -46,8 +46,10 @@ const STD: [f32; 3] = [0.229, 0.224, 0.225];
 const MASK_PRIOR_SIZE: i64 = 256;
 const MASK_ON: u8 = 255;
 const MASK_OFF: u8 = 0;
-/// A positive (foreground) point prompt for the decoder.
+/// A positive (foreground / include) point prompt for the decoder.
 const LABEL_FOREGROUND: f32 = 1.0;
+/// A negative (background / exclude) point prompt for the decoder.
+const LABEL_BACKGROUND: f32 = 0.0;
 /// SAM mask logits above this are foreground.
 const MASK_LOGIT_CUTOFF: f32 = 0.0;
 
@@ -135,19 +137,20 @@ impl SubjectSegmenter for Sam2Segmenter {
 
         // Stage 2: turn point prompts into a mask. Points arrive in original
         // image space and are scaled into the 1024 encoder space; with none we
-        // probe the image centre so the backend never silently no-ops.
-        let prompts: Vec<(u32, u32)> = if request.points.is_empty() {
-            vec![(width / 2, height / 2)]
+        // probe the image centre (positive) so the backend never silently
+        // no-ops. Each prompt carries its label so right-clicked negative points
+        // ride through as decoder `point_labels` 0 and carve regions out.
+        let prompts: Vec<PointPrompt> = if request.points.is_empty() {
+            vec![PointPrompt {
+                x: width / 2,
+                y: height / 2,
+                positive: true,
+            }]
         } else {
             request.points.to_vec()
         };
         let num_points = prompts.len() as i64;
-        let mut coords = Vec::with_capacity(prompts.len() * 2);
-        for &(x, y) in &prompts {
-            coords.push(x as f32 * INPUT_SIZE as f32 / width as f32);
-            coords.push(y as f32 * INPUT_SIZE as f32 / height as f32);
-        }
-        let labels = vec![LABEL_FOREGROUND; prompts.len()];
+        let (coords, labels) = prompt_tensors(&prompts, width, height);
 
         let point_coords = Tensor::from_array((vec![1_i64, num_points, 2], coords))
             .map_err(|err| format!("failed to build SAM2 point_coords: {err}"))?;
@@ -205,6 +208,24 @@ impl SubjectSegmenter for Sam2Segmenter {
             detected_subjects,
         })
     }
+}
+
+/// Build the decoder `point_coords` (each point scaled from original image
+/// space into the 1024 encoder space) and `point_labels` (1.0 for a positive /
+/// include point, 0.0 for a negative / exclude one) for a set of prompts.
+fn prompt_tensors(prompts: &[PointPrompt], width: u32, height: u32) -> (Vec<f32>, Vec<f32>) {
+    let mut coords = Vec::with_capacity(prompts.len() * 2);
+    let mut labels = Vec::with_capacity(prompts.len());
+    for p in prompts {
+        coords.push(p.x as f32 * INPUT_SIZE as f32 / width as f32);
+        coords.push(p.y as f32 * INPUT_SIZE as f32 / height as f32);
+        labels.push(if p.positive {
+            LABEL_FOREGROUND
+        } else {
+            LABEL_BACKGROUND
+        });
+    }
+    (coords, labels)
 }
 
 /// Resize to the encoder edge and produce a CHW, `1/255`-rescaled,
@@ -304,6 +325,19 @@ mod tests {
     }
 
     #[test]
+    fn prompt_tensors_map_labels_and_scale_coords() {
+        // A positive then a negative point on a half-encoder-size image: labels
+        // mirror SAM 2 (1.0 / 0.0) and coords double into the 1024 space.
+        let prompts = [
+            PointPrompt { x: 128, y: 256, positive: true },
+            PointPrompt { x: 384, y: 0, positive: false },
+        ];
+        let (coords, labels) = prompt_tensors(&prompts, 512, 512);
+        assert_eq!(labels, vec![LABEL_FOREGROUND, LABEL_BACKGROUND]);
+        assert_eq!(coords, vec![256.0, 512.0, 768.0, 0.0]);
+    }
+
+    #[test]
     fn preprocess_shape_and_rescale() {
         let image = RgbaImage::from_pixel(8, 8, Rgba([255, 0, 0, 255]));
         let data = preprocess(&image);
@@ -337,7 +371,7 @@ mod tests {
                 mode: super::super::subject_segment::AutoMode::Subject,
                 placeholder: None,
                 prompt: None,
-                points: &[(32, 32)],
+                points: &[PointPrompt { x: 32, y: 32, positive: true }],
             })
             .expect("sam2 inference");
         assert_eq!(result.mask.dimensions(), (64, 64));

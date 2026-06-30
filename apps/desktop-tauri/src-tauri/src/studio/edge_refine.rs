@@ -71,6 +71,9 @@ pub(super) fn execute_studio_refine_mask_edge(
         Some(output_dir),
         optional(studio_value_to_string(node.params.get("output_name"))),
         optional(studio_value_to_string(node.params.get("engine"))),
+        // `device` selects the ONNX execution provider for the learned matter
+        // (default `auto`); ignored by the CPU heuristic.
+        optional(studio_value_to_string(node.params.get("device"))),
     )?;
 
     let report = serde_json::to_value(&result.edge_report)

@@ -170,6 +170,10 @@ export const NODE_ZH: Record<string, NodeSpecZh> = {
         label: "引擎",
         hint: "cpu = 内置 Lab 迁移 / 直方图匹配（始终可用）；onnx_harmonize = 可选学习型协调器，权重/依赖缺失时回落 cpu",
       },
+      device: {
+        label: "设备",
+        hint: "onnx_harmonize 协调器的计算设备：auto（有 CUDA 用 CUDA，否则 CPU）| cpu | cuda（无加速器时回落 CPU）；cpu 启发式忽略此项",
+      },
       strength: { label: "强度" },
       shadow_strength: { label: "阴影强度", hint: "阴影区的额外校正权重" },
       highlight_strength: { label: "高光强度", hint: "高光区的额外校正权重" },
@@ -239,6 +243,10 @@ export const NODE_ZH: Record<string, NodeSpecZh> = {
         label: "引擎",
         hint: "cpu = 内置启发式精修（始终可用）；onnx_matting = 可选学习抠像，需要连接 trimap，权重/依赖缺失时回落 cpu",
       },
+      device: {
+        label: "设备",
+        hint: "onnx_matting 抠像的计算设备：auto（有 CUDA 用 CUDA，否则 CPU）| cpu | cuda（无加速器时回落 CPU）；cpu 启发式忽略此项",
+      },
       erode_px: { label: "腐蚀 px", hint: "向内收边以去除白边" },
       dilate_px: { label: "膨胀 px", hint: "向外扩张蒙版" },
       feather_px: { label: "羽化 px", hint: "柔化边缘过渡" },
@@ -271,6 +279,10 @@ export const NODE_ZH: Record<string, NodeSpecZh> = {
       engine: {
         label: "引擎",
         hint: "cpu = 内置 Lanczos+锐化（始终可用）；realesrgan = 可选 GPU/CPU 模型，权重/依赖缺失时回落 cpu",
+      },
+      device: {
+        label: "设备",
+        hint: "realesrgan 放大器的计算设备：auto（有 CUDA 用 CUDA，否则 CPU）| cpu | cuda（无加速器时回落 CPU）；cpu 路径忽略此项",
       },
       target_width: { label: "目标宽度", hint: "显式目标像素（0 = 由所连边界或预设缩放自动推算）" },
       target_height: { label: "目标高度", hint: "显式目标像素（0 = 由所连边界或预设缩放自动推算）" },

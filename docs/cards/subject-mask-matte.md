@@ -104,7 +104,7 @@ without a frontend rewrite.
 | `feather` | ready | Gaussian-feather the mask edge. |
 | `pen` (bezier path) | **planned** | Phase 3 — path rasterised + boolean-combined with the mask. |
 | `lasso` | **planned** | Phase 3. |
-| `matting` (continuous alpha) | backend ready | Cascade 3 — the node's **Alpha matting** toggle resolves the binary edge into continuous alpha via a trimap (ViTMatte, else a builtin feather). A dedicated edit-modal tool is still **planned**. |
+| `matting` (continuous alpha) | backend ready | Cascade 3 — the node's **Alpha matting** toggle resolves the binary edge into continuous alpha via a trimap (ViTMatte, else a builtin **guided-filter** matte). A dedicated edit-modal tool is still **planned**. |
 
 `planned` tools render greyed ("coming soon"); this is what lets Phase 1 ship with
 the morphology/brush set while pen/lasso/matting stay stubbed.
@@ -130,7 +130,7 @@ the morphology/brush set while pen/lasso/matting stay stubbed.
 | `feather_px` | float | `0.0` | `>= 0` | Edge feather applied last. |
 | `grow_px` | int | `0` | any | Positive dilates, negative erodes. |
 | `fill_holes` | bool | `false` | | Close interior holes before feather. |
-| `alpha_matting` | bool | `false` | | Resolve the binary edge into continuous alpha via a trimap (hair / glass). Runs **ViTMatte** when its weight resolves, else a deterministic `builtin-cpu-matte` feather. Applied after morphology, before `feather_px`. |
+| `alpha_matting` | bool | `false` | | Resolve the binary edge into continuous alpha via a trimap (hair / glass). Runs **ViTMatte** when its weight resolves, else a deterministic `builtin-cpu-matte` guided-filter matte. Applied after morphology, before `feather_px`. |
 | `matting_band_px` | int | `12` | `>= 0` | Width of the trimap *unknown* band the matter resolves (only when `alpha_matting` is on). |
 | `output_dir` | path | run output dir | | Triplet written here. |
 | `output_name` | basename | `<image>_mask` | plain basename | Rejected if it contains `..` or a path separator (`studio_reject_unsafe_basename`). |
@@ -294,8 +294,9 @@ model id in `matte_report`.
      through an `AlphaMatter`. **ViTMatte small** (`provider: vitmatte`,
      Apache-2.0, ~104 MB, single 4-channel `pixel_values` = RGB + trimap)
      runs in-process via `ort` when its weight resolves; otherwise a
-     deterministic `builtin-cpu-matte` feather fills the unknown band, so the
-     toggle always works. The op is recorded in `matte_report.operations` and
+     deterministic `builtin-cpu-matte` **guided filter** (He et al., image-guided)
+     resolves the unknown band along real edges, so the toggle always works
+     without the weight. The op is recorded in `matte_report.operations` and
      the soft matte hands off to `Refine Mask Edge`.
    - *Pending:* a dedicated `matting` tool in the Mask-Edit modal (per-region
      trimap painting) and a trimap-aware hair refine path.
@@ -320,8 +321,9 @@ Refine Mask Edge -> receives mask / cutout, owns edge fusion
 - `src-tauri/src/studio/subject_matte.rs` — trimap derivation (FG / unknown /
   BG levels, zero-band pass-through), ViTMatte pre/post-processing
   (4-channel pack, `[-1, 1]` RGB + rescaled trimap, clamp + resize-back), the
-  deterministic `builtin-cpu-matte` feather, and a weight-gated ViTMatte
-  inference smoke test (skipped when the blob is absent).
+  deterministic `builtin-cpu-matte` guided-filter matte (including an
+  image-edge-following assertion), and a weight-gated ViTMatte inference smoke
+  test (skipped when the blob is absent).
 - `exec.rs` — `subjectMask` maps to `Compute`; the `Compute` handler rejects
   foreign kinds (mirrors the existing `class_handlers_reject_foreign_kinds`).
 - studio-ui — the shared Preview modal as a stage gate, the Mask-Edit tool

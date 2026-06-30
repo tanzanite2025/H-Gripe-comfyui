@@ -61,6 +61,135 @@ space, apply EXIF orientation, and refuse oversized inputs before decoding
 (`--max-decode-pixels`). See the per-card docs and
 [`docs/card-executor-split-and-psd-chain-hardening.md`](docs/card-executor-split-and-psd-chain-hardening.md).
 
+## Local Development
+
+Use these commands from the repository root unless a command says otherwise.
+
+### Prerequisites
+
+- Rust stable MSVC toolchain on Windows.
+- Visual Studio Build Tools 2022 with the C++ workload and Windows SDK.
+- Node.js 20.
+- Python 3.10+ for the CPU-only bridge tests.
+- WebView2 runtime for the Tauri desktop window.
+
+### First-Time Setup
+
+```powershell
+# Front end dependencies
+npm --prefix apps/desktop-tauri/studio-ui ci
+
+# Python bridge test/runtime dependencies
+python -m pip install Pillow numpy pytest attrs ruff
+
+# Optional: initialize local H-Gripe config/history/output folders
+cargo build -p hgripe-api --bins
+.\target\debug\hgripe-api-config.exe init --dry-run
+.\target\debug\hgripe-api-config.exe init
+.\target\debug\hgripe-api-config.exe doctor
+```
+
+### Run The Desktop App
+
+The Tauri app embeds the built React front end from `apps/desktop-tauri/dist`.
+A plain `cargo run` does not build that front end for you.
+
+```powershell
+# Option A: build the front end, then run the Rust desktop app
+npm --prefix apps/desktop-tauri/studio-ui run build
+cargo run -p hgripe-desktop
+
+# Option B: use the Tauri CLI, which runs the configured beforeDevCommand
+cd apps/desktop-tauri
+tauri dev
+```
+
+Build a release package with:
+
+```powershell
+cd apps/desktop-tauri
+tauri build
+```
+
+### Front End Only
+
+```powershell
+npm --prefix apps/desktop-tauri/studio-ui run dev
+npm --prefix apps/desktop-tauri/studio-ui run typecheck
+npm --prefix apps/desktop-tauri/studio-ui test
+npm --prefix apps/desktop-tauri/studio-ui run build
+```
+
+The Vite dev server is useful for editor/UI work. Desktop-only features that
+call Tauri commands need the Tauri app.
+
+### Rust Backend
+
+```powershell
+cargo check -p hgripe-api
+cargo test -p hgripe-api
+cargo build -p hgripe-api --bins
+
+# Build the front end first because the Tauri build script embeds it.
+npm --prefix apps/desktop-tauri/studio-ui run build
+cargo check -p hgripe-desktop
+cargo test -p hgripe-desktop
+cargo build -p hgripe-desktop
+```
+
+Useful local CLIs after `cargo build -p hgripe-api --bins`:
+
+```powershell
+.\target\debug\hgripe-api-config.exe doctor
+.\target\debug\hgripe-api-config.exe profiles list
+.\target\debug\hgripe-api-config.exe profiles show <profile_ref>
+.\target\debug\hgripe-api-config.exe profiles resolve <profile_ref>
+.\target\debug\hgripe-api-config.exe profiles validate
+.\target\debug\hgripe-api-config.exe credentials list
+.\target\debug\hgripe-api-config.exe credentials show <credential_ref>
+.\target\debug\hgripe-api-config.exe credentials validate
+.\target\debug\hgripe-api-history.exe list --limit 10
+.\target\debug\hgripe-api-history.exe show <task_id>
+.\target\debug\hgripe-api-history.exe rerun-task <task_id>
+.\target\debug\hgripe-api-history.exe rerun <task_id>
+.\target\debug\hgripe-api-history.exe cleanup --keep-latest 100
+.\target\debug\hgripe-api-history.exe cleanup --keep-latest 100 --apply
+```
+
+### Python Bridge
+
+The bridge is a local image/PSD runtime used by Tauri commands. It is not a
+ComfyUI runtime.
+
+```powershell
+ruff check python/bridge
+python -m pytest python/bridge/tests
+```
+
+Run an individual bridge test while working on one card:
+
+```powershell
+python -m pytest python/bridge/tests/test_color_match_cli.py -q
+python -m pytest python/bridge/tests/test_edge_refine_cli.py -q
+python -m pytest python/bridge/tests/test_image_enhance_cli.py -q
+python -m pytest python/bridge/tests/test_detail_watchdog_cli.py -q
+python -m pytest python/bridge/tests/test_detail_repaint_cli.py -q
+```
+
+### Full Local Check
+
+This is the practical pre-PR check:
+
+```powershell
+npm --prefix apps/desktop-tauri/studio-ui ci
+npm --prefix apps/desktop-tauri/studio-ui run typecheck
+npm --prefix apps/desktop-tauri/studio-ui test
+npm --prefix apps/desktop-tauri/studio-ui run build
+cargo test -p hgripe-api
+cargo test -p hgripe-desktop
+python -m pytest python/bridge/tests
+```
+
 ## Local Workspace Mode
 
 H-Gripe is local-first and personal-use oriented: there are no cloud accounts or multi-user profiles. Workflows, credentials, provider profiles, history, and generated outputs are all stored under a single local workspace rooted at `user/hgripe`.
@@ -117,29 +246,6 @@ $env:HGRIPE_CUSTOM_HTTP_BASE_URL="https://api.example.com"
 $env:HGRIPE_CUSTOM_HTTP_API_KEY="..."
 $env:HGRIPE_REPLICATE_BASE_URL="https://api.replicate.com"
 $env:HGRIPE_REPLICATE_API_KEY="..."
-```
-
-Local verification:
-
-```powershell
-cargo test -p hgripe-api
-cargo build -p hgripe-api --bins
-.\target\debug\hgripe-api-config.exe init --dry-run
-.\target\debug\hgripe-api-config.exe init
-.\target\debug\hgripe-api-config.exe doctor
-.\target\debug\hgripe-api-config.exe profiles list
-.\target\debug\hgripe-api-config.exe profiles show <profile_ref>
-.\target\debug\hgripe-api-config.exe profiles resolve <profile_ref>
-.\target\debug\hgripe-api-config.exe profiles validate
-.\target\debug\hgripe-api-config.exe credentials list
-.\target\debug\hgripe-api-config.exe credentials show <credential_ref>
-.\target\debug\hgripe-api-config.exe credentials validate
-.\target\debug\hgripe-api-history.exe list --limit 10
-.\target\debug\hgripe-api-history.exe show <task_id>
-.\target\debug\hgripe-api-history.exe rerun-task <task_id>
-.\target\debug\hgripe-api-history.exe rerun <task_id>
-.\target\debug\hgripe-api-history.exe cleanup --keep-latest 100
-.\target\debug\hgripe-api-history.exe cleanup --keep-latest 100 --apply
 ```
 
 `hgripe-api-history cleanup` defaults to dry-run. It only changes SQLite/JSONL history when `--apply` is provided. Output files are preserved unless `--delete-output-files` is also provided.

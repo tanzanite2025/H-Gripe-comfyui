@@ -17,9 +17,12 @@
 //! - **ViTMatte** (`provider: vitmatte`, downloadable big tier ~104 MB) — a real
 //!   matting transformer run in-process via `ort`; takes the RGB image *and* the
 //!   trimap as one 4-channel `pixel_values` tensor and emits `alphas`.
-//! - **`builtin-cpu-matte`** — a deterministic, weight-free fallback that feathers
-//!   the binary edge through the unknown band, so the feature works end-to-end
-//!   before any weight is present (and keeps CI green without the blob).
+//! - **`builtin-cpu-matte`** — a deterministic, weight-free fallback that runs a
+//!   **guided filter** (He et al., *Guided Image Filtering*) over the unknown
+//!   band, using the source image as the guidance signal so the resolved alpha
+//!   follows real edges (hair, fur, foliage) instead of a blind Gaussian
+//!   feather. It works end-to-end before any weight is present (and keeps CI
+//!   green without the blob).
 //!
 //! The weight is never committed to git; it resolves via
 //! [`resolve_model_file`](super::subject_model::resolve_model_file) (env override
@@ -57,6 +60,14 @@ const MODEL_FILE: &str = "vitmatte.onnx";
 const MODEL_ENV: &str = "HGRIPE_VITMATTE_MODEL";
 const VITMATTE_PROVIDER: &str = "vitmatte";
 const BUILTIN_PROVIDER: &str = "builtin-cpu-matte";
+
+/// The builtin guided-filter matte runs at no more than this edge, then
+/// upsamples just the soft unknown band back to full resolution (the FG/BG
+/// regions stay hard at full res). Bounds memory like the ViTMatte backend.
+const BUILTIN_MAX_EDGE: u32 = 2048;
+/// Guided-filter regularisation in the normalised `[0, 1]` alpha domain: larger
+/// smooths more, smaller keeps finer edge detail. Tuned for whispy edges.
+const GUIDED_EPS: f32 = 1e-4;
 
 /// Resolve continuous alpha for the unknown band of a trimap. ViTMatte and the
 /// deterministic builtin fallback both implement this; [`matter`] picks one.
@@ -189,10 +200,11 @@ fn postprocess(alphas: &[f32], size: u32, width: u32, height: u32) -> GrayImage 
     image::imageops::resize(&small, width, height, FilterType::Triangle)
 }
 
-/// A deterministic, weight-free matter: keep the definite foreground opaque and
-/// the definite background transparent, and feather the binary edge through the
-/// unknown band by Gaussian-blurring the mask and reading the blurred value
-/// there. Soft, reproducible alpha without a model.
+/// A deterministic, weight-free matter. The definite foreground stays fully
+/// opaque and the definite background fully transparent; the unknown band is
+/// resolved by a **guided filter** that uses the source image as guidance, so
+/// the soft alpha tracks real edges (hair, fur) rather than a blind feather.
+/// Reproducible continuous alpha without a model.
 pub(super) struct BuiltinCpuMatter;
 
 impl AlphaMatter for BuiltinCpuMatter {
@@ -200,48 +212,177 @@ impl AlphaMatter for BuiltinCpuMatter {
         BUILTIN_PROVIDER
     }
 
-    fn matte(&self, _image: &RgbaImage, trimap: &GrayImage) -> Result<GrayImage, String> {
+    fn matte(&self, image: &RgbaImage, trimap: &GrayImage) -> Result<GrayImage, String> {
         let (width, height) = trimap.dimensions();
         if width == 0 || height == 0 {
             return Err("Subject Mask matting needs a non-empty image".to_string());
         }
-        // Reconstruct the binary matte the trimap came from (FG ∪ unknown for a
-        // soft edge core) and blur it; the blur radius scales with the unknown
-        // band so the feather fills it.
-        let mut binary = GrayImage::from_pixel(width, height, Luma([0]));
-        let mut radius = 1u32;
-        for y in 0..height {
-            for x in 0..width {
-                let level = trimap.get_pixel(x, y).0[0];
-                if level == TRIMAP_FG {
-                    binary.put_pixel(x, y, Luma([255]));
-                }
-            }
-        }
-        // Estimate the unknown-band width from the trimap so the feather covers
-        // it (fall back to a 1px blur when there is no unknown ring).
-        let unknown = trimap
-            .pixels()
-            .filter(|p| p.0[0] == TRIMAP_UNKNOWN)
-            .count();
-        if unknown > 0 {
-            radius = ((unknown as f64).sqrt() / 4.0).round().max(1.0) as u32;
-        }
-        let blurred = image::imageops::blur(&binary, radius as f32);
 
+        // Resolve the soft band at a bounded resolution: downscale the guide and
+        // trimap, run the guided filter there, then upsample only the soft alpha
+        // back. FG/BG stay hard from the full-res trimap below.
+        let (sw, sh) = bounded_size(width, height, BUILTIN_MAX_EDGE);
+        let small_rgb = resize_rgba(image, sw, sh);
+        let small_tri = if (sw, sh) == (width, height) {
+            trimap.clone()
+        } else {
+            // Nearest keeps the three trimap levels crisp (no blended levels).
+            image::imageops::resize(trimap, sw, sh, FilterType::Nearest)
+        };
+
+        let n = (sw * sh) as usize;
+        let mut guide = vec![0f32; n];
+        let mut prior = vec![0f32; n];
+        let mut unknown = 0usize;
+        for (i, (rgb, tri)) in small_rgb.pixels().zip(small_tri.pixels()).enumerate() {
+            let [r, g, b, _] = rgb.0;
+            // Rec.601 luma in [0, 1] as the single-channel guidance signal.
+            guide[i] = (0.299 * r as f32 + 0.587 * g as f32 + 0.114 * b as f32) / 255.0;
+            prior[i] = match tri.0[0] {
+                TRIMAP_FG => 1.0,
+                TRIMAP_BG => 0.0,
+                _ => {
+                    unknown += 1;
+                    // Neutral prior in the unknown band; the guide pulls it
+                    // toward 0/1 along image edges.
+                    0.5
+                }
+            };
+        }
+
+        // No unknown ring (e.g. band == 0): the trimap is already the final
+        // hard alpha, so skip the filter entirely.
+        if unknown == 0 {
+            return Ok(harden(trimap));
+        }
+
+        // Window radius scales with the (downscaled) band thickness.
+        let radius = (((unknown as f64).sqrt() / 4.0).round() as usize).clamp(2, 64);
+        let q = guided_filter(&guide, &prior, sw as usize, sh as usize, radius, GUIDED_EPS);
+
+        let mut soft = GrayImage::from_pixel(sw, sh, Luma([0]));
+        for (pixel, value) in soft.pixels_mut().zip(q) {
+            pixel.0[0] = (value.clamp(0.0, 1.0) * 255.0).round() as u8;
+        }
+        let soft = if (sw, sh) == (width, height) {
+            soft
+        } else {
+            image::imageops::resize(&soft, width, height, FilterType::Triangle)
+        };
+
+        // Composite at full res: hard FG/BG from the trimap, guided alpha in the
+        // unknown band.
         let mut out = GrayImage::from_pixel(width, height, Luma([0]));
         for y in 0..height {
             for x in 0..width {
                 let alpha = match trimap.get_pixel(x, y).0[0] {
                     TRIMAP_FG => 255,
                     TRIMAP_BG => 0,
-                    _ => blurred.get_pixel(x, y).0[0],
+                    _ => soft.get_pixel(x, y).0[0],
                 };
                 out.put_pixel(x, y, Luma([alpha]));
             }
         }
         Ok(out)
     }
+}
+
+/// Largest size with the same aspect whose longest edge is `<= max_edge`.
+fn bounded_size(width: u32, height: u32, max_edge: u32) -> (u32, u32) {
+    let longest = width.max(height);
+    if longest <= max_edge {
+        return (width, height);
+    }
+    let scale = max_edge as f32 / longest as f32;
+    let w = ((width as f32 * scale).round() as u32).max(1);
+    let h = ((height as f32 * scale).round() as u32).max(1);
+    (w, h)
+}
+
+fn resize_rgba(image: &RgbaImage, width: u32, height: u32) -> RgbaImage {
+    if image.dimensions() == (width, height) {
+        image.clone()
+    } else {
+        image::imageops::resize(image, width, height, FilterType::Triangle)
+    }
+}
+
+/// Map a trimap straight to a hard alpha (FG → 255, otherwise 0).
+fn harden(trimap: &GrayImage) -> GrayImage {
+    let (width, height) = trimap.dimensions();
+    let mut out = GrayImage::from_pixel(width, height, Luma([0]));
+    for (src, dst) in trimap.pixels().zip(out.pixels_mut()) {
+        dst.0[0] = if src.0[0] == TRIMAP_FG { 255 } else { 0 };
+    }
+    out
+}
+
+/// Mean (box) filter over a `width * height` plane with a `(2*radius+1)` square
+/// window, normalised per-pixel by the in-bounds count. O(N) via an integral
+/// image (f64 accumulation to stay precise on large planes).
+fn box_filter(src: &[f32], width: usize, height: usize, radius: usize) -> Vec<f32> {
+    let stride = width + 1;
+    let mut integral = vec![0f64; stride * (height + 1)];
+    for y in 0..height {
+        let mut row = 0f64;
+        for x in 0..width {
+            row += src[y * width + x] as f64;
+            integral[(y + 1) * stride + (x + 1)] = integral[y * stride + (x + 1)] + row;
+        }
+    }
+    let mut out = vec![0f32; width * height];
+    for y in 0..height {
+        let y0 = y.saturating_sub(radius);
+        let y1 = (y + radius + 1).min(height);
+        for x in 0..width {
+            let x0 = x.saturating_sub(radius);
+            let x1 = (x + radius + 1).min(width);
+            let sum = integral[y1 * stride + x1] - integral[y0 * stride + x1]
+                - integral[y1 * stride + x0]
+                + integral[y0 * stride + x0];
+            let count = ((y1 - y0) * (x1 - x0)) as f64;
+            out[y * width + x] = (sum / count) as f32;
+        }
+    }
+    out
+}
+
+/// Guided filter (He et al.): output `q = a * guide + b`, where `a`, `b` are the
+/// per-window linear fit of `src` to `guide` with regularisation `eps`. Edges in
+/// `guide` (the image luma) are preserved in `q`, which is what pulls the soft
+/// alpha along hair/fur boundaries.
+fn guided_filter(
+    guide: &[f32],
+    src: &[f32],
+    width: usize,
+    height: usize,
+    radius: usize,
+    eps: f32,
+) -> Vec<f32> {
+    let mean_i = box_filter(guide, width, height, radius);
+    let mean_p = box_filter(src, width, height, radius);
+    let prod_ip: Vec<f32> = guide.iter().zip(src).map(|(i, p)| i * p).collect();
+    let mean_ip = box_filter(&prod_ip, width, height, radius);
+    let prod_ii: Vec<f32> = guide.iter().map(|i| i * i).collect();
+    let mean_ii = box_filter(&prod_ii, width, height, radius);
+
+    let mut a = vec![0f32; width * height];
+    let mut b = vec![0f32; width * height];
+    for k in 0..a.len() {
+        let var_i = mean_ii[k] - mean_i[k] * mean_i[k];
+        let cov_ip = mean_ip[k] - mean_i[k] * mean_p[k];
+        let ak = cov_ip / (var_i + eps);
+        a[k] = ak;
+        b[k] = mean_p[k] - ak * mean_i[k];
+    }
+    let mean_a = box_filter(&a, width, height, radius);
+    let mean_b = box_filter(&b, width, height, radius);
+
+    let mut q = vec![0f32; width * height];
+    for k in 0..q.len() {
+        q[k] = mean_a[k] * guide[k] + mean_b[k];
+    }
+    q
 }
 
 #[cfg(test)]
@@ -294,6 +435,35 @@ mod tests {
         // Somewhere in the unknown ring the alpha is partial (a soft edge).
         let any_partial = alpha.pixels().any(|p| p.0[0] > 0 && p.0[0] < 255);
         assert!(any_partial, "expected a soft (partial-alpha) edge");
+    }
+
+    #[test]
+    fn builtin_matte_follows_image_edge() {
+        // A vertical colour edge at x = 20: dark left, bright right. The mask is
+        // the right half, so the unknown band straddles the colour edge. A blind
+        // feather would be symmetric about the mask boundary; the guided filter
+        // must instead favour the bright (subject) side, so a band pixel on the
+        // bright side reads more opaque than one the same distance on the dark side.
+        let (w, h) = (40, 20);
+        let mut image = RgbaImage::from_pixel(w, h, Rgba([12, 12, 12, 255]));
+        for y in 0..h {
+            for x in 20..w {
+                image.put_pixel(x, y, Rgba([242, 242, 242, 255]));
+            }
+        }
+        let mask = block_mask(w, h, 20, 0, w, h);
+        let trimap = trimap_from_mask(&mask, 8);
+        // Both sample points sit inside the unknown band (x ∈ [12, 28)).
+        assert_eq!(trimap.get_pixel(16, 10).0[0], TRIMAP_UNKNOWN);
+        assert_eq!(trimap.get_pixel(24, 10).0[0], TRIMAP_UNKNOWN);
+
+        let alpha = BuiltinCpuMatter.matte(&image, &trimap).unwrap();
+        let bright = alpha.get_pixel(24, 10).0[0];
+        let dark = alpha.get_pixel(16, 10).0[0];
+        assert!(
+            bright > dark,
+            "guided matte should track the colour edge: bright={bright} dark={dark}"
+        );
     }
 
     #[test]

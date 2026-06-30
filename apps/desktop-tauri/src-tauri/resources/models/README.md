@@ -15,8 +15,9 @@ cascade below when its weights are absent.
 Segmentation answers *which pixels are the subject* (a hard, binary matte). When
 the node's **Alpha matting** toggle is on, a separate **ViTMatte** backend then
 resolves the binary edge into continuous alpha (hair / fur / glass) via a
-trimap; absent its weight a deterministic `builtin-cpu-matte` feather is used so
-the toggle always works.
+trimap; absent its weight a deterministic `builtin-cpu-matte` guided filter
+(image-guided, He et al.) resolves the band along real edges so the toggle
+always works.
 
 | Priority | Model | `provider` | License | Size | Tier |
 | --- | --- | --- | --- | --- | --- |
@@ -30,7 +31,7 @@ the toggle always works.
 | Backend | `provider` | License | Size | Tier |
 | --- | --- | --- | --- | --- |
 | ViTMatte (small) | `vitmatte` | Apache-2.0 | ~104 MB | downloadable big tier |
-| builtin matte feather | `builtin-cpu-matte` | — | — | always-on fallback |
+| builtin guided-filter matte | `builtin-cpu-matte` | — | — | always-on fallback |
 
 ## Why the weights are not committed
 

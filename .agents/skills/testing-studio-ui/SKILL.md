@@ -20,6 +20,18 @@ description: Test the H-Gripe Studio desktop UI (apps/desktop-tauri/studio-ui) e
 - Language preference persists in `localStorage` key `hgripe.studio.lang.v1`; snapshots/auto-snapshot prefs also live in localStorage. To test "fresh defaults" use an incognito window or clear storage.
 - The annotated DOM returned alongside screenshots is the fastest way to assert on button labels/tooltips/placeholder text — read `title=` and text content there rather than eyeballing tiny toolbar text.
 
+## Node Editor / graph card testing
+- The **Node Editor** tab hosts the React Flow graph. The left **Nodes** palette groups cards by category (Inputs/Generate/Control/Utility/Outputs) and is searchable; the search matches title **and description**, so a query like `Subject` can surface several cards whose descriptions merely mention the word — confirm by the exact title + group header.
+- **Executor badge**: cards show a `Local` / `API` / `Local/API` badge next to the title; the `compute` (native-Rust) lane carries **no badge**. Absence of a badge on a `compute` card is correct, not a bug.
+- **Click a palette item to add it** to the canvas (drag also works). New nodes spawn near existing ones and may overlap — drag the node to empty canvas before inspecting ports.
+- **Counting port handles reliably**: the rendered handles are tiny dots; zooming screenshots is error-prone when an edge wire crosses them. The robust way is the DOM — count `.react-flow__handle` within the node element, split by class `.target` (inputs, left) vs `.source` (outputs, right). Example via `browser_console`:
+  `const n=[...document.querySelectorAll('.react-flow__node')].find(e=>e.textContent.includes('<Title>')); console.log(n.querySelectorAll('.react-flow__handle.target').length, n.querySelectorAll('.react-flow__handle.source').length)` — this is a legitimate assertion, not a UI shortcut.
+- **Inspector** (right panel) appears when a node is selected and lists every param with its default; the annotated DOM gives exact `value`/`selected`/range for each `<input>`/`<select>` — read defaults there rather than eyeballing sliders.
+
+## Environment quirks (Windows test box)
+- **Typing a URL with `:` in the Chrome omnibox**: the `type` action may drop the colon (e.g. `localhost:5173` → `localhost5173`, which then triggers a Google search). Type the host, then send the colon as a key (`shift+semicolon`), then the port — e.g. `type "localhost"`, `key shift+semicolon`, `type "5173"`.
+- **`upload_attachment` rejects Windows drive paths** (`C:\...` / `C:/...` → "must be absolute"; `/c/...` and `/tmp/...` from the shell aren't found because the shell's `/tmp` is a different filesystem view than the platform's). Workaround that works: `git_comment_on_pr` / `message_user` accept the screenshot tool's own `C:/Users/.../screenshots/*.png` paths and auto-upload them — embed screenshots in the PR comment via `![alt](C:/.../ss_*.png)` and they upload fine. Platform-managed files under `/tmp/devin-recordings/...` (recordings) do upload via `upload_attachment`.
+
 ## i18n specifics
 - Strings live in `src/i18n.ts` (`messages` dict, `translate`, `loadLang/saveLang`, `LangContext`, `useT`). The toolbar `中文/EN` button toggles language.
 - Scope of translation is the app "chrome" (toolbar, tooltips, Snapshots/Project/RunLog/search panels). The **left node palette names/categories and per-node inspector fields stay English** (graph spec / domain terms) — by design, not a regression.

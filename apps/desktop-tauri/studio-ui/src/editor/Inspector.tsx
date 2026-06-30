@@ -102,8 +102,17 @@ export function Inspector({ node, onParamChange }: InspectorProps) {
           p.key === "engine" && card && !card.error && Object.keys(card.engines).length > 0
             ? card.engines
             : undefined;
-        const selectedUnavailable =
-          optionStates?.[String(raw ?? "")] && !optionStates[String(raw ?? "")].available;
+        const selectedState = optionStates?.[String(raw ?? "")];
+        const selectedUnavailable = selectedState && !selectedState.available;
+        // For an available GPU-capable engine, note whether it would actually
+        // run on a CUDA device or fall back to CPU on this box (machine probe).
+        const runtime = engineProbe?.runtime;
+        const deviceNote =
+          selectedState?.available && selectedState.accelerated && runtime
+            ? runtime.cuda_available
+              ? t("inspector.engineGpu")
+              : t("inspector.engineCpuFallback")
+            : undefined;
         return (
           <label key={p.key} className="field">
             <span>{p.label}</span>
@@ -117,6 +126,7 @@ export function Inspector({ node, onParamChange }: InspectorProps) {
             {selectedUnavailable && (
               <small className="hint warn">{t("inspector.engineUnavailable")}</small>
             )}
+            {deviceNote && <small className="hint">{deviceNote}</small>}
             {p.hint && <small className="hint">{p.hint}</small>}
           </label>
         );

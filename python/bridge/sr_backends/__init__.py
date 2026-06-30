@@ -184,7 +184,7 @@ def probe() -> dict[str, Any]:
     missing. Always includes ``cpu`` as available.
     """
     engines: dict[str, Any] = {
-        CPU_ENGINE: {"available": True, "reason": "built-in CPU path"},
+        CPU_ENGINE: {"available": True, "reason": "built-in CPU path", "accelerated": False},
     }
     for name, backend in _registry().items():
         try:
@@ -195,5 +195,8 @@ def probe() -> dict[str, Any]:
             "available": bool(ok),
             "reason": reason,
             "native_scale": getattr(backend, "native_scale", None),
+            # GPU-capable engine: the UI pairs this with the machine device probe
+            # to warn it would fall back to CPU on a box with no CUDA device.
+            "accelerated": True,
         }
     return {"engines": engines, "model_cache_dir": str(model_cache_dir())}

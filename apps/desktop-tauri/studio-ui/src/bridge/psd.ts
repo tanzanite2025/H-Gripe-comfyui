@@ -854,6 +854,12 @@ export async function detectQualityIssues(
 export interface EngineAvailability {
   available: boolean;
   reason: string;
+  /**
+   * GPU-capable (an ML backend). Paired with the report `runtime` device probe
+   * to warn it falls back to CPU when no CUDA device is present; the
+   * CPU/`rules`/`provider` baseline is `false`.
+   */
+  accelerated?: boolean;
 }
 
 /** Per-card engine probe (mirrors Rust `CardEngineProbe`). */

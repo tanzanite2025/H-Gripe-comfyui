@@ -1121,6 +1121,11 @@ pub(crate) struct EngineAvailability {
     pub(crate) available: bool,
     #[serde(default)]
     pub(crate) reason: String,
+    /// Whether this engine is GPU-capable (an ML backend). The UI pairs it with
+    /// the machine [`DeviceProbe`] to warn it would fall back to CPU when no
+    /// CUDA device is present; the CPU/`rules`/`provider` baseline is `false`.
+    #[serde(default)]
+    pub(crate) accelerated: bool,
 }
 
 /// Engine capability probe for one card (node kind): which `engine` values its
@@ -1760,15 +1765,17 @@ mod tests {
         // fields (e.g. native_scale) are tolerated.
         let raw = r#"{
             "engines": {
-                "rules": {"available": true, "reason": "built-in CPU rule layer"},
-                "onnx_defect": {"available": false, "reason": "missing optional dependency: onnxruntime", "native_scale": null}
+                "rules": {"available": true, "reason": "built-in CPU rule layer", "accelerated": false},
+                "onnx_defect": {"available": false, "reason": "missing optional dependency: onnxruntime", "native_scale": null, "accelerated": true}
             },
             "model_cache_dir": "/cache/models"
         }"#;
         let probe: CliEngineProbe = serde_json::from_str(raw).unwrap();
         assert_eq!(probe.model_cache_dir.as_deref(), Some("/cache/models"));
         assert!(probe.engines["rules"].available);
+        assert!(!probe.engines["rules"].accelerated);
         assert!(!probe.engines["onnx_defect"].available);
+        assert!(probe.engines["onnx_defect"].accelerated);
         assert!(probe.engines["onnx_defect"].reason.contains("onnxruntime"));
     }
 

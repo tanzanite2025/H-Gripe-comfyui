@@ -120,7 +120,11 @@ def probe() -> dict[str, Any]:
     missing. Always includes ``rules`` as available.
     """
     engines: dict[str, Any] = {
-        RULES_ENGINE: {"available": True, "reason": "built-in CPU rule layer"},
+        RULES_ENGINE: {
+            "available": True,
+            "reason": "built-in CPU rule layer",
+            "accelerated": False,
+        },
     }
     for name, backend in _registry().items():
         try:
@@ -131,5 +135,8 @@ def probe() -> dict[str, Any]:
             "available": bool(ok),
             "reason": reason,
             "targets": list(getattr(backend, "targets", ())),
+            # GPU-capable engine: the UI pairs this with the machine device probe
+            # to warn it would fall back to CPU on a box with no CUDA device.
+            "accelerated": True,
         }
     return {"engines": engines, "model_cache_dir": str(model_cache_dir())}

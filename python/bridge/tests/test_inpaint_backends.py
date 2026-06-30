@@ -62,6 +62,9 @@ def test_probe_always_reports_provider_available() -> None:
     report = probe()
     assert report["engines"]["provider"]["available"] is True
     assert "sd_inpaint" in report["engines"]
+    # The remote provider is not a local accelerator; the local engine is.
+    assert report["engines"]["provider"]["accelerated"] is False
+    assert report["engines"]["sd_inpaint"]["accelerated"] is True
     assert "model_cache_dir" in report
 
 

@@ -55,6 +55,8 @@ def test_probe_always_reports_cpu_available() -> None:
     report = probe()
     assert report["engines"]["cpu"]["available"] is True
     assert "onnx_matting" in report["engines"]
+    assert report["engines"]["cpu"]["accelerated"] is False
+    assert report["engines"]["onnx_matting"]["accelerated"] is True
     assert "model_cache_dir" in report
 
 

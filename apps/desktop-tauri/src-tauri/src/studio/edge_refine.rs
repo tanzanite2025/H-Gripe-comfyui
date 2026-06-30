@@ -60,6 +60,7 @@ pub(super) fn execute_studio_refine_mask_edge(
         optional(studio_value_to_string(inputs.get("mask"))),
         optional(studio_value_to_string(inputs.get("background"))),
         optional(studio_value_to_string(inputs.get("placeholder_mask"))),
+        optional(studio_value_to_string(inputs.get("trimap"))),
         optional(studio_value_to_string(node.params.get("preset"))),
         Some(number_param(node, "erode_px", 1.0) as i64),
         Some(number_param(node, "dilate_px", 0.0) as i64),

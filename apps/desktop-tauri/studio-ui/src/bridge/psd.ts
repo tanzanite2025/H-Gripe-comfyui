@@ -375,6 +375,10 @@ export interface EdgeReport {
   background_blend_strength: number;
   /** `true` when a background was connected and blended into the edge band. */
   background_applied: boolean;
+  /** `true` when a trimap was connected and its unknown band was protected. */
+  trimap_applied?: boolean;
+  /** Pixels in the protected (unknown) band restored from the source matte. */
+  protected_band_px?: number;
   edge_band_px: number;
   coverage_before: number;
   coverage_after: number;
@@ -398,6 +402,12 @@ export interface RefineMaskEdgeRequest {
   background?: string;
   /** PSD placeholder mask (advisory in Phase 1). */
   placeholderMask?: string;
+  /**
+   * Matting trimap (FG / unknown / BG levels) from the Subject Mask node. When
+   * connected, the unknown band is protected from erode/feather so hair / fur /
+   * glass continuous alpha survives the edge clean-up.
+   */
+  trimap?: string;
   /** `clean | natural | soft | custom`. */
   preset?: string;
   /** Bite N px in / grow N px out (custom preset only). */
@@ -445,6 +455,8 @@ export async function refineMaskEdge(req: RefineMaskEdgeRequest): Promise<Refine
         edge_decontaminate: custom ? (req.edgeDecontaminate ?? true) : preset !== "soft",
         background_blend_strength: blend,
         background_applied: background && blend > 0,
+        trimap_applied: (req.trimap ?? "").trim().length > 0,
+        protected_band_px: (req.trimap ?? "").trim().length > 0 ? 2048 : 0,
         edge_band_px: 4096,
         coverage_before: 0.44,
         coverage_after: 0.4,
@@ -457,6 +469,7 @@ export async function refineMaskEdge(req: RefineMaskEdgeRequest): Promise<Refine
     mask: req.mask ?? null,
     background: req.background ?? null,
     placeholderMask: req.placeholderMask ?? null,
+    trimap: req.trimap ?? null,
     preset: req.preset ?? null,
     erodePx: req.erodePx ?? null,
     dilatePx: req.dilatePx ?? null,

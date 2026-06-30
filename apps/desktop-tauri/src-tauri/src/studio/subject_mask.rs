@@ -180,6 +180,10 @@ pub(super) fn execute_studio_subject_mask(
     // binary + deterministic; behind the flag (or whenever the Mask-Edit
     // "Matting" brush painted an unknown band) it runs ViTMatte when its weight
     // resolves, else the deterministic builtin guided-filter fallback.
+    // The trimap that drove matting, kept so the downstream Refine node can
+    // protect the *unknown* band (genuine hair / fur / glass soft alpha) from
+    // its erode / feather edge clean-up instead of treating it as fringe.
+    let mut matting_trimap: Option<GrayImage> = None;
     let matte_strokes = parse_matte_strokes(inputs.get("edit_paths"));
     if bool_param(node, "alpha_matting", false) || !matte_strokes.is_empty() {
         let band = number_param(node, "matting_band_px", 12.0).max(0.0) as u32;
@@ -199,6 +203,7 @@ pub(super) fn execute_studio_subject_mask(
             "band_px": band,
             "painted_strokes": matte_strokes.len(),
         }));
+        matting_trimap = Some(trimap);
     }
 
     let feather_px = number_param(node, "feather_px", 0.0).max(0.0);
@@ -240,6 +245,17 @@ pub(super) fn execute_studio_subject_mask(
     let cutout_path = dir.join(format!("{base}_cutout.png"));
     let paths_path = dir.join(format!("{base}_paths.json"));
 
+    // Persist the matting trimap (FG / unknown / BG levels) when matting ran, so
+    // the Refine node can hand-protect the unknown band. Empty string otherwise.
+    let trimap_out = match &matting_trimap {
+        Some(trimap) => {
+            let trimap_path = dir.join(format!("{base}_trimap.png"));
+            save_png(&DynamicGray(trimap), &trimap_path)?;
+            trimap_path.to_string_lossy().to_string()
+        }
+        None => String::new(),
+    };
+
     save_png(&DynamicGray(&mask), &mask_path)?;
     alpha_image
         .save(&alpha_path)
@@ -280,6 +296,7 @@ pub(super) fn execute_studio_subject_mask(
         ("mask", json!(mask_path.to_string_lossy())),
         ("alpha_image", json!(alpha_path.to_string_lossy())),
         ("cutout_image", json!(cutout_path.to_string_lossy())),
+        ("trimap", json!(trimap_out)),
         ("matte_report", report),
         ("edit_paths", edit_paths_value),
     ]))
@@ -1050,6 +1067,59 @@ mod tests {
         assert_eq!(triplet.get("mask").and_then(Value::as_bool), Some(true));
         // The whole image is one flat colour, so the wand selects everything.
         assert!(report.get("mask_coverage").and_then(Value::as_f64).unwrap() > 0.9);
+
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn matting_emits_trimap_output_for_refine_handoff() {
+        // With matting on, the node must persist the driving trimap and surface
+        // its path on the `trimap` output so the Refine node can protect the
+        // unknown band. Without matting the port is an empty string.
+        let nanos = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_nanos();
+        let root = std::env::temp_dir().join(format!("hgripe_subject_trimap_{nanos}"));
+        std::fs::create_dir_all(&root).unwrap();
+        let image_path = root.join("scene.png");
+        let mut image = RgbaImage::from_pixel(16, 16, Rgba([120, 120, 120, 255]));
+        for y in 5..11 {
+            for x in 5..11 {
+                image.put_pixel(x, y, Rgba([220, 20, 20, 255]));
+            }
+        }
+        image.save(&image_path).unwrap();
+
+        let make = |matting: bool| {
+            let mut params = BTreeMap::new();
+            params.insert("mode".to_string(), json!("auto_subject"));
+            params.insert("alpha_matting".to_string(), json!(matting));
+            params.insert(
+                "output_dir".to_string(),
+                json!(root.to_string_lossy().to_string()),
+            );
+            params.insert("output_name".to_string(), json!("scene_mask"));
+            let node = StudioGraphNode {
+                id: "n1".to_string(),
+                kind: "subjectMask".to_string(),
+                params,
+            };
+            let mut inputs = BTreeMap::new();
+            inputs.insert(
+                "image".to_string(),
+                json!(image_path.to_string_lossy().to_string()),
+            );
+            execute_studio_subject_mask(&node, &inputs).unwrap()
+        };
+
+        let off = make(false);
+        assert_eq!(off.get("trimap").and_then(Value::as_str), Some(""));
+
+        let on = make(true);
+        let trimap = on.get("trimap").and_then(Value::as_str).unwrap();
+        assert!(!trimap.is_empty(), "matting must emit a trimap path");
+        assert!(Path::new(trimap).is_file(), "trimap PNG must be written");
 
         let _ = std::fs::remove_dir_all(&root);
     }

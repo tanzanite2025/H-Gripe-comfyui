@@ -175,17 +175,23 @@ def _load_rgb_alpha(
     return rgb, alpha, source_mode, transposed
 
 
-def _load_mask(path: str | None, shape: tuple[int, int]) -> "np.ndarray | None":
-    """Load an explicit matte as a float 0..1 array matched to ``shape`` (H,W)."""
+def _load_mask(
+    path: str | None, shape: tuple[int, int], nearest: bool = False
+) -> "np.ndarray | None":
+    """Load an explicit matte as a float 0..1 array matched to ``shape`` (H,W).
+
+    ``nearest`` keeps a trimap's discrete FG / unknown / BG levels intact on
+    resize (bilinear would smear the unknown band into the definite regions);
+    a continuous matte uses bilinear so it does not overshoot and ring.
+    """
     if not path:
         return None
     from PIL import Image
 
     mask = Image.open(path).convert("L")
     if mask.size != (shape[1], shape[0]):
-        # Bilinear, not the default bicubic: a matte must not overshoot past
-        # 0..255 and ring at the very edge we are about to refine.
-        mask = mask.resize((shape[1], shape[0]), Image.BILINEAR)
+        resample = Image.NEAREST if nearest else Image.BILINEAR
+        mask = mask.resize((shape[1], shape[0]), resample)
     return np.asarray(mask, dtype=np.float32) / 255.0
 
 
@@ -332,6 +338,18 @@ def refine(args: argparse.Namespace) -> dict[str, Any]:
             )
             background_rgb = np.asarray(resized, dtype=np.uint8)
 
+    # An upstream matting trimap (FG=255 / unknown=128 / BG=0) marks where the
+    # matte is genuine continuous alpha (hair / fur / glass), not a fringe to
+    # bite off. Loaded nearest so the three levels survive any resize.
+    trimap = _load_mask(args.trimap, (height, width), nearest=True)
+    protect = None
+    if trimap is not None:
+        # Unknown band: mid-grey, away from the definite 0 / 1 levels.
+        unknown = ((trimap > 0.25) & (trimap < 0.75)).astype(np.float32)
+        # Feather the protect weight a hair so the restored band blends into the
+        # cleaned-up definite regions instead of leaving a step.
+        protect = _feather(unknown, 1.5) if float(unknown.sum()) > _EPS else unknown
+
     coverage_before = _coverage(mask)
 
     # 1) Morphology: bite the fringe in (erode), optionally grow back (dilate).
@@ -343,6 +361,15 @@ def refine(args: argparse.Namespace) -> dict[str, Any]:
     # 3) Feather: soft transition so the composite has no stair-stepping.
     refined = _feather(refined, feather_px)
     refined = np.clip(refined, 0.0, 1.0)
+
+    # 4) Trimap protection: inside the unknown band keep the upstream soft alpha
+    # (the matting result) instead of the eroded/feathered edge, so fine hair
+    # detail is refined as continuous alpha rather than flattened to an edge.
+    protected_band_px = 0
+    if protect is not None:
+        refined = refined * (1.0 - protect) + mask * protect
+        refined = np.clip(refined, 0.0, 1.0)
+        protected_band_px = int(round(float((protect > 0.05).sum())))
 
     # The edge band: pixels that are neither solidly in nor solidly out -- this
     # is where fringe lives and where decontamination / background blend act.
@@ -397,6 +424,8 @@ def refine(args: argparse.Namespace) -> dict[str, Any]:
         "edge_decontaminate": decontaminate,
         "background_blend_strength": round(blend_strength, 4),
         "background_applied": background_rgb is not None and blend_strength > 0.0,
+        "trimap_applied": protect is not None,
+        "protected_band_px": protected_band_px,
         "edge_band_px": edge_band_px,
         "coverage_before": coverage_before,
         "coverage_after": _coverage(refined),
@@ -428,6 +457,12 @@ def build_parser() -> argparse.ArgumentParser:
         dest="placeholder_mask",
         default="",
         help="PSD placeholder mask (advisory in Phase 1)",
+    )
+    parser.add_argument(
+        "--trimap",
+        default="",
+        help="matting trimap (FG/unknown/BG); protects the unknown band from "
+        "erode/feather so hair / fur / glass continuous alpha survives",
     )
     parser.add_argument(
         "--preset", default="natural", help="clean | natural | soft | custom"

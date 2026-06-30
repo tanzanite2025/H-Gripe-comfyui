@@ -241,3 +241,41 @@ def test_missing_background_raises(tmp_path: Path) -> None:
     img = _subject_rgba(tmp_path / "s.png")
     with pytest.raises(FileNotFoundError, match="background image not found"):
         _run(img, tmp_path, background=str(tmp_path / "ghost.png"))
+
+
+def test_trimap_protects_unknown_band_from_erosion(tmp_path: Path) -> None:
+    # The soft transitional ring of a matte is genuine continuous alpha (think
+    # hair), not fringe. A trimap marking that ring as `unknown` must protect it
+    # from the erode clean-up that would otherwise bite it away.
+    size = 48
+    alpha = _disc_alpha(size, 16.0)
+    img = _subject_rgba(tmp_path / "hair.png", size=size, radius=16.0)
+
+    # FG (255) solid core, BG (0) empty exterior, the soft ring between unknown.
+    tri = np.full((size, size), 128, dtype=np.uint8)
+    tri[alpha > 0.9] = 255
+    tri[alpha < 0.1] = 0
+    trimap_path = tmp_path / "trimap.png"
+    Image.fromarray(tri, "L").save(trimap_path)
+
+    common = dict(preset="custom", erode_px=3, dilate_px=0, feather_px=0, guided_radius=0)
+    with_tri = _run(img, tmp_path, trimap=str(trimap_path), output_name="prot", **common)
+    without = _run(img, tmp_path, output_name="raw", **common)
+
+    assert with_tri["edge_report"]["trimap_applied"] is True
+    assert with_tri["edge_report"]["protected_band_px"] > 0
+    assert without["edge_report"]["trimap_applied"] is False
+
+    unknown = tri == 128
+    prot = np.asarray(Image.open(with_tri["refined_mask"]).convert("L"), np.float32) / 255.0
+    raw = np.asarray(Image.open(without["refined_mask"]).convert("L"), np.float32) / 255.0
+    # In the unknown band the protected matte tracks the original soft alpha,
+    # while the unprotected one is eroded away from it.
+    assert np.abs(prot[unknown] - alpha[unknown]).mean() < np.abs(raw[unknown] - alpha[unknown]).mean()
+
+
+def test_trimap_absent_leaves_report_flag_false(tmp_path: Path) -> None:
+    img = _subject_rgba(tmp_path / "s.png")
+    out = _run(img, tmp_path)
+    assert out["edge_report"]["trimap_applied"] is False
+    assert out["edge_report"]["protected_band_px"] == 0

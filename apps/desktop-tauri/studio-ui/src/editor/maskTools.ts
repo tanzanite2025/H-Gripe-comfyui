@@ -6,6 +6,8 @@
 // ("coming soon") and is not selectable. This mirrors the frozen contract in
 // `docs/cards/subject-mask-matte.md` (§ "Mask-Edit tool registry").
 
+import type { ExecLane } from "./execLanes";
+
 export type ToolStatus = "ready" | "planned";
 
 /** How a tool behaves on the canvas, which drives pointer handling. */
@@ -35,6 +37,13 @@ export interface MaskTool {
   kind: ToolKind;
   /** `add` builds the mask up, `subtract` cuts it away (paint/marquee tools). */
   mode?: "add" | "subtract";
+  /**
+   * Execution lane this tool's work runs in (see `execLanes.ts`):
+   * - `interactive`: drawn instantly on the canvas (paint / marquee / path);
+   * - `preview`: cheap geometry / morphology, proxy-previewable;
+   * - `render`: model inference or real-pixel work gated behind the GPU queue.
+   */
+  lane: ExecLane;
   /** One-line tooltip describing the Phase 1 behaviour. */
   hint: string;
 }
@@ -42,21 +51,21 @@ export interface MaskTool {
 // Order here is the toolbar order. Keep `ready` tools first, `planned` last,
 // matching the contract table.
 export const MASK_TOOLS: readonly MaskTool[] = [
-  { id: "brush", label: "Brush", status: "ready", kind: "paint", mode: "add", hint: "Paint mask in." },
-  { id: "eraser", label: "Eraser", status: "ready", kind: "paint", mode: "subtract", hint: "Paint mask out." },
-  { id: "point", label: "Point (SAM 2)", status: "ready", kind: "point", hint: "Left-click the subject to include, right-click to exclude — SAM 2 segments from your points (auto modes)." },
-  { id: "wand", label: "Wand", status: "ready", kind: "click", hint: "Flood-fill a region by colour similarity (wand_tolerance)." },
-  { id: "rect", label: "Rect", status: "ready", kind: "marquee", mode: "add", hint: "Marquee add a rectangle." },
-  { id: "ellipse", label: "Ellipse", status: "ready", kind: "marquee", mode: "add", hint: "Marquee add an ellipse." },
-  { id: "invert", label: "Invert", status: "ready", kind: "global", hint: "Invert the whole mask." },
-  { id: "fill_holes", label: "Fill holes", status: "ready", kind: "global", hint: "Close interior holes." },
-  { id: "smooth", label: "Smooth", status: "ready", kind: "global", hint: "Morphological open/close." },
-  { id: "grow", label: "Grow", status: "ready", kind: "global", hint: "Dilate the mask by N px." },
-  { id: "shrink", label: "Shrink", status: "ready", kind: "global", hint: "Erode the mask by N px." },
-  { id: "feather", label: "Feather", status: "ready", kind: "global", hint: "Gaussian-feather the mask edge." },
-  { id: "matting", label: "Matting", status: "ready", kind: "matte", hint: "Paint the trimap unknown band over hair / fur / glass — the matter resolves it into soft alpha." },
-  { id: "pen", label: "Pen", status: "planned", kind: "path", hint: "Phase 3 — bezier path, rasterised + boolean-combined." },
-  { id: "lasso", label: "Lasso", status: "planned", kind: "path", hint: "Phase 3 — freehand path selection." },
+  { id: "brush", label: "Brush", status: "ready", kind: "paint", mode: "add", lane: "interactive", hint: "Paint mask in." },
+  { id: "eraser", label: "Eraser", status: "ready", kind: "paint", mode: "subtract", lane: "interactive", hint: "Paint mask out." },
+  { id: "point", label: "Point (SAM 2)", status: "ready", kind: "point", lane: "render", hint: "Left-click the subject to include, right-click to exclude — SAM 2 segments from your points (auto modes)." },
+  { id: "wand", label: "Wand", status: "ready", kind: "click", lane: "render", hint: "Flood-fill a region by colour similarity (wand_tolerance)." },
+  { id: "rect", label: "Rect", status: "ready", kind: "marquee", mode: "add", lane: "interactive", hint: "Marquee add a rectangle." },
+  { id: "ellipse", label: "Ellipse", status: "ready", kind: "marquee", mode: "add", lane: "interactive", hint: "Marquee add an ellipse." },
+  { id: "invert", label: "Invert", status: "ready", kind: "global", lane: "preview", hint: "Invert the whole mask." },
+  { id: "fill_holes", label: "Fill holes", status: "ready", kind: "global", lane: "preview", hint: "Close interior holes." },
+  { id: "smooth", label: "Smooth", status: "ready", kind: "global", lane: "preview", hint: "Morphological open/close." },
+  { id: "grow", label: "Grow", status: "ready", kind: "global", lane: "preview", hint: "Dilate the mask by N px." },
+  { id: "shrink", label: "Shrink", status: "ready", kind: "global", lane: "preview", hint: "Erode the mask by N px." },
+  { id: "feather", label: "Feather", status: "ready", kind: "global", lane: "preview", hint: "Gaussian-feather the mask edge." },
+  { id: "matting", label: "Matting", status: "ready", kind: "matte", lane: "render", hint: "Paint the trimap unknown band over hair / fur / glass — the matter resolves it into soft alpha." },
+  { id: "pen", label: "Pen", status: "planned", kind: "path", lane: "interactive", hint: "Phase 3 — bezier path, rasterised + boolean-combined." },
+  { id: "lasso", label: "Lasso", status: "planned", kind: "path", lane: "interactive", hint: "Phase 3 — freehand path selection." },
 ] as const;
 
 export const READY_TOOLS = MASK_TOOLS.filter((t) => t.status === "ready");

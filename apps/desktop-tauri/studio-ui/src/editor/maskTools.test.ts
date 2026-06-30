@@ -1,4 +1,5 @@
 import { describe, expect, it } from "vitest";
+import { EXEC_LANES } from "./execLanes";
 import {
   DEFAULT_TOOL_ID,
   MASK_TOOLS,
@@ -54,5 +55,30 @@ describe("mask tool registry", () => {
   it("paint tools carry an add/subtract mode", () => {
     expect(maskTool("brush")?.mode).toBe("add");
     expect(maskTool("eraser")?.mode).toBe("subtract");
+  });
+
+  it("tags every tool with an execution lane", () => {
+    const lanes = new Set(EXEC_LANES);
+    for (const tool of MASK_TOOLS) {
+      expect(lanes.has(tool.lane), tool.id).toBe(true);
+    }
+  });
+
+  it("routes paint / marquee / path tools to the interactive lane", () => {
+    for (const id of ["brush", "eraser", "rect", "ellipse", "pen", "lasso"]) {
+      expect(maskTool(id)?.lane, id).toBe("interactive");
+    }
+  });
+
+  it("routes geometry / morphology tools to the preview lane", () => {
+    for (const id of ["invert", "fill_holes", "smooth", "grow", "shrink", "feather"]) {
+      expect(maskTool(id)?.lane, id).toBe("preview");
+    }
+  });
+
+  it("routes model / real-pixel tools to the render lane", () => {
+    for (const id of ["point", "wand", "matting"]) {
+      expect(maskTool(id)?.lane, id).toBe("render");
+    }
   });
 });

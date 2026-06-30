@@ -156,19 +156,10 @@ function ImageSourceCard({ id, path }: { id: string; path: string }) {
         <button
           type="button"
           className="primary"
-          title={t("node.mediaEditMaskTitle")}
-          onClick={() => editing?.addBoundEdit?.(id, "subjectMask")}
+          title={t("node.mediaEditTitle")}
+          onClick={() => editing?.openMediaEdit?.(id)}
         >
-          {t("node.mediaEditMask")}
-        </button>
-        <button
-          type="button"
-          title={t("node.mediaCropTitle")}
-          onClick={() =>
-            editing?.addBoundEdit?.(id, "crop", { params: { mode: "manual" }, openEditor: true })
-          }
-        >
-          {t("node.mediaCrop")}
+          {t("node.mediaEdit")}
         </button>
       </div>
     </div>

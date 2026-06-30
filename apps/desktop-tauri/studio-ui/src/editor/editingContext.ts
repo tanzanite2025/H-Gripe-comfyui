@@ -10,6 +10,12 @@ export interface NodeEditing {
   /** Open the on-demand Crop-Edit modal for a crop node (manual box / auto). */
   openCropEdit?: (nodeId: string) => void;
   /**
+   * Open the unified manual editor for an image source card. Hosts the mask and
+   * crop editors behind one tool-group switcher; applying spawns a single bound
+   * edit node of the chosen kind (see docs/cards/generic-media-card.md, Phase 4).
+   */
+  openMediaEdit?: (sourceId: string) => void;
+  /**
    * Spawn a bound edit node of `editKind` from a media source card: create the
    * node to the right, wire a `binding` edge from the source's `image` output
    * to the new node's `image` input, and select it.

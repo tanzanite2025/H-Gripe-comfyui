@@ -19,6 +19,7 @@ import { NodeEditingContext } from "./editor/editingContext";
 import { PreviewModal } from "./editor/PreviewModal";
 import { MaskEditModal } from "./editor/MaskEditModal";
 import { CropEditModal } from "./editor/CropEditModal";
+import { MediaEditModal } from "./editor/MediaEditModal";
 import { normalizeEditPaths } from "./editor/maskEdit";
 import { useHistory } from "./editor/useHistory";
 import { buildPaste, clipFromSelection, type Clip } from "./editor/clipboard";
@@ -99,6 +100,8 @@ function Studio({ onToggleLang }: { onToggleLang: () => void }) {
   const [previewNodeId, setPreviewNodeId] = useState<string | null>(null);
   const [maskEditNodeId, setMaskEditNodeId] = useState<string | null>(null);
   const [cropEditNodeId, setCropEditNodeId] = useState<string | null>(null);
+  // Image source whose unified manual editor (mask + crop) is open, if any.
+  const [mediaEditSourceId, setMediaEditSourceId] = useState<string | null>(null);
   const { fitView, screenToFlowPosition } = useReactFlow();
   const isDesktop = isTauri();
   const [message, setMessage] = useState<string>(
@@ -562,6 +565,7 @@ function Studio({ onToggleLang }: { onToggleLang: () => void }) {
   const openPreview = useCallback((nodeId: string) => setPreviewNodeId(nodeId), []);
   const openMaskEdit = useCallback((nodeId: string) => setMaskEditNodeId(nodeId), []);
   const openCropEdit = useCallback((nodeId: string) => setCropEditNodeId(nodeId), []);
+  const openMediaEdit = useCallback((sourceId: string) => setMediaEditSourceId(sourceId), []);
 
   // Spawn a bound edit node from a media source card: place it to the right,
   // wire a `binding` edge (source.image -> edit.image), and select it. The
@@ -610,8 +614,8 @@ function Studio({ onToggleLang }: { onToggleLang: () => void }) {
 
   // Stable context value so memoized node cards can edit their own params.
   const editing = useMemo(
-    () => ({ onParamChange, openPreview, openMaskEdit, openCropEdit, addBoundEdit, runUpToNode }),
-    [onParamChange, openPreview, openMaskEdit, openCropEdit, addBoundEdit, runUpToNode],
+    () => ({ onParamChange, openPreview, openMaskEdit, openCropEdit, openMediaEdit, addBoundEdit, runUpToNode }),
+    [onParamChange, openPreview, openMaskEdit, openCropEdit, openMediaEdit, addBoundEdit, runUpToNode],
   );
 
   // Right-click menu items, depending on whether a node or empty pane was hit.
@@ -673,6 +677,10 @@ function Studio({ onToggleLang }: { onToggleLang: () => void }) {
   const cropEditNode = useMemo(
     () => nodes.find((n) => n.id === cropEditNodeId) ?? null,
     [nodes, cropEditNodeId],
+  );
+  const mediaEditSource = useMemo(
+    () => nodes.find((n) => n.id === mediaEditSourceId) ?? null,
+    [nodes, mediaEditSourceId],
   );
 
   return (
@@ -889,6 +897,43 @@ function Studio({ onToggleLang }: { onToggleLang: () => void }) {
             pendingRunNode.current = id;
           }}
           onClose={() => setCropEditNodeId(null)}
+        />
+      )}
+
+      {mediaEditSource && (
+        <MediaEditModal
+          title={t("node.mediaEdit")}
+          imagePath={
+            (mediaEditSource.data as HgripeNodeData).imagePath ??
+            (typeof (mediaEditSource.data as HgripeNodeData).params?.path === "string"
+              ? ((mediaEditSource.data as HgripeNodeData).params.path as string)
+              : null)
+          }
+          // Apply spawns exactly one bound edit node of the chosen kind from the
+          // source (never mutating it) and runs it — same pipeline as the
+          // right-click auto entries, but seeded with the manual edits.
+          onCommitMask={(edits) => {
+            addBoundEdit(mediaEditSource.id, "subjectMask", {
+              params: { edit_paths: edits },
+              openEditor: false,
+              run: true,
+            });
+            setMediaEditSourceId(null);
+          }}
+          onCommitCrop={(commit) => {
+            addBoundEdit(mediaEditSource.id, "crop", {
+              params: {
+                mode: commit.mode,
+                aspect: commit.aspect,
+                margin_pct: commit.marginPct,
+                crop_box: commit.cropBox,
+              },
+              openEditor: false,
+              run: true,
+            });
+            setMediaEditSourceId(null);
+          }}
+          onClose={() => setMediaEditSourceId(null)}
         />
       )}
     </div>

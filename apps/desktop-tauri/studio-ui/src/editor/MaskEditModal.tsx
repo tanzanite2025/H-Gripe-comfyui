@@ -1,4 +1,4 @@
-import { useCallback, useContext, useEffect, useMemo, useReducer, useRef, useState } from "react";
+import { useCallback, useContext, useEffect, useMemo, useReducer, useRef, useState, type ReactNode } from "react";
 import { generateThumbnail } from "../bridge/tauri";
 import {
   MASK_TOOLS,
@@ -68,6 +68,8 @@ interface MaskEditModalProps {
   wandTolerance: number;
   onCommit: (edits: EditPaths) => void;
   onClose: () => void;
+  /** Optional bar content (e.g. the unified editor's tool-group switcher). */
+  headerExtra?: ReactNode;
 }
 
 let strokeSeq = 0;
@@ -80,6 +82,7 @@ export function MaskEditModal({
   wandTolerance,
   onCommit,
   onClose,
+  headerExtra,
 }: MaskEditModalProps) {
   const t = useT();
   const lang = useContext(LangContext);
@@ -337,6 +340,7 @@ export function MaskEditModal({
           <span className="media-viewer-name" title={title}>
             {title} <span className="muted">· {t("mask.editor")}</span>
           </span>
+          {headerExtra}
           <div className="media-viewer-actions">
             <button disabled={!canUndo(state)} onClick={() => dispatch({ type: "undo" })} title={t("mask.undoTitle")}>
               ↶ {t("mask.undo")}

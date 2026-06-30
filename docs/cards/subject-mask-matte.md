@@ -171,8 +171,9 @@ the morphology/brush set while pen/lasso/matting stay stubbed.
 `matte_report` follows the same enriched-report convention as the other cards:
 `source_mode`, `exif_transposed`, `max_decode_pixels`, `image_size`,
 `processing_time_ms`, and a `triplet` completeness flag. `provider` is
-`rust-native` for the manual / hybrid lanes, `u2netp` when the bundled model
-segments an `auto_*` base matte, and `builtin-cpu` when no model weight is
+`rust-native` for the manual / hybrid lanes; for an `auto_*` base matte it is
+the segmenter that ran, in priority order: `birefnet` (high-quality model),
+`u2netp` (lightweight bundled model), or `builtin-cpu` when no model weight is
 resolvable.
 
 ### `EditPaths`
@@ -221,7 +222,8 @@ constrain / seed the subject.
 | Input larger than `max_decode_pixels` | `input image too large to decode safely: <path> WxH ...` (before allocation). |
 | Empty selection after edits | Emits a fully-transparent mask + `mask_coverage: 0.0`; never panics. |
 | EXIF-rotated image | Orientation normalised; `exif_transposed: true`. |
-| `auto_*` mode (model weight bundled) | The U²-Netp ONNX model produces the base matte in-process (`provider: u2netp`). A `previous_mask`, if connected, still takes precedence as continuation. |
+| `auto_*` mode (BiRefNet weight resolvable) | The BiRefNet ONNX model produces the base matte in-process (`provider: birefnet`) — highest quality, preferred when present. A `previous_mask`, if connected, still takes precedence as continuation. |
+| `auto_*` mode (only U²-Netp weight resolvable) | The lightweight bundled U²-Netp model produces the base matte (`provider: u2netp`). |
 | `auto_*` mode (no model weight resolvable) | Falls back to a deterministic built-in CPU segmenter (border-background distance + largest connected component, point-prompt aware); `provider: builtin-cpu`. |
 | Unsafe `output_name` | Rejected via `studio_reject_unsafe_basename`. |
 
@@ -240,19 +242,25 @@ model id in `matte_report`.
    `Compute` lane; the node's click-to-select becomes a model point-prompt. A
    *remote* segmentation API instead moves that mode to `Api` / `Hybrid`.
    - *Landed:* a `SubjectSegmenter` trait routes the four `auto_*` modes through
-     the `Compute` lane. A real **U²-Netp** ONNX backend (`ort`, in-process)
-     segments the base matte when its weight is resolvable, reporting
-     `provider: u2netp`; otherwise a deterministic `builtin-cpu` fallback keeps
-     the modes working without weights. `matte_report` carries `provider` and
-     `detected_subjects` (`label` / `bbox` / `coverage`).
-   - *Weight sourcing:* the `u2netp.onnx` weight (Apache-2.0, ~4.6 MB) is
-     **fetched at package time** (`scripts/fetch-subject-model.*`) and bundled
-     via `tauri.conf.json` `bundle.resources` under
-     `<install>/resources/models/`; it is not committed to git. An
-     `HGRIPE_SUBJECT_MODEL` env var overrides the path for dev / tests.
-   - *Pending:* per-mode models (e.g. a portrait matting net for `auto_person`,
-     a higher-quality `birefnet` for `auto_subject`) can slot into
-     `segmenter_for_mode` behind the same trait.
+     the `Compute` lane, behind a shared `ModelSpec`-driven `ort` backend so
+     multiple models share one load + inference path. Backends are tried in
+     priority order — **BiRefNet** (`provider: birefnet`, high quality) →
+     **U²-Netp** (`provider: u2netp`, lightweight default) → deterministic
+     **`builtin-cpu`** fallback when no weight resolves — so the modes always
+     work. `matte_report` carries `provider` and `detected_subjects`
+     (`label` / `bbox` / `coverage`).
+   - *Weight sourcing:* no `.onnx` is committed to git. **u2netp** (Apache-2.0,
+     ~4.6 MB) is the *bundled default* — fetched at package time
+     (`scripts/fetch-subject-model.*`) and shipped via `tauri.conf.json`
+     `bundle.resources` under `<install>/resources/models/`. **BiRefNet lite**
+     (MIT, ~224 MB) is the *downloadable big tier* — not bundled by default;
+     `scripts/fetch-birefnet.*` places it in the same dir to ship or test with.
+     `HGRIPE_SUBJECT_MODEL` / `HGRIPE_BIREFNET_MODEL` env vars override the
+     paths for dev / tests.
+   - *Pending:* an interactive **SAM 2** point/box-prompt backend (wired to the
+     node's click-to-select) and a portrait-matting net for `auto_person` can
+     slot into `segmenter_for_mode` behind the same trait. Continuous alpha
+     matting is Phase 4 below.
 3. **Pen paths** — bezier rasterise, path add/subtract/intersect, re-editable.
 4. **Alpha matting** — continuous alpha (hair / glass / translucency), trimap,
    tighter `Refine Mask Edge` hand-off.

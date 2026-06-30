@@ -12,12 +12,25 @@ interactive **SAM 2** backend is preferred instead — it segments *what the use
 clicked* rather than the most salient subject — falling through to the salient
 cascade below when its weights are absent.
 
+Segmentation answers *which pixels are the subject* (a hard, binary matte). When
+the node's **Alpha matting** toggle is on, a separate **ViTMatte** backend then
+resolves the binary edge into continuous alpha (hair / fur / glass) via a
+trimap; absent its weight a deterministic `builtin-cpu-matte` feather is used so
+the toggle always works.
+
 | Priority | Model | `provider` | License | Size | Tier |
 | --- | --- | --- | --- | --- | --- |
 | prompt | SAM 2 (tiny) | `sam2` | Apache-2.0 | ~154 MB | downloadable big tier (point-prompted) |
 | 1 | BiRefNet (lite) | `birefnet` | MIT | ~224 MB | downloadable big tier |
 | 2 | U²-Netp | `u2netp` | Apache-2.0 | ~4.6 MB | bundled default |
 | — | builtin CPU | `builtin-cpu` | — | — | always-on fallback |
+
+### Alpha matting (continuous alpha, opt-in)
+
+| Backend | `provider` | License | Size | Tier |
+| --- | --- | --- | --- | --- |
+| ViTMatte (small) | `vitmatte` | Apache-2.0 | ~104 MB | downloadable big tier |
+| builtin matte feather | `builtin-cpu-matte` | — | — | always-on fallback |
 
 ## Why the weights are not committed
 
@@ -36,6 +49,10 @@ by the scripts below into this directory; `bundle.resources` in
   big tier* (~154 MB combined) — not bundled by default. Place both here to
   bundle for a release, or point `HGRIPE_SAM2_ENCODER` / `HGRIPE_SAM2_DECODER`
   at local copies for dev; used only when the request carries point prompts.
+- **vitmatte** is the continuous-alpha *downloadable big tier* (~104 MB) — not
+  bundled by default. Place it here to bundle for a release, or point
+  `HGRIPE_VITMATTE_MODEL` at a local copy for dev; used only when the node's
+  **Alpha matting** toggle is on.
 
 ## Models
 
@@ -50,6 +67,15 @@ by the scripts below into this directory; `bundle.resources` in
 - **Input:** RGB `1x3x1024x1024`, `1/255` rescaled + ImageNet-normalised
 - **Output:** `1x1x1024x1024` map (min-max normalised + thresholded)
 - **sha256:** `5600024376f572a557870a5eb0afb1e5961636bef4e1e22132025467d0f03333`
+
+### ViTMatte small (downloadable big tier, continuous alpha)
+- **License:** Apache-2.0 (https://huggingface.co/Xenova/vitmatte-small-distinctions-646)
+- **Input:** a single `pixel_values` tensor `1x4xHxW` — RGB `1/255` rescaled +
+  `0.5`/`0.5` normalised (`[-1, 1]`) with the trimap rescaled `1/255` as the
+  4th channel. Run at a fixed `1024x1024` (multiple of 32) and the alpha resized
+  back.
+- **Output:** `alphas` `1x1xHxW` continuous alpha in `[0, 1]`.
+- **sha256:** `a1cf48234c369faa3ea1711981d961fe1ec71f51e593f9d6553aa5a0e7d557e3`
 
 ### SAM 2 tiny (downloadable big tier, point-prompted)
 - **License:** Apache-2.0 (https://huggingface.co/vietanhdev/segment-anything-2-onnx-models)
@@ -71,6 +97,7 @@ by the scripts below into this directory; `bundle.resources` in
 bash scripts/fetch-subject-model.sh   # u2netp  (or .ps1)
 bash scripts/fetch-birefnet.sh        # birefnet (or .ps1)
 bash scripts/fetch-sam2.sh            # sam2 encoder + decoder (or .ps1)
+bash scripts/fetch-vitmatte.sh        # vitmatte continuous-alpha (or .ps1)
 ```
 
 Or point the segmenter at any local weight without bundling:
@@ -80,4 +107,5 @@ export HGRIPE_SUBJECT_MODEL=/path/to/u2netp.onnx
 export HGRIPE_BIREFNET_MODEL=/path/to/birefnet_lite.onnx
 export HGRIPE_SAM2_ENCODER=/path/to/sam2_tiny.encoder.onnx
 export HGRIPE_SAM2_DECODER=/path/to/sam2_tiny.decoder.onnx
+export HGRIPE_VITMATTE_MODEL=/path/to/vitmatte.onnx
 ```

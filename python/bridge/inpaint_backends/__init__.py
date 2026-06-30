@@ -85,15 +85,18 @@ class InpaintBackend(Protocol):
         guidance_scale: float = 7.5,
         steps: int = 30,
         seed: int | None = None,
-    ) -> Any:
+        precision: str | None = None,
+    ) -> tuple[Any, str, str]:
         """Inpaint the masked area of a padded ``crop`` and return the result.
 
         ``crop`` is a PIL ``RGB`` image (the padded window from ``prepare``);
         ``mask`` is a PIL ``L`` image the same size where **white (255) marks
-        the area to regenerate** (the diffusers convention). The returned PIL
-        ``RGB`` image is the same size as ``crop``. Raises
-        :class:`InpaintUnavailable` if deps/weights vanished between the probe
-        and the call.
+        the area to regenerate** (the diffusers convention). ``precision``
+        selects the compute precision (``auto`` by default — fp16 on CUDA, fp32
+        on CPU). Returns ``(image, device_used, precision_used)`` where the PIL
+        ``RGB`` image is the same size as ``crop``, so the caller reports what
+        actually ran. Raises :class:`InpaintUnavailable` if deps/weights vanished
+        between the probe and the call.
         """
         ...
 

@@ -231,12 +231,18 @@ def test_backend_dispatch_success_records_telemetry(
         def weight_path(self):
             return Path("/models/fake_x2.pth")
 
-        def upscale(self, rgb, scale, device=None):
+        def upscale(self, rgb, scale, device=None, precision=None):
             w = max(1, round(rgb.width * scale))
             h = max(1, round(rgb.height * scale))
             # Mimic a CPU-only box so an explicit ``cuda`` request degrades to
-            # ``cpu`` exactly like the real torch backend reports it.
-            return rgb.resize((w, h), Image.LANCZOS), sr_backends.resolve_device(device, False)
+            # ``cpu`` exactly like the real torch backend reports it (and an
+            # explicit ``fp16`` likewise degrades to ``fp32`` on that CPU run).
+            dev = sr_backends.resolve_device(device, False)
+            return (
+                rgb.resize((w, h), Image.LANCZOS),
+                dev,
+                sr_backends.resolve_precision(precision, dev),
+            )
 
     monkeypatch.setattr(sr_backends, "resolve", lambda name: _FakeBackend() if name == "fake" else None)
 
@@ -250,6 +256,9 @@ def test_backend_dispatch_success_records_telemetry(
     # device defaults to auto; on this (faked) CPU-only box it runs on cpu.
     assert report["device_requested"] == "auto"
     assert report["device"] == "cpu"
+    # precision defaults to auto; on this (faked) CPU-only box it runs fp32.
+    assert report["precision_requested"] == "auto"
+    assert report["precision"] == "fp32"
     # The model path replaces the CPU denoise/sharpen, so those are reported off.
     assert report["denoise_method"] == "fake"
     assert report["texture_strength"] == 0.0
@@ -273,10 +282,15 @@ def test_backend_dispatch_device_request_degrades_truthfully(
         def weight_path(self):
             return Path("/models/fake_x2.pth")
 
-        def upscale(self, rgb, scale, device=None):
+        def upscale(self, rgb, scale, device=None, precision=None):
             w = max(1, round(rgb.width * scale))
             h = max(1, round(rgb.height * scale))
-            return rgb.resize((w, h), Image.LANCZOS), sr_backends.resolve_device(device, False)
+            dev = sr_backends.resolve_device(device, False)
+            return (
+                rgb.resize((w, h), Image.LANCZOS),
+                dev,
+                sr_backends.resolve_precision(precision, dev),
+            )
 
     monkeypatch.setattr(
         sr_backends, "resolve", lambda name: _FakeBackend() if name == "fake" else None
@@ -289,11 +303,15 @@ def test_backend_dispatch_device_request_degrades_truthfully(
         target_height=40,
         engine="fake",
         device="cuda",
+        precision="fp16",
         output_dir=tmp_path,
     )
     report = out["enhance_report"]
     assert report["device_requested"] == "cuda"
     assert report["device"] == "cpu"
+    # An explicit ``fp16`` likewise degrades to ``fp32`` on the CPU run it landed on.
+    assert report["precision_requested"] == "fp16"
+    assert report["precision"] == "fp32"
 
 
 def test_probe_engines_flag_emits_capability_json(tmp_path: Path, capsys) -> None:

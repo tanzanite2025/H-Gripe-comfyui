@@ -284,6 +284,10 @@ export const NODE_ZH: Record<string, NodeSpecZh> = {
         label: "设备",
         hint: "realesrgan 放大器的计算设备：auto（有 CUDA 用 CUDA，否则 CPU）| cpu | cuda（无加速器时回落 CPU）；cpu 路径忽略此项",
       },
+      precision: {
+        label: "精度",
+        hint: "realesrgan 放大器的计算精度：auto（CUDA 上 fp16，否则 fp32）| fp32 | fp16（CPU 运行时回落 fp32）；cpu 路径忽略此项",
+      },
       target_width: { label: "目标宽度", hint: "显式目标像素（0 = 由所连边界或预设缩放自动推算）" },
       target_height: { label: "目标高度", hint: "显式目标像素（0 = 由所连边界或预设缩放自动推算）" },
       target_dpi: { label: "目标 DPI", hint: "写入输出 PNG 元数据的 DPI" },
@@ -347,6 +351,10 @@ export const NODE_ZH: Record<string, NodeSpecZh> = {
       engine: {
         label: "引擎",
         hint: "provider = 远程 image.edit（默认）；sd_inpaint = 可选本地 GPU 重绘，权重/依赖缺失时回落 provider",
+      },
+      precision: {
+        label: "精度",
+        hint: "sd_inpaint 后端的计算精度：auto（CUDA 上 fp16，否则 fp32）| fp32 | fp16（CPU 运行时回落 fp32）；provider 路径忽略此项",
       },
       credentials_ref: { label: "凭据", hint: "选择档案时自动设置" },
       repaint_prompt_base: {

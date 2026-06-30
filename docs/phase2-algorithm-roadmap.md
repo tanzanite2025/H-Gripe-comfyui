@@ -308,10 +308,17 @@ real-inference CI is gated like ViTMatte.
   Edge** (`onnx_matting`), **Match Light & Color** (`onnx_harmonize`) and
   **Detail Watchdog** (`onnx_defect`) are wired end-to-end (their `--device`
   threads into the session and the edge / match / watchdog report records
-  `device_requested` + `device`) — every ONNX engine now honours `--device`. ⛔
-  still: wire `--device` through the Tauri commands / Graph executor and the
-  inspector UI, and a per-node `precision` selection (the "local model manager"
-  surface).
+  `device_requested` + `device`) — every ONNX engine now honours `--device`,
+  wired end-to-end through the Tauri commands / Graph executor and the inspector
+  UI. A per-node **`precision`** (`auto`/`fp32`/`fp16`) selection has now landed
+  for the **torch** backends (Image Enhance `realesrgan` + Detail Repaint
+  `sd_inpaint`): a shared `sr_backends.resolve_precision()` resolves `auto`→
+  `fp16` on CUDA / `fp32` on CPU, an explicit `fp16` degrades truthfully to
+  `fp32` on a CPU run, the backends bind `torch.half()` accordingly, and the
+  enhance / repaint reports record `precision_requested` + the `precision` the
+  run *actually* used. The ONNX engines keep no `precision` knob (their
+  precision is fixed at export). ⛔ still: the "local model manager" surface
+  (`weights_path` management).
 - **Determinism & safety:** seedable backends; keep the text/logo guards; require
   rule+ML agreement before any *automatic* (non-user-confirmed) repaint.
 - **Contracts are stable:** every Phase 2 backend emits the existing

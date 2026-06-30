@@ -893,6 +893,16 @@ export const NODE_SPECS: Record<string, NodeSpec> = {
         visibleWhen: { param: "engine", in: ["realesrgan"] },
       },
       {
+        key: "precision",
+        label: "Precision",
+        control: "select",
+        options: ["auto", "fp32", "fp16"],
+        defaultValue: "auto",
+        inline: true,
+        hint: "compute precision for the realesrgan upscaler: auto (fp16 on cuda else fp32) | fp32 | fp16 (degrades to fp32 on a cpu run); ignored by the cpu path",
+        visibleWhen: { param: "engine", in: ["realesrgan"] },
+      },
+      {
         key: "target_width",
         label: "Target width",
         control: "slider",
@@ -1100,6 +1110,16 @@ export const NODE_SPECS: Record<string, NodeSpec> = {
         defaultValue: "provider",
         inline: true,
         hint: "provider = remote image.edit (default); sd_inpaint = opt-in local GPU inpaint, falls back to the provider when its weights/deps are missing",
+      },
+      {
+        key: "precision",
+        label: "Precision",
+        control: "select",
+        options: ["auto", "fp32", "fp16"],
+        defaultValue: "auto",
+        inline: true,
+        hint: "compute precision for the sd_inpaint backend: auto (fp16 on cuda else fp32) | fp32 | fp16 (degrades to fp32 on a cpu run); ignored by the provider path",
+        visibleWhen: { param: "engine", in: ["sd_inpaint"] },
       },
       {
         key: "credentials_ref",

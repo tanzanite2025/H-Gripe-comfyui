@@ -72,14 +72,18 @@ class StableDiffusionInpaintBackend:
         guidance_scale: float = 7.5,
         steps: int = 30,
         seed: int | None = None,
-    ) -> Any:
+        precision: str | None = None,
+    ) -> tuple[Any, str, str]:
         """Inpaint the white area of ``mask`` over ``crop`` with Stable Diffusion.
 
         The pipeline works on multiples of 8 px, so the crop+mask are padded up
         to the next multiple, run through the inpaint pipeline, and cropped back
         to the original size so the caller's geometry contract is unchanged.
-        Raises :class:`InpaintUnavailable` if deps/weights vanished since the
-        probe.
+        ``precision`` selects the compute precision (``auto`` by default — fp16
+        on CUDA, fp32 on CPU — see :func:`sr_backends.resolve_precision`).
+        Returns ``(image, device_used, precision_used)`` so the caller reports
+        what actually ran. Raises :class:`InpaintUnavailable` if deps/weights
+        vanished since the probe.
         """
         ok, reason = self.available()
         if not ok:
@@ -89,8 +93,11 @@ class StableDiffusionInpaintBackend:
         from diffusers import StableDiffusionInpaintPipeline
         from PIL import Image
 
+        from sr_backends import resolve_precision
+
         device = "cuda" if torch.cuda.is_available() else "cpu"
-        dtype = torch.float16 if device == "cuda" else torch.float32
+        precision = resolve_precision(precision, device)
+        dtype = torch.float16 if precision == "fp16" else torch.float32
         pipe = StableDiffusionInpaintPipeline.from_pretrained(
             str(self.weight_path()),
             torch_dtype=dtype,
@@ -128,4 +135,4 @@ class StableDiffusionInpaintBackend:
 
         if result.size != (orig_w, orig_h):
             result = result.crop((0, 0, orig_w, orig_h))
-        return result.convert("RGB")
+        return result.convert("RGB"), device, precision

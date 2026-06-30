@@ -447,6 +447,10 @@ def composite(args: argparse.Namespace) -> dict[str, Any]:
 
 
 _PROVIDER_ENGINE = "provider"
+# Default compute-precision selection for the local torch backend: fp16 on a
+# CUDA device, fp32 on CPU (mirrors sr_backends.PRECISION_AUTO; kept local so
+# this module stays torch-free at import time).
+_PRECISION_AUTO = "auto"
 
 
 def _inner_mask(size: tuple[int, int], inner: list[int]) -> "np.ndarray":
@@ -490,6 +494,16 @@ def repaint(args: argparse.Namespace) -> dict[str, Any]:
     engine_used = _PROVIDER_ENGINE
     engine_fallback_reason: str | None = None
     backend_model: str | None = None
+
+    # ``precision`` selects fp16/fp32 for the local torch backend (the remote
+    # ``provider`` path runs no local session). ``precision_used`` / ``device_used``
+    # are what the backend actually ran, which can differ from the request (an
+    # explicit ``fp16`` degrades to ``fp32`` on a CPU run).
+    precision_requested = (
+        getattr(args, "precision", None) or _PRECISION_AUTO
+    ).strip().lower() or _PRECISION_AUTO
+    precision_used: str | None = None
+    device_used: str | None = None
 
     repainted: list[dict[str, Any]] = []
     skipped: list[dict[str, Any]] = []
@@ -538,7 +552,7 @@ def repaint(args: argparse.Namespace) -> dict[str, Any]:
             region_prompt = str(prompt_map.get(str(issue_type)) or prompt)
 
             try:
-                result = backend.inpaint(
+                result, device_used, precision_used = backend.inpaint(
                     crop_img,
                     mask_img,
                     region_prompt,
@@ -547,12 +561,15 @@ def repaint(args: argparse.Namespace) -> dict[str, Any]:
                     guidance_scale=float(args.guidance_scale),
                     steps=int(args.steps),
                     seed=seed,
+                    precision=precision_requested,
                 )
             except InpaintUnavailable as err:
                 engine_fallback_reason = err.reason
                 repainted = []
                 skipped = []
                 backend = None
+                device_used = None
+                precision_used = None
                 break
             except Exception as err:  # noqa: BLE001 - degrade to provider, never crash
                 skipped.append(
@@ -575,6 +592,9 @@ def repaint(args: argparse.Namespace) -> dict[str, Any]:
         "engine_requested": engine_requested,
         "engine_fallback_reason": engine_fallback_reason,
         "backend_model": backend_model,
+        "device": device_used,
+        "precision": precision_used,
+        "precision_requested": precision_requested,
         "requested_count": len(regions),
         "repainted_count": len(repainted),
     }
@@ -746,6 +766,14 @@ def build_parser() -> argparse.ArgumentParser:
         type=int,
         default=-1,
         help="random seed for reproducible inpaint (<0 = nondeterministic)",
+    )
+    rep.add_argument(
+        "--precision",
+        default=_PRECISION_AUTO,
+        help=(
+            "compute precision for the torch backend: auto (default, fp16 on cuda "
+            "else fp32) | fp32 | fp16 (degrades to fp32 on a cpu run)"
+        ),
     )
     rep.add_argument(
         "--output-dir",

@@ -27,6 +27,7 @@ const DETAIL_REPAINT_RESERVED = new Set([
   "operation",
   "credentials_ref",
   "engine",
+  "precision",
   "repaint_prompt_base",
   "repaint_actions",
   "min_confidence",
@@ -387,6 +388,7 @@ export const defaultExecutors: ExecutorRegistry = {
       preserveTextLogo: Boolean(ctx.params.preserve_text_logo ?? true),
       engine: String(ctx.params.engine ?? "cpu") || undefined,
       device: String(ctx.params.device ?? "auto").trim() || undefined,
+      precision: String(ctx.params.precision ?? "auto").trim() || undefined,
       outputDir: outputDir || undefined,
       outputName: String(ctx.params.output_name ?? "").trim() || undefined,
     });
@@ -471,7 +473,16 @@ export const defaultExecutors: ExecutorRegistry = {
     // Local-engine telemetry to fold into the report, so the UI can show which
     // engine ran and why it fell back to the provider path (when it did).
     let engineTelemetry:
-      | Pick<RepaintReport, "engine" | "engine_requested" | "engine_fallback_reason" | "backend_model">
+      | Pick<
+          RepaintReport,
+          | "engine"
+          | "engine_requested"
+          | "engine_fallback_reason"
+          | "backend_model"
+          | "device"
+          | "precision"
+          | "precision_requested"
+        >
       | null = null;
     if (engine !== "provider") {
       const promptMap: Record<string, string> = {};
@@ -484,6 +495,7 @@ export const defaultExecutors: ExecutorRegistry = {
         engine,
         prompt: regionPrompt(""),
         promptMap: JSON.stringify(promptMap),
+        precision: String(ctx.params.precision ?? "auto").trim() || undefined,
         outputDir: outputDir || undefined,
       });
       engineTelemetry = {
@@ -491,6 +503,9 @@ export const defaultExecutors: ExecutorRegistry = {
         engine_requested: local.engine_requested,
         engine_fallback_reason: local.engine_fallback_reason ?? null,
         backend_model: local.backend_model ?? null,
+        device: local.device ?? null,
+        precision: local.precision ?? null,
+        precision_requested: local.precision_requested,
       };
       if (local.engine !== "provider" && local.repainted.length > 0) {
         localUsed = true;

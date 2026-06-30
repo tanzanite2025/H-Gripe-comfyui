@@ -574,6 +574,10 @@ export interface EnhanceReport {
   device?: string | null;
   /** Compute device the node asked for (`auto`/`cpu`/`cuda`). */
   device_requested?: string;
+  /** Compute precision the model backend bound (`fp16`/`fp32`); null on cpu. */
+  precision?: string | null;
+  /** Compute precision the node asked for (`auto`/`fp32`/`fp16`). */
+  precision_requested?: string;
   processing_time_ms: number;
 }
 
@@ -610,6 +614,8 @@ export interface EnhanceImageRequest {
   engine?: string;
   /** Compute device for the learned upscaler: `auto` (default) | `cpu` | `cuda`. */
   device?: string;
+  /** Compute precision for the learned upscaler: `auto` (default) | `fp32` | `fp16`. */
+  precision?: string;
   /** Directory for the written PNG. */
   outputDir?: string;
   /** Base name for the written PNG. */
@@ -680,6 +686,8 @@ export async function enhanceImage(req: EnhanceImageRequest): Promise<EnhanceIma
         backend_model: null,
         device: null,
         device_requested: req.device ?? "auto",
+        precision: null,
+        precision_requested: req.precision ?? "auto",
         processing_time_ms: 0,
       },
     };
@@ -698,6 +706,7 @@ export async function enhanceImage(req: EnhanceImageRequest): Promise<EnhanceIma
     preserveTextLogo: req.preserveTextLogo ?? null,
     engine: req.engine ?? null,
     device: req.device ?? null,
+    precision: req.precision ?? null,
     outputDir: req.outputDir ?? null,
     outputName: req.outputName ?? null,
   })) as EnhanceImageResult;
@@ -1239,6 +1248,12 @@ export interface LocalRepaintResult {
   engine_fallback_reason?: string | null;
   /** Weight name when a local backend ran, else null. */
   backend_model?: string | null;
+  /** Compute device the local backend bound (`cpu`/`cuda`); null on provider. */
+  device?: string | null;
+  /** Compute precision the local backend bound (`fp16`/`fp32`); null on provider. */
+  precision?: string | null;
+  /** Compute precision the node asked for (`auto`/`fp32`/`fp16`). */
+  precision_requested?: string;
   requested_count: number;
   repainted_count: number;
 }
@@ -1258,6 +1273,8 @@ export interface LocalRepaintRequest {
   steps?: number;
   /** Random seed (<0 / undefined = nondeterministic). */
   seed?: number;
+  /** Compute precision for the local backend: `auto` (default) | `fp32` | `fp16`. */
+  precision?: string;
   outputDir?: string;
   outputName?: string;
 }
@@ -1284,6 +1301,9 @@ export async function localRepaintRegions(req: LocalRepaintRequest): Promise<Loc
           ? "engine 'provider': remote image.edit owned by orchestrator"
           : "local inpaint unavailable in browser dev (mock)",
       backend_model: null,
+      device: null,
+      precision: null,
+      precision_requested: req.precision ?? "auto",
       requested_count: req.manifest.regions?.length ?? 0,
       repainted_count: 0,
     };
@@ -1298,6 +1318,7 @@ export async function localRepaintRegions(req: LocalRepaintRequest): Promise<Loc
     guidanceScale: req.guidanceScale ?? null,
     steps: req.steps ?? null,
     seed: req.seed ?? null,
+    precision: req.precision ?? null,
     outputDir: req.outputDir ?? null,
     outputName: req.outputName ?? null,
   })) as LocalRepaintResult;

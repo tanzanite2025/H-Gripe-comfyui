@@ -120,6 +120,12 @@ export interface RepaintReport {
   engine_fallback_reason?: string | null;
   /** Resolved local weight identifier, when a local backend ran. */
   backend_model?: string | null;
+  /** Compute device the local backend bound (`cpu`/`cuda`); null on provider. */
+  device?: string | null;
+  /** Compute precision the local backend bound (`fp16`/`fp32`); null on provider. */
+  precision?: string | null;
+  /** Compute precision the node asked for (`auto`/`fp32`/`fp16`). */
+  precision_requested?: string;
 }
 
 /** Exported artifact paths recorded for a finished workflow. */

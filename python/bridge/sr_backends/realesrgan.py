@@ -26,7 +26,7 @@ import os
 from pathlib import Path
 from typing import Any
 
-from . import BackendUnavailable, model_cache_dir, resolve_device
+from . import BackendUnavailable, model_cache_dir, resolve_device, resolve_precision
 
 _DEFAULT_WEIGHT_NAME = "RealESRGAN_x4plus.pth"
 
@@ -59,16 +59,23 @@ class RealEsrganBackend:
             )
         return True, "ready"
 
-    def upscale(self, rgb: Any, scale: float, device: str | None = None) -> tuple[Any, str]:
+    def upscale(
+        self,
+        rgb: Any,
+        scale: float,
+        device: str | None = None,
+        precision: str | None = None,
+    ) -> tuple[Any, str, str]:
         """Upscale a PIL ``RGB`` image by ``scale`` using Real-ESRGAN x4.
 
         The model has a fixed native ``x4`` factor; we run it once and then
         Lanczos-resize to the exact requested factor so the caller's
         target-size contract is unchanged. Tiling keeps VRAM bounded on large
-        inputs. ``device`` selects the compute device (``auto`` by default);
-        returns ``(image, device_used)`` so the caller reports the device that
-        actually ran. Raises :class:`BackendUnavailable` if deps/weights
-        vanished since the probe.
+        inputs. ``device`` selects the compute device (``auto`` by default) and
+        ``precision`` the compute precision (``auto`` by default — fp16 on CUDA,
+        fp32 on CPU); returns ``(image, device_used, precision_used)`` so the
+        caller reports what actually ran. Raises :class:`BackendUnavailable` if
+        deps/weights vanished since the probe.
         """
         ok, reason = self.available()
         if not ok:
@@ -81,6 +88,7 @@ class RealEsrganBackend:
         from realesrgan import RealESRGANer
 
         device = resolve_device(device, torch.cuda.is_available())
+        precision = resolve_precision(precision, device)
         model = RRDBNet(
             num_in_ch=3,
             num_out_ch=3,
@@ -96,8 +104,9 @@ class RealEsrganBackend:
             tile=512,
             tile_pad=10,
             pre_pad=0,
-            # fp16 only helps on CUDA; keep full precision on CPU for determinism.
-            half=(device == "cuda"),
+            # fp16 only helps on CUDA; resolve_precision already degraded an
+            # explicit fp16 to fp32 on a CPU run, so this is safe.
+            half=(precision == "fp16"),
             device=device,
         )
 
@@ -113,4 +122,4 @@ class RealEsrganBackend:
         target_h = max(1, int(round(rgb.height * scale)))
         if enhanced.size != (target_w, target_h):
             enhanced = enhanced.resize((target_w, target_h), Image.LANCZOS)
-        return enhanced, device
+        return enhanced, device, precision

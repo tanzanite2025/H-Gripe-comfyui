@@ -82,6 +82,9 @@ pub(super) fn execute_studio_image_enhance(
         // `device` selects the compute device for the learned upscaler (default
         // `auto`); ignored by the CPU resize path.
         optional(studio_value_to_string(node.params.get("device"))),
+        // `precision` selects fp16/fp32 for the learned upscaler (default
+        // `auto`); ignored by the CPU resize path.
+        optional(studio_value_to_string(node.params.get("precision"))),
         Some(output_dir),
         optional(studio_value_to_string(node.params.get("output_name"))),
     )?;

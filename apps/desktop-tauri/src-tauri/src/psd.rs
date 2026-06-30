@@ -881,6 +881,14 @@ pub(crate) struct EnhanceReport {
     /// `cuda` degrades to `cpu` when no accelerator is present.
     #[serde(default)]
     pub(crate) device_requested: String,
+    /// Compute precision the model backend bound (`fp16`/`fp32`); `null` on the
+    /// CPU resize path, which runs no ML session.
+    #[serde(default)]
+    pub(crate) precision: Option<String>,
+    /// Compute precision the node asked for (`auto`/`fp32`/`fp16`); an explicit
+    /// `fp16` degrades to `fp32` on a CPU run.
+    #[serde(default)]
+    pub(crate) precision_requested: String,
     #[serde(default)]
     pub(crate) processing_time_ms: i64,
 }
@@ -924,6 +932,7 @@ pub(crate) fn enhance_image(
     preserve_text_logo: Option<bool>,
     engine: Option<String>,
     device: Option<String>,
+    precision: Option<String>,
     output_dir: Option<String>,
     output_name: Option<String>,
 ) -> Result<EnhanceImageResult, String> {
@@ -967,6 +976,8 @@ pub(crate) fn enhance_image(
         .arg(engine.as_deref().unwrap_or("cpu"))
         .arg("--device")
         .arg(device.as_deref().unwrap_or("auto"))
+        .arg("--precision")
+        .arg(precision.as_deref().unwrap_or("auto"))
         .arg("--output-dir")
         .arg(output_dir.as_deref().unwrap_or(""))
         .arg("--output-name")
@@ -1663,6 +1674,18 @@ pub(crate) struct LocalRepaintResult {
     /// Weight name when a local backend ran, else null.
     #[serde(default)]
     pub(crate) backend_model: Option<String>,
+    /// Compute device the local backend bound (`cpu`/`cuda`); `null` on the
+    /// remote `provider` path, which runs no local session.
+    #[serde(default)]
+    pub(crate) device: Option<String>,
+    /// Compute precision the local backend bound (`fp16`/`fp32`); `null` on the
+    /// remote `provider` path, which runs no local session.
+    #[serde(default)]
+    pub(crate) precision: Option<String>,
+    /// Compute precision the node asked for (`auto`/`fp32`/`fp16`); an explicit
+    /// `fp16` degrades to `fp32` on a CPU run.
+    #[serde(default)]
+    pub(crate) precision_requested: String,
     #[serde(default)]
     pub(crate) requested_count: u32,
     #[serde(default)]
@@ -1692,6 +1715,7 @@ pub(crate) fn local_repaint_regions(
     guidance_scale: Option<f64>,
     steps: Option<i64>,
     seed: Option<i64>,
+    precision: Option<String>,
     output_dir: Option<String>,
     output_name: Option<String>,
 ) -> Result<LocalRepaintResult, String> {
@@ -1721,6 +1745,8 @@ pub(crate) fn local_repaint_regions(
         .arg(steps.unwrap_or(30).to_string())
         .arg("--seed")
         .arg(seed.unwrap_or(-1).to_string())
+        .arg("--precision")
+        .arg(precision.as_deref().unwrap_or("auto"))
         .arg("--output-dir")
         .arg(output_dir.as_deref().unwrap_or(""))
         .arg("--output-name")

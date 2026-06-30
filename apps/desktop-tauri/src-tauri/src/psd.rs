@@ -539,6 +539,14 @@ pub(crate) struct MatchReport {
     /// Weight file name when a learned backend ran, else `null`.
     #[serde(default)]
     pub(crate) backend_model: Option<String>,
+    /// Compute device the learned backend bound (`cpu`/`cuda`); `null` on the
+    /// CPU heuristic path, which runs no ML session.
+    #[serde(default)]
+    pub(crate) device: Option<String>,
+    /// Compute device the node asked for (`auto`/`cpu`/`cuda`); an explicit
+    /// `cuda` degrades to `cpu` when no accelerator provider is present.
+    #[serde(default)]
+    pub(crate) device_requested: String,
 }
 
 /// Result of the **Light & Color Match** node: the written matched image, a
@@ -580,6 +588,7 @@ pub(crate) fn match_light_color(
     protect_saturation: Option<bool>,
     protect_brand_color: Option<bool>,
     engine: Option<String>,
+    device: Option<String>,
     output_dir: Option<String>,
     output_name: Option<String>,
 ) -> Result<ColorMatchResult, String> {
@@ -614,6 +623,8 @@ pub(crate) fn match_light_color(
         .arg(highlight_strength.unwrap_or(0.0).to_string())
         .arg("--engine")
         .arg(engine.as_deref().unwrap_or("cpu"))
+        .arg("--device")
+        .arg(device.as_deref().unwrap_or("auto"))
         .arg("--output-dir")
         .arg(output_dir.as_deref().unwrap_or(""))
         .arg("--output-name")
@@ -696,6 +707,14 @@ pub(crate) struct EdgeReport {
     /// The weight file the backend loaded (`null` on the CPU path).
     #[serde(default)]
     pub(crate) backend_model: Option<String>,
+    /// Compute device the learned backend bound (`cpu`/`cuda`); `null` on the
+    /// CPU heuristic path, which runs no ML session.
+    #[serde(default)]
+    pub(crate) device: Option<String>,
+    /// Compute device the node asked for (`auto`/`cpu`/`cuda`); an explicit
+    /// `cuda` degrades to `cpu` when no accelerator provider is present.
+    #[serde(default)]
+    pub(crate) device_requested: String,
 }
 
 /// Result of the **Mask Edge Refine** node: the written refined RGBA image, the
@@ -739,6 +758,7 @@ pub(crate) fn refine_mask_edge(
     output_dir: Option<String>,
     output_name: Option<String>,
     engine: Option<String>,
+    device: Option<String>,
 ) -> Result<RefineEdgeResult, String> {
     let dir = resolve_project_dir(&dir)?;
     let python = project_python(&dir);
@@ -781,6 +801,8 @@ pub(crate) fn refine_mask_edge(
         .arg(output_name.as_deref().unwrap_or(""))
         .arg("--engine")
         .arg(engine.as_deref().unwrap_or("cpu"))
+        .arg("--device")
+        .arg(device.as_deref().unwrap_or("auto"))
         .current_dir(&dir);
     if edge_decontaminate.unwrap_or(false) {
         cmd.arg("--edge-decontaminate");
@@ -851,6 +873,14 @@ pub(crate) struct EnhanceReport {
     /// Weight file name when a model backend ran, else `null`.
     #[serde(default)]
     pub(crate) backend_model: Option<String>,
+    /// Compute device the model backend bound (`cpu`/`cuda`); `null` on the CPU
+    /// resize path, which runs no ML session.
+    #[serde(default)]
+    pub(crate) device: Option<String>,
+    /// Compute device the node asked for (`auto`/`cpu`/`cuda`); an explicit
+    /// `cuda` degrades to `cpu` when no accelerator is present.
+    #[serde(default)]
+    pub(crate) device_requested: String,
     #[serde(default)]
     pub(crate) processing_time_ms: i64,
 }
@@ -893,6 +923,7 @@ pub(crate) fn enhance_image(
     texture_strength: Option<f64>,
     preserve_text_logo: Option<bool>,
     engine: Option<String>,
+    device: Option<String>,
     output_dir: Option<String>,
     output_name: Option<String>,
 ) -> Result<EnhanceImageResult, String> {
@@ -934,6 +965,8 @@ pub(crate) fn enhance_image(
         .arg(texture_strength.unwrap_or(0.25).to_string())
         .arg("--engine")
         .arg(engine.as_deref().unwrap_or("cpu"))
+        .arg("--device")
+        .arg(device.as_deref().unwrap_or("auto"))
         .arg("--output-dir")
         .arg(output_dir.as_deref().unwrap_or(""))
         .arg("--output-name")

@@ -387,6 +387,18 @@ describe("matchLightColor", () => {
     expect(report.engine_requested).toBe("onnx_harmonize");
     expect(report.engine_fallback_reason).toBe("engine unavailable in browser dev mock");
   });
+
+  it("threads the device param into the report (defaults to auto)", async () => {
+    const def = (await defaultExecutors.matchLightColor(
+      ctx("matchLightColor", { mode: "color_transfer" }, { image: "/subject.png", background: "/bg.png" }),
+    )) as Record<string, unknown>;
+    expect((def.match_report as { device_requested?: string }).device_requested).toBe("auto");
+
+    const cuda = (await defaultExecutors.matchLightColor(
+      ctx("matchLightColor", { mode: "color_transfer", device: "cuda" }, { image: "/subject.png", background: "/bg.png" }),
+    )) as Record<string, unknown>;
+    expect((cuda.match_report as { device_requested?: string }).device_requested).toBe("cuda");
+  });
 });
 
 describe("refineMaskEdge", () => {
@@ -475,6 +487,18 @@ describe("refineMaskEdge", () => {
     expect(report.engine_requested).toBe("onnx_matting");
     expect(report.engine_fallback_reason).toBe("engine unavailable in browser dev mock");
   });
+
+  it("threads the device param into the report (defaults to auto)", async () => {
+    const def = (await defaultExecutors.refineMaskEdge(
+      ctx("refineMaskEdge", { preset: "natural" }, { image: "/subject.png", trimap: "/trimap.png" }),
+    )) as Record<string, unknown>;
+    expect((def.edge_report as { device_requested?: string }).device_requested).toBe("auto");
+
+    const cpu = (await defaultExecutors.refineMaskEdge(
+      ctx("refineMaskEdge", { preset: "natural", device: "cpu" }, { image: "/subject.png", trimap: "/trimap.png" }),
+    )) as Record<string, unknown>;
+    expect((cpu.edge_report as { device_requested?: string }).device_requested).toBe("cpu");
+  });
 });
 
 describe("imageEnhance", () => {
@@ -533,6 +557,18 @@ describe("imageEnhance", () => {
     await expect(
       defaultExecutors.imageEnhance(ctx("imageEnhance", {})),
     ).rejects.toThrow(/connected image/);
+  });
+
+  it("threads the device param into the report (defaults to auto)", async () => {
+    const def = (await defaultExecutors.imageEnhance(
+      ctx("imageEnhance", { mode: "conservative" }, { image: "/subject.png" }),
+    )) as Record<string, unknown>;
+    expect((def.enhance_report as { device_requested?: string }).device_requested).toBe("auto");
+
+    const cuda = (await defaultExecutors.imageEnhance(
+      ctx("imageEnhance", { mode: "conservative", device: "cuda" }, { image: "/subject.png" }),
+    )) as Record<string, unknown>;
+    expect((cuda.enhance_report as { device_requested?: string }).device_requested).toBe("cuda");
   });
 });
 

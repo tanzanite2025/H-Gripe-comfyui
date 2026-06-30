@@ -79,6 +79,9 @@ pub(super) fn execute_studio_match_light_color(
         // `engine` selects the opt-in learned matcher (default `cpu`); the bridge
         // falls back to the always-on CPU heuristic when it is unavailable.
         optional(studio_value_to_string(node.params.get("engine"))),
+        // `device` selects the ONNX execution provider for the learned matcher
+        // (default `auto`); ignored by the CPU heuristic.
+        optional(studio_value_to_string(node.params.get("device"))),
         Some(output_dir),
         optional(studio_value_to_string(node.params.get("output_name"))),
     )?;

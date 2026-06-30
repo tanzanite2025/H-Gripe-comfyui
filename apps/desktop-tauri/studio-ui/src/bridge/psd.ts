@@ -279,6 +279,10 @@ export interface MatchReport {
   engine_fallback_reason?: string | null;
   /** Weight file name when a learned backend ran, else `null`. */
   backend_model?: string | null;
+  /** Compute device the learned backend bound (`cpu`/`cuda`); null on cpu. */
+  device?: string | null;
+  /** Compute device the node asked for (`auto`/`cpu`/`cuda`). */
+  device_requested?: string;
 }
 
 /** Result of the Light & Color Match node (`match_light_color`). */
@@ -310,6 +314,8 @@ export interface MatchLightColorRequest {
   protectBrandColor?: boolean;
   /** Match engine: `cpu` (default heuristic) or `onnx_harmonize` (opt-in, falls back to cpu). */
   engine?: string;
+  /** Compute device for the learned matcher: `auto` (default) | `cpu` | `cuda`. */
+  device?: string;
   /** Directory for the written matched PNG. */
   outputDir?: string;
   /** Base name for the matched PNG. */
@@ -352,6 +358,8 @@ export async function matchLightColor(req: MatchLightColorRequest): Promise<Colo
         engine_fallback_reason:
           (req.engine ?? "cpu") === "cpu" ? null : "engine unavailable in browser dev mock",
         backend_model: null,
+        device: null,
+        device_requested: req.device ?? "auto",
       },
     };
   }
@@ -367,6 +375,7 @@ export async function matchLightColor(req: MatchLightColorRequest): Promise<Colo
     protectSaturation: req.protectSaturation ?? null,
     protectBrandColor: req.protectBrandColor ?? null,
     engine: req.engine ?? null,
+    device: req.device ?? null,
     outputDir: req.outputDir ?? null,
     outputName: req.outputName ?? null,
   })) as ColorMatchResult;
@@ -408,6 +417,10 @@ export interface EdgeReport {
   engine_fallback_reason?: string | null;
   /** Weight file the backend loaded (`null` on the CPU path). */
   backend_model?: string | null;
+  /** Compute device the learned backend bound (`cpu`/`cuda`); null on cpu. */
+  device?: string | null;
+  /** Compute device the node asked for (`auto`/`cpu`/`cuda`). */
+  device_requested?: string;
 }
 
 /** Result of the Mask Edge Refine node (`refine_mask_edge`). */
@@ -451,6 +464,8 @@ export interface RefineMaskEdgeRequest {
    * back to `cpu` when its deps / weights are missing.
    */
   engine?: string;
+  /** Compute device for the learned matter: `auto` (default) | `cpu` | `cuda`. */
+  device?: string;
   /** Directory for the written PNGs. */
   outputDir?: string;
   /** Base name for the written PNGs. */
@@ -498,6 +513,8 @@ export async function refineMaskEdge(req: RefineMaskEdgeRequest): Promise<Refine
             ? "engine unavailable in browser dev mock"
             : null,
         backend_model: null,
+        device: null,
+        device_requested: req.device ?? "auto",
       },
     };
   }
@@ -515,6 +532,7 @@ export async function refineMaskEdge(req: RefineMaskEdgeRequest): Promise<Refine
     edgeDecontaminate: req.edgeDecontaminate ?? null,
     backgroundBlendStrength: req.backgroundBlendStrength ?? null,
     engine: req.engine ?? null,
+    device: req.device ?? null,
     outputDir: req.outputDir ?? null,
     outputName: req.outputName ?? null,
   })) as RefineEdgeResult;
@@ -552,6 +570,10 @@ export interface EnhanceReport {
   engine_fallback_reason?: string | null;
   /** Weight file name when a model backend ran, else null. */
   backend_model?: string | null;
+  /** Compute device the model backend bound (`cpu`/`cuda`); null on cpu. */
+  device?: string | null;
+  /** Compute device the node asked for (`auto`/`cpu`/`cuda`). */
+  device_requested?: string;
   processing_time_ms: number;
 }
 
@@ -586,6 +608,8 @@ export interface EnhanceImageRequest {
   preserveTextLogo?: boolean;
   /** Upscale engine: `cpu` (default) or `realesrgan` (opt-in, falls back to cpu). */
   engine?: string;
+  /** Compute device for the learned upscaler: `auto` (default) | `cpu` | `cuda`. */
+  device?: string;
   /** Directory for the written PNG. */
   outputDir?: string;
   /** Base name for the written PNG. */
@@ -654,6 +678,8 @@ export async function enhanceImage(req: EnhanceImageRequest): Promise<EnhanceIma
         engine_fallback_reason:
           (req.engine ?? "cpu") === "cpu" ? null : "engine unavailable in browser dev mock",
         backend_model: null,
+        device: null,
+        device_requested: req.device ?? "auto",
         processing_time_ms: 0,
       },
     };
@@ -671,6 +697,7 @@ export async function enhanceImage(req: EnhanceImageRequest): Promise<EnhanceIma
     textureStrength: req.textureStrength ?? null,
     preserveTextLogo: req.preserveTextLogo ?? null,
     engine: req.engine ?? null,
+    device: req.device ?? null,
     outputDir: req.outputDir ?? null,
     outputName: req.outputName ?? null,
   })) as EnhanceImageResult;

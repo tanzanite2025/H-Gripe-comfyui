@@ -612,6 +612,79 @@ describe("detailRepaint", () => {
     expect(out.fixed_image).toBe("/out/candidate_repainted.png");
   });
 
+  it("routes to the local inpaint engine and composites its crops (no provider call)", async () => {
+    const runSpy = vi.spyOn(bridge, "runTaskJson");
+    vi.spyOn(bridge, "localInpaintRegions").mockImplementation(async (req) => ({
+      // The local backend repaints both selected regions offline.
+      repainted: req.manifest.regions.map((r) => ({ index: r.index, path: `/inp/r${r.index}.png` })),
+      engine: "sd_inpaint",
+      engine_requested: "sd_inpaint",
+      engine_fallback_reason: null,
+      backend_model: "sd_inpaint",
+      requested_count: req.manifest.regions.length,
+      repainted_count: req.manifest.regions.length,
+    }));
+
+    const out = (await defaultExecutors.detailRepaint(
+      ctx(
+        "detailRepaint",
+        { provider: "mock", engine: "sd_inpaint", repaint_actions: "detail_redraw", min_confidence: 0, output_dir: "/out" },
+        { image: "/cand.png", quality_report: REPORT },
+      ),
+    )) as Record<string, unknown>;
+
+    // Local engine selected => the provider broker loop is never entered.
+    expect(runSpy).not.toHaveBeenCalled();
+    const report = out.repaint_report as {
+      status: string;
+      repainted_count: number;
+      engine: string;
+      engine_requested: string;
+    };
+    expect(report.repainted_count).toBe(2);
+    expect(report.status).toBe("repainted");
+    // The engine telemetry rides along with the unchanged RepaintReport shape.
+    expect(report.engine).toBe("sd_inpaint");
+    expect(report.engine_requested).toBe("sd_inpaint");
+  });
+
+  it("falls back to the provider loop when the local engine repaints nothing", async () => {
+    vi.spyOn(bridge, "localInpaintRegions").mockResolvedValue({
+      repainted: [],
+      engine: "provider",
+      engine_requested: "sd_inpaint",
+      engine_fallback_reason: "missing optional dependency: torch",
+      backend_model: null,
+      requested_count: 2,
+      repainted_count: 0,
+    });
+    const tasks: Record<string, unknown>[] = [];
+    vi.spyOn(bridge, "runTaskJson").mockImplementation(async (task: unknown) => {
+      const t = task as Record<string, unknown>;
+      tasks.push(t);
+      return { id: String(t.id), status: "succeeded", output_files: [{ path: `${String(t.id)}.png` }] };
+    });
+
+    const out = (await defaultExecutors.detailRepaint(
+      ctx(
+        "detailRepaint",
+        { provider: "openai_compatible", engine: "sd_inpaint", credentials_ref: "k", min_confidence: 0, output_dir: "/out" },
+        { image: "/cand.png", quality_report: REPORT },
+      ),
+    )) as Record<string, unknown>;
+
+    // Local engine produced nothing => the provider path repaints both regions.
+    expect(tasks).toHaveLength(2);
+    const report = out.repaint_report as {
+      repainted_count: number;
+      engine: string;
+      engine_fallback_reason: string | null;
+    };
+    expect(report.repainted_count).toBe(2);
+    expect(report.engine).toBe("provider");
+    expect(report.engine_fallback_reason).toBe("missing optional dependency: torch");
+  });
+
   it("requires a connected image input", async () => {
     await expect(
       defaultExecutors.detailRepaint(ctx("detailRepaint", {})),

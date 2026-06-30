@@ -16,7 +16,7 @@ and UI can be exercised without a GPU or large model downloads.
 | --- | --- | --- | --- |
 | Image Enhance (super-res) | `enhance_image` | Pillow Lanczos upscale + Gaussian-blur denoise + unsharp mask (CPU) | SupIR / CCSR / Real-ESRGAN GPU restoration |
 | Detail Watchdog | `detect_quality_issues` | Pillow+numpy rule heuristics (Laplacian variance, tile sharpness grid, alpha-rim halo, mean-colour drift) | ML/VLM semantic defect detection |
-| Detail Repaint | `prepare_repaint_regions` + `composite_repaint` | crop/mask + feathered paste around a provider `image.edit` call | dedicated GPU inpainting backend |
+| Detail Repaint | `prepare_repaint_regions` + `composite_repaint` | crop/mask + feathered paste around a provider `image.edit` call | dedicated GPU inpainting backend (🟡 `engine` seam + `sd_inpaint` backend landed; weights/CI opt-in) |
 
 The guiding principle for Phase 2 is **additive, opt-in backends**: the existing
 CPU path stays as the always-available default and fallback; GPU/ML strength is
@@ -158,6 +158,17 @@ provider:
 - Seam-aware blending beyond the current feather (e.g. Poisson / gradient-domain
   compositing) for harder seams.
 
+**Status (🟡 landed):** the `engine` seam is in place — `python/bridge/inpaint_backends/`
+is a lazy-import registry exposing a `sd_inpaint` backend (lazy `torch`/`diffusers`,
+weight from `HGRIPE_INPAINT_MODEL` / `HGRIPE_MODEL_CACHE`) plus a `--probe-engines`
+capability probe. The CLI gains an `inpaint` subcommand that repaints each prepared
+crop offline and feeds `composite` the same `{index, path}` crop shape; the
+`detailRepaint` card gains an `engine` select (`provider` default). Any unavailable
+engine (missing deps/weight) degrades to the provider path with the reason recorded
+in the report. Still ⛔: bundled SD/SDXL/Flux Fill weights + real-inference CI
+(opt-in like ViTMatte), ControlNet conditioning, and Poisson/gradient-domain seam
+blending (composite still uses today's feathered alpha).
+
 ### 3.3 Integration plan
 - The `prepare`/`composite` split and manifest **already** isolate the generative
   step cleanly — Phase 2 adds a local backend that consumes the same manifest, so
@@ -196,7 +207,8 @@ drift inside masked region (low denoise strength + tight masks), seam visibility
 
 1. **SR first (highest visible win, lowest risk):** Real-ESRGAN backend behind
    `profile_ref` + capability probe + CPU fallback.
-2. **Repaint local backend:** reuse the existing manifest; add SD/SDXL inpaint.
+2. **Repaint local backend:** ✅ seam + `sd_inpaint` backend landed (reuse the
+   existing manifest); ⛔ bundled weights / real-inference CI / ControlNet next.
 3. **Watchdog ML passes:** OCR/logo + face/hand, then a VLM pass; graduate the
    currently-`skipped` semantic targets.
 4. **SupIR/CCSR** as premium SR profiles once the backend dispatch + weight cache

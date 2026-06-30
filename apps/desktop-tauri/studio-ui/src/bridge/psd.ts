@@ -1091,3 +1091,91 @@ export async function compositeRepaint(
     outputName: req.outputName ?? null,
   })) as CompositeRepaintResult;
 }
+
+// --- Detail Repaint: local inpaint engine seam ------------------------------
+// The opt-in Phase-2 alternative to the remote `image.edit` provider loop: a
+// local diffusion backend (`inpaint_backends/`) repaints each prepared crop
+// offline, returning crops in the same `{index, path}` shape `compositeRepaint`
+// reads. `provider` (the default) and any unavailable engine degrade to an
+// empty repaint set with `engine_fallback_reason` recorded — the executor then
+// runs the provider path / passes the image through.
+
+/** Per-region prompt override for the local inpaint backend. */
+export interface InpaintPromptOverride {
+  index: number;
+  prompt: string;
+}
+
+/** Result of the local inpaint step (mirrors Rust `LocalInpaintResult`). */
+export interface LocalInpaintResult {
+  repainted: RepaintedCrop[];
+  /** Engine that actually ran (`provider` when it fell back). */
+  engine: string;
+  /** Engine the node asked for. */
+  engine_requested: string;
+  /** Why it degraded to the provider path, when it did. */
+  engine_fallback_reason?: string | null;
+  /** Short identifier of the resolved weight, for telemetry. */
+  backend_model?: string | null;
+  requested_count: number;
+  repainted_count: number;
+}
+
+export interface LocalInpaintRequest {
+  /** Manifest returned by {@link prepareRepaintRegions}. */
+  manifest: PrepareRepaintResult;
+  /** `provider` (default) or a local backend id such as `sd_inpaint`. */
+  engine?: string;
+  /** Per-region prompt overrides (keyed by region index). */
+  prompts?: InpaintPromptOverride[];
+  /** Base prompt for regions without an override (issue type appended). */
+  repaintPromptBase?: string;
+  steps?: number;
+  guidance?: number;
+  strength?: number;
+  /** Seed for reproducible inpaint (-1 / undefined = unseeded). */
+  seed?: number;
+  outputDir?: string;
+  outputName?: string;
+}
+
+/**
+ * Run the opt-in local inpaint backend over a prepared manifest
+ * (`local_inpaint_regions`). The diffusion work needs the Python/torch
+ * pipeline, which only exists in the desktop build *and* only when the engine's
+ * optional deps / weights are present; outside Tauri (browser dev) there is no
+ * local backend, so this returns an empty repaint set flagged as a provider
+ * fallback — the executor then takes the provider path / passes through.
+ */
+export async function localInpaintRegions(
+  req: LocalInpaintRequest,
+): Promise<LocalInpaintResult> {
+  const engine = (req.engine ?? "provider").trim() || "provider";
+  const invoke = tauriInvoke();
+  if (!invoke) {
+    return {
+      repainted: [],
+      engine: "provider",
+      engine_requested: engine,
+      engine_fallback_reason:
+        engine === "provider"
+          ? "provider engine (no local backend)"
+          : "local inpaint unavailable in browser dev (mock)",
+      backend_model: null,
+      requested_count: req.manifest.regions?.length ?? 0,
+      repainted_count: 0,
+    };
+  }
+  return (await invoke("local_inpaint_regions", {
+    manifest: JSON.stringify(req.manifest),
+    engine,
+    prompts: req.prompts ? JSON.stringify(req.prompts) : null,
+    repaintPromptBase: req.repaintPromptBase ?? null,
+    steps: req.steps ?? null,
+    guidance: req.guidance ?? null,
+    strength: req.strength ?? null,
+    seed: req.seed ?? null,
+    outputDir: req.outputDir ?? null,
+    outputName: req.outputName ?? null,
+  })) as LocalInpaintResult;
+}

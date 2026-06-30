@@ -1166,9 +1166,10 @@ pub(crate) fn probe_engines(dir: Option<String>) -> Result<EngineProbeReport, St
     let python = project_python(&dir);
 
     // (node kind, CLI) for every card that exposes an `engine` param.
-    const CARDS: [(&str, &str); 2] = [
+    const CARDS: [(&str, &str); 3] = [
         ("imageEnhance", "image_enhance_cli.py"),
         ("detailWatchdog", "detail_watchdog_cli.py"),
+        ("detailRepaint", "detail_repaint_cli.py"),
     ];
 
     let mut cards = Vec::with_capacity(CARDS.len());
@@ -1269,6 +1270,40 @@ pub(crate) struct CompositeRepaintResult {
     pub(crate) fixed_image: String,
     #[serde(default)]
     pub(crate) repaint_report: RepaintReport,
+}
+
+/// One locally-repainted crop, in the same `{index, path}` shape
+/// [`composite_repaint`]'s `repainted` argument reads — so the local inpaint
+/// engine is a drop-in alternative to the remote provider loop.
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub(crate) struct LocalRepaintedCrop {
+    #[serde(default)]
+    pub(crate) index: u32,
+    #[serde(default)]
+    pub(crate) path: String,
+}
+
+/// Result of the **Detail Repaint** local inpaint step: the repainted crops to
+/// hand to [`composite_repaint`], plus the opt-in `engine` seam telemetry. When
+/// the requested engine's deps/weight are missing the report degrades to the
+/// provider path (`engine` = `provider`, empty `repainted`) and records
+/// `engine_fallback_reason` — never a hard failure.
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub(crate) struct LocalInpaintResult {
+    #[serde(default)]
+    pub(crate) repainted: Vec<LocalRepaintedCrop>,
+    #[serde(default)]
+    pub(crate) engine: String,
+    #[serde(default)]
+    pub(crate) engine_requested: String,
+    #[serde(default)]
+    pub(crate) engine_fallback_reason: Option<String>,
+    #[serde(default)]
+    pub(crate) backend_model: Option<String>,
+    #[serde(default)]
+    pub(crate) requested_count: u32,
+    #[serde(default)]
+    pub(crate) repainted_count: u32,
 }
 
 #[cfg(windows)]
@@ -1423,6 +1458,81 @@ pub(crate) fn composite_repaint(
     serde_json::from_str::<CompositeRepaintResult>(stdout.trim()).map_err(|err| {
         format!(
             "could not parse composite_repaint output: {err} (raw: {})",
+            stdout.trim()
+        )
+    })
+}
+
+/// Run the opt-in **local** inpaint backend over a prepared manifest, producing
+/// repainted crops without the remote provider. This is the Phase-2 `engine`
+/// seam for Detail Repaint (`docs/phase2-algorithm-roadmap.md` §3): the
+/// alternative to the remote `image.edit` loop for offline / privacy /
+/// cost-controlled runs.
+///
+/// `manifest` is the JSON returned by [`prepare_repaint_regions`]; `prompts` is
+/// an optional JSON list of `{index, prompt}` per-region overrides. The returned
+/// `repainted` plugs straight into [`composite_repaint`]. When `engine` is
+/// `provider` (the default) or the local engine's deps/weight are missing the
+/// result is an empty repaint set with `engine_fallback_reason` set, so the
+/// orchestrator falls back to the provider path. Shells out to
+/// `python/bridge/detail_repaint_cli.py inpaint`.
+#[tauri::command]
+#[allow(clippy::too_many_arguments)]
+pub(crate) fn local_inpaint_regions(
+    dir: Option<String>,
+    manifest: String,
+    engine: Option<String>,
+    prompts: Option<String>,
+    repaint_prompt_base: Option<String>,
+    steps: Option<i64>,
+    guidance: Option<f64>,
+    strength: Option<f64>,
+    seed: Option<i64>,
+    output_dir: Option<String>,
+    output_name: Option<String>,
+) -> Result<LocalInpaintResult, String> {
+    let dir = resolve_project_dir(&dir)?;
+    let python = project_python(&dir);
+    let script = detail_repaint_script(&dir)?;
+    reject_unsafe_output_name(output_name.as_deref().unwrap_or(""))?;
+
+    let mut cmd = std::process::Command::new(&python);
+    cmd.arg(&script)
+        .arg("inpaint")
+        .arg("--manifest")
+        .arg(&manifest)
+        .arg("--engine")
+        .arg(engine.as_deref().unwrap_or("provider"))
+        .arg("--prompts")
+        .arg(prompts.as_deref().unwrap_or(""))
+        .arg("--repaint-prompt-base")
+        .arg(repaint_prompt_base.as_deref().unwrap_or(""))
+        .arg("--steps")
+        .arg(steps.unwrap_or(30).to_string())
+        .arg("--guidance")
+        .arg(guidance.unwrap_or(7.5).to_string())
+        .arg("--strength")
+        .arg(strength.unwrap_or(0.85).to_string())
+        .arg("--seed")
+        .arg(seed.unwrap_or(-1).to_string())
+        .arg("--output-dir")
+        .arg(output_dir.as_deref().unwrap_or(""))
+        .arg("--output-name")
+        .arg(output_name.as_deref().unwrap_or(""))
+        .current_dir(&dir);
+    no_window(&mut cmd);
+
+    let output = cmd
+        .output()
+        .map_err(|err| format!("failed to launch {}: {err}", python.display()))?;
+    if !output.status.success() {
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        return Err(format!("local_inpaint_regions failed: {}", stderr.trim()));
+    }
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    serde_json::from_str::<LocalInpaintResult>(stdout.trim()).map_err(|err| {
+        format!(
+            "could not parse local_inpaint_regions output: {err} (raw: {})",
             stdout.trim()
         )
     })

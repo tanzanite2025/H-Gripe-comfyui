@@ -536,7 +536,8 @@ fn main() {
             psd::detect_quality_issues,
             psd::probe_engines,
             psd::prepare_repaint_regions,
-            psd::composite_repaint
+            psd::composite_repaint,
+            psd::local_inpaint_regions
         ])
         .run(tauri::generate_context!())
         .expect("error while running H-Gripe Desktop");

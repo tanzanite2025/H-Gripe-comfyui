@@ -6,8 +6,8 @@
 // sinks. This wires the renderer-agnostic DAG runtime to real backend
 // capability.
 
-import { analyzePsdContext, composePsd, compositeRepaint, detectQualityIssues, enhanceImage, getOutputDir, matchLightColor, prepareRepaintRegions, refineMaskEdge, runTaskJson } from "../bridge/tauri";
-import type { RepaintedCrop } from "../bridge/tauri";
+import { analyzePsdContext, composePsd, compositeRepaint, detectQualityIssues, enhanceImage, getOutputDir, localInpaintRegions, matchLightColor, prepareRepaintRegions, refineMaskEdge, runTaskJson } from "../bridge/tauri";
+import type { InpaintPromptOverride, RepaintedCrop } from "../bridge/tauri";
 import type { Bounds, QualityReport, VisualContext } from "../types/production";
 import type { ExecutorRegistry } from "./dag";
 import {
@@ -32,6 +32,7 @@ const DETAIL_REPAINT_RESERVED = new Set([
   "region_padding",
   "max_regions",
   "feather_px",
+  "engine",
   "output_dir",
   "output_name",
 ]);
@@ -445,6 +446,7 @@ export const defaultExecutors: ExecutorRegistry = {
     const operation = String(ctx.params.operation ?? "image.edit");
     const credentialsRef = String(ctx.params.credentials_ref ?? "") || null;
     const promptBase = String(ctx.params.repaint_prompt_base ?? "").trim();
+    const engine = String(ctx.params.engine ?? "provider").trim() || "provider";
 
     // Forward every non-reserved, non-empty param into each region's task.
     const params: Record<string, unknown> = {};
@@ -454,11 +456,44 @@ export const defaultExecutors: ExecutorRegistry = {
       params[key] = value;
     }
 
-    // mock / empty provider has no `image.edit` capability: leave every region
-    // unrepainted so the composite step passes the image through unchanged.
-    const providerCanEdit = provider.length > 0 && provider !== "mock";
     const repainted: RepaintedCrop[] = [];
-    if (providerCanEdit) {
+    // Opt-in local inpaint engine: repaint every region offline instead of the
+    // remote provider loop. An unavailable engine (missing deps/weights, browser
+    // dev) degrades to an empty repaint set, which we surface via the report's
+    // engine telemetry; the composite step then passes the image through.
+    let engineTelemetry: {
+      engine: string;
+      engine_requested: string;
+      engine_fallback_reason?: string | null;
+      backend_model?: string | null;
+    } | null = null;
+    if (engine !== "provider") {
+      const prompts: InpaintPromptOverride[] = [];
+      const inpainted = await localInpaintRegions({
+        manifest: prepared,
+        engine,
+        prompts,
+        repaintPromptBase: promptBase || undefined,
+        outputDir: outputDir || undefined,
+        outputName: String(ctx.params.output_name ?? "").trim() || undefined,
+      });
+      for (const crop of inpainted.repainted) {
+        if ((crop.path ?? "").trim()) repainted.push(crop);
+      }
+      engineTelemetry = {
+        engine: inpainted.engine,
+        engine_requested: inpainted.engine_requested,
+        engine_fallback_reason: inpainted.engine_fallback_reason ?? null,
+        backend_model: inpainted.backend_model ?? null,
+      };
+    }
+
+    // Provider path: used when the engine is `provider`, or as the fallback when
+    // the local engine produced nothing. mock / empty provider has no
+    // `image.edit` capability, so every region is left unrepainted and the
+    // composite step passes the image through unchanged.
+    const providerCanEdit = provider.length > 0 && provider !== "mock";
+    if (repainted.length === 0 && providerCanEdit) {
       for (const region of prepared.regions) {
         const issue = region.type ?? "";
         const prompt = promptBase
@@ -497,7 +532,11 @@ export const defaultExecutors: ExecutorRegistry = {
     });
     return {
       fixed_image: composed.fixed_image,
-      repaint_report: composed.repaint_report,
+      // Carry the local-engine telemetry alongside the unchanged RepaintReport
+      // shape so the UI can show which engine ran / why it fell back.
+      repaint_report: engineTelemetry
+        ? { ...composed.repaint_report, ...engineTelemetry }
+        : composed.repaint_report,
     };
   },
 

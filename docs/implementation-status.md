@@ -29,7 +29,7 @@
 | Refine Mask Edge (`edge_refine_cli.py`) | 🟡 Partial | CPU clean/feather + trimap-aware hand-off (protects the matte unknown band) landed. A learned-matting / `guidedFilter` `profile_ref` **engine mode** is ⛔ planned. |
 | Image Enhance (`image_enhance_cli.py`) | 🟡 Partial | CPU Lanczos upscale + denoise + unsharp default, plus an opt-in **`engine` seam** (`python/bridge/sr_backends/`) with a **Real-ESRGAN** backend + capability probe + CPU fallback. Real GPU inference is opt-in (deps/weight not bundled). See §2. |
 | Detail Watchdog (`detail_watchdog_cli.py`) | 🟡 Partial | Always-on CPU rule layer, plus an opt-in **`engine` seam** (`python/bridge/detector_backends/`) with an **`onnx_defect`** detector + capability probe + rule-only fallback. The trained models behind it are not bundled; semantic targets stay `skipped` until a detector covers them. See §2. |
-| Detail Repaint (`detail_repaint_cli.py`) | 🟡 Partial | `prepare`/`composite` around a provider `image.edit` call; no local backend. See §2. |
+| Detail Repaint (`detail_repaint_cli.py`) | 🟡 Partial | `prepare`/`composite` around a provider `image.edit` call, plus an opt-in **`engine` seam** (`python/bridge/inpaint_backends/`) with a **`sd_inpaint`** local diffusion backend + capability probe + provider fallback. Real GPU diffusion is opt-in (deps/weight not bundled). See §2. |
 
 ## 2. Phase 2 algorithm backends — [`phase2-algorithm-roadmap.md`](phase2-algorithm-roadmap.md)
 
@@ -42,8 +42,8 @@ concept), with the CPU path remaining the default and fallback.
 | --- | --- | --- |
 | **Super-resolution** GPU backend | 🟡 Partial | `engine` seam + `python/bridge/sr_backends/` registry + **Real-ESRGAN** backend (lazy torch, weight from `HGRIPE_MODEL_CACHE`) + `--probe-engines` capability probe + graceful CPU fallback **landed**. Still ⛔: CCSR / SupIR backends, real-inference CI (opt-in like ViTMatte), installer weight story. |
 | **Detail Watchdog** ML/VLM passes | 🟡 Partial | `engine` seam + `python/bridge/detector_backends/` registry + **`onnx_defect`** detector (lazy `onnxruntime`, weight from `HGRIPE_WATCHDOG_MODEL` / `HGRIPE_MODEL_CACHE`, hands/text/logo) + `--probe-engines` probe + graceful rule-only fallback **landed**. Still ⛔: the actual trained face/hand-quality, OCR + logo/template, and VLM defect models behind it, plus real-inference CI (opt-in like ViTMatte). Currently-`skipped` targets graduate to real findings only once a real weight lands. |
-| **Detail Repaint** local inpaint backend | ⛔ Planned | Local GPU diffusion inpaint (SD/SDXL/Flux Fill) consuming the existing crop+mask+prompt manifest, optional ControlNet, Poisson/gradient-domain seam blending. |
-| **Capability probe / weight cache** | 🟡 Partial | Per-engine `--probe-engines` + `HGRIPE_MODEL_CACHE` resolution **landed for Image Enhance and Detail Watchdog**; the `probe_engines` Tauri command aggregates them into a **cross-card capability report** that the Dashboard surfaces and the inspector uses to **grey out unavailable engines** (the CPU/`rules` baseline stays enabled) **landed**. Still ⛔: GPU/CUDA device detail in the report. |
+| **Detail Repaint** local inpaint backend | 🟡 Partial | `engine` seam + `python/bridge/inpaint_backends/` registry + **`sd_inpaint`** backend (lazy `torch`/`diffusers`, weight from `HGRIPE_INPAINT_MODEL` / `HGRIPE_MODEL_CACHE`) consuming the existing crop+mask+prompt manifest + `--probe-engines` probe + graceful provider fallback **landed**. Still ⛔: the actual bundled SD/SDXL/Flux Fill weight + real-inference CI (opt-in like ViTMatte), optional ControlNet, Poisson/gradient-domain seam blending (current composite uses feathered alpha). |
+| **Capability probe / weight cache** | 🟡 Partial | Per-engine `--probe-engines` + `HGRIPE_MODEL_CACHE` resolution **landed for Image Enhance, Detail Watchdog and Detail Repaint**; the `probe_engines` Tauri command aggregates them into a **cross-card capability report** that the Dashboard surfaces and the inspector uses to **grey out unavailable engines** (the CPU/`rules` baseline stays enabled) **landed**. Still ⛔: GPU/CUDA device detail in the report. |
 
 ## 3. Subject Mask / Matte — [`subject-mask-matte.md`](cards/subject-mask-matte.md)
 
@@ -94,4 +94,4 @@ CPU bridge.
 | Item | Status | Notes |
 | --- | --- | --- |
 | Video axis (temporal tracking / flicker smoothing / timeline scrubbing) | ⛔ Not planned | Would need a video predictor (SAM 2 memory bank) + a video timeline; the bundled SAM 2 ONNX is the **image** variant. Needs a separate product decision. |
-| Private local SD video content-aware fill | ⛔ Not planned | Local SD = GPU; current `detailRepaint` uses provider `image.edit`. |
+| Private local SD video content-aware fill | ⛔ Not planned | Local SD = GPU; `detailRepaint` now has an opt-in still-image `sd_inpaint` engine, but the **video** axis is unplanned. |

@@ -63,6 +63,9 @@ pub(super) fn execute_studio_detail_watchdog(
         target_bounds,
         optional(studio_value_to_string(node.params.get("watch_targets"))),
         optional(studio_value_to_string(node.params.get("mode"))),
+        // `engine` selects the opt-in ML detector (default `rules`); the bridge
+        // falls back to the always-on rule layer when it is unavailable.
+        optional(studio_value_to_string(node.params.get("engine"))),
         Some(output_dir),
         optional(studio_value_to_string(node.params.get("output_name"))),
     )?;
@@ -133,6 +136,43 @@ mod tests {
     }
 
     #[test]
+    fn watchdog_report_parses_engine_seam_fields() {
+        // The ML detector seam telemetry must deserialize: a requested ML engine
+        // that fell back to the rule layer records why, and an engine that ran
+        // lists its detectors + weight name.
+        let fell_back: WatchdogReport = serde_json::from_value(json!({
+            "mode": "balanced",
+            "engine": "rules",
+            "engine_requested": "onnx_defect",
+            "engine_fallback_reason": "missing optional dependency: onnxruntime",
+            "detectors": [],
+            "backend_model": null
+        }))
+        .unwrap();
+        assert_eq!(fell_back.engine, "rules");
+        assert_eq!(fell_back.engine_requested, "onnx_defect");
+        assert_eq!(
+            fell_back.engine_fallback_reason.as_deref(),
+            Some("missing optional dependency: onnxruntime")
+        );
+        assert!(fell_back.detectors.is_empty());
+        assert!(fell_back.backend_model.is_none());
+
+        let ran: WatchdogReport = serde_json::from_value(json!({
+            "engine": "onnx_defect",
+            "engine_requested": "onnx_defect",
+            "engine_fallback_reason": null,
+            "detectors": ["onnx_defect"],
+            "backend_model": "watchdog_defect.onnx"
+        }))
+        .unwrap();
+        assert_eq!(ran.engine, "onnx_defect");
+        assert!(ran.engine_fallback_reason.is_none());
+        assert_eq!(ran.detectors, vec!["onnx_defect".to_string()]);
+        assert_eq!(ran.backend_model.as_deref(), Some("watchdog_defect.onnx"));
+    }
+
+    #[test]
     fn watchdog_report_defaults_for_legacy_json() {
         // Older records lack the v1 fields; they must still deserialize with
         // safe defaults so historical runs remain readable.
@@ -145,5 +185,9 @@ mod tests {
         assert!(!report.exif_transposed);
         assert_eq!(report.max_decode_pixels, 0);
         assert!(!report.mask_consumed);
+        // Legacy records predate the engine seam; default to the rule layer.
+        assert_eq!(report.engine, "");
+        assert!(report.detectors.is_empty());
+        assert!(report.engine_fallback_reason.is_none());
     }
 }

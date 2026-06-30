@@ -407,6 +407,7 @@ export const defaultExecutors: ExecutorRegistry = {
       targetBounds: (ctx.inputs.target_bounds as Bounds | undefined) || undefined,
       watchTargets: String(ctx.params.watch_targets ?? "").trim() || undefined,
       mode: String(ctx.params.mode ?? "balanced") || undefined,
+      engine: String(ctx.params.engine ?? "rules").trim() || undefined,
       outputDir: outputDir || undefined,
       outputName: String(ctx.params.output_name ?? "").trim() || undefined,
     });

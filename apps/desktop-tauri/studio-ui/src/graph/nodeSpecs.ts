@@ -974,7 +974,16 @@ export const NODE_SPECS: Record<string, NodeSpec> = {
         label: "Watch targets",
         control: "text",
         defaultValue: "",
-        hint: "comma list of face,hands,text,logo,product_edges (empty = all); hands/text/logo are skipped in Phase 1",
+        hint: "comma list of face,hands,text,logo,product_edges (empty = all); hands/text/logo are skipped unless an ML engine covers them",
+      },
+      {
+        key: "engine",
+        label: "Engine",
+        control: "select",
+        options: ["rules", "onnx_defect"],
+        defaultValue: "rules",
+        inline: true,
+        hint: "rules = built-in CPU rule layer (always available); onnx_defect = opt-in ML detector for hands/text/logo, falls back to rules when its weight/deps are missing",
       },
       {
         key: "output_dir",

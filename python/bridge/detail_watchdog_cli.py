@@ -32,9 +32,17 @@ bounds what can be detected honestly on the CPU:
 * ``color_mismatch`` -- the subject's mean colour drifting from the connected
   ``visual_context`` background colour.
 
-Semantic detection of hands, packaging text and logo deformation needs the
-later GPU/VLM backend and is intentionally **not** attempted here; those watch
-targets are recorded as skipped in the report rather than guessed at.
+Semantic detection of hands, packaging text and logo deformation needs a
+learned detector. The rule layer never attempts them on its own; those watch
+targets are recorded as skipped in the report rather than guessed at. They are
+graduated to real findings by an **opt-in** ML detector behind the ``--engine``
+seam (``detector_backends/``): ``--engine onnx_defect`` runs a learned detector
+when its optional dep (``onnxruntime``) and weight are present, merging its
+findings on top of the rule findings; otherwise the rule layer runs alone and
+the report records why (``engine_fallback_reason``). ``rules`` stays the default
+and the always-available baseline, so the node never hard-fails on a box without
+the model. ``--probe-engines`` prints which engines are usable so the UI can
+grey out unavailable ones.
 
 The emitted JSON is ``{"fixed_image", "quality_report", "issue_masks"}`` where
 ``fixed_image`` is the unchanged input (Phase 1 never repaints), the report
@@ -91,8 +99,13 @@ _MODES: dict[str, dict[str, float]] = {
 }
 
 _ALL_TARGETS = ("face", "hands", "text", "logo", "product_edges")
-# Watch targets that the CPU Phase-1 heuristics cannot honestly detect.
+# Watch targets that the CPU rule layer cannot honestly detect on its own; an
+# opt-in ML detector (``--engine``) graduates the ones it covers out of this set.
 _UNSUPPORTED_TARGETS = ("hands", "text", "logo")
+
+# The always-available rule layer is the default "engine"; learned detectors
+# register in ``detector_backends`` and are selected by ``--engine``.
+_RULES_ENGINE = "rules"
 
 
 def _safe_stem(image_path: str) -> str:
@@ -465,6 +478,66 @@ def _load_json_arg(raw: str | None, label: str) -> dict[str, Any] | None:
     return parsed if isinstance(parsed, dict) else None
 
 
+def _run_engine(
+    engine_requested: str,
+    rgb: "np.ndarray",
+    alpha: "np.ndarray",
+    watch_set: set[str],
+) -> dict[str, Any]:
+    """Run the opt-in ML detector for ``engine_requested`` (or the rule-only path).
+
+    Returns the dispatch telemetry plus any merged issues. Any unavailability
+    (unknown engine, missing deps / weight, runtime error) degrades to the
+    rule-only report and records ``fallback_reason`` -- the node never crashes
+    on a box without the model.
+    """
+    result: dict[str, Any] = {
+        "engine": _RULES_ENGINE,
+        "fallback_reason": None,
+        "detectors": [],
+        "backend_model": None,
+        "issues": [],
+        "covered": set(),
+    }
+    if engine_requested == _RULES_ENGINE:
+        return result
+
+    from detector_backends import DetectorUnavailable, resolve
+
+    backend = resolve(engine_requested)
+    if backend is None:
+        result["fallback_reason"] = f"unknown engine {engine_requested!r}"
+        return result
+
+    ok, reason = backend.available()
+    if not ok:
+        result["fallback_reason"] = reason
+        return result
+
+    try:
+        issues = backend.detect(rgb, alpha, watch_set)
+    except DetectorUnavailable as err:
+        result["fallback_reason"] = err.reason
+        return result
+    except Exception as err:  # noqa: BLE001 - degrade to rules, never crash
+        result["fallback_reason"] = f"{type(err).__name__}: {err}"
+        return result
+
+    result["engine"] = backend.id
+    result["detectors"] = [backend.id]
+    result["issues"] = issues
+    # The backend honestly covers the targets it watches, whether or not it found
+    # a defect there; those graduate out of ``skipped_targets``.
+    result["covered"] = set(getattr(backend, "targets", ())) & watch_set
+    try:
+        from pathlib import Path as _Path
+
+        result["backend_model"] = _Path(backend.weight_path()).name
+    except Exception:  # noqa: BLE001 - the model name is best-effort telemetry
+        result["backend_model"] = None
+    return result
+
+
 def watch(args: argparse.Namespace) -> dict[str, Any]:
     image_path = (args.image or "").strip()
     if not image_path or not Path(image_path).is_file():
@@ -480,7 +553,8 @@ def watch(args: argparse.Namespace) -> dict[str, Any]:
     unknown = sorted(watch_set - set(_ALL_TARGETS))
     if unknown:
         raise ValueError(f"unknown watch target(s): {unknown}; expected {list(_ALL_TARGETS)}")
-    skipped = sorted(watch_set & set(_UNSUPPORTED_TARGETS))
+
+    engine_requested = (getattr(args, "engine", _RULES_ENGINE) or _RULES_ENGINE).strip().lower() or _RULES_ENGINE
 
     max_decode_pixels = int(max(0, getattr(args, "max_decode_pixels", _DEFAULT_MAX_DECODE_PIXELS)))
 
@@ -506,6 +580,12 @@ def watch(args: argparse.Namespace) -> dict[str, Any]:
     mismatch = _detect_color_mismatch(rgb, alpha, background_mean, thresholds)
     if mismatch is not None:
         issues.append(mismatch)
+
+    # Opt-in ML pass: merges semantic findings (hands/text/logo) on top of the
+    # rule findings and graduates the targets it covers out of skipped_targets.
+    engine = _run_engine(engine_requested, rgb, alpha, watch_set)
+    issues.extend(engine["issues"])
+    skipped = sorted((watch_set & set(_UNSUPPORTED_TARGETS)) - engine["covered"])
 
     quality_report = {
         "status": _status(issues),
@@ -539,6 +619,14 @@ def watch(args: argparse.Namespace) -> dict[str, Any]:
             # The optional --mask is advisory in Phase 1; detection runs on the
             # image's own alpha rim, so the supplied matte is not consumed.
             "mask_consumed": False,
+            # ML detector seam telemetry. ``engine`` is what actually ran
+            # (``rules`` when the requested engine was unavailable);
+            # ``detectors`` lists the learned passes that ran on top of rules.
+            "engine": engine["engine"],
+            "engine_requested": engine_requested,
+            "engine_fallback_reason": engine["fallback_reason"],
+            "detectors": engine["detectors"],
+            "backend_model": engine["backend_model"],
         },
     }
 
@@ -573,6 +661,17 @@ def build_parser() -> argparse.ArgumentParser:
         "--mode", default="balanced", help="strict | balanced | lenient"
     )
     parser.add_argument(
+        "--engine",
+        default=_RULES_ENGINE,
+        help="detection engine: rules (default) | onnx_defect (opt-in ML, falls back to rules)",
+    )
+    parser.add_argument(
+        "--probe-engines",
+        dest="probe_engines",
+        action="store_true",
+        help="print engine availability JSON and exit (UI capability probe)",
+    )
+    parser.add_argument(
         "--max-decode-pixels",
         dest="max_decode_pixels",
         type=int,
@@ -602,6 +701,11 @@ def build_parser() -> argparse.ArgumentParser:
 
 def main(argv: list[str] | None = None) -> int:
     args = build_parser().parse_args(argv)
+    if getattr(args, "probe_engines", False):
+        from detector_backends import probe
+
+        sys.stdout.write(json.dumps(probe(), ensure_ascii=False))
+        return 0
     try:
         result = watch(args)
     except Exception as err:  # noqa: BLE001 - surface a single clean error line

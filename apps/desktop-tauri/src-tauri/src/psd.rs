@@ -965,6 +965,23 @@ pub(crate) struct WatchdogReport {
     /// image's own alpha rim, so the supplied matte is advisory only (`false`).
     #[serde(default)]
     pub(crate) mask_consumed: bool,
+    /// Detection engine that actually ran: `rules` (always-on CPU baseline) or a
+    /// learned detector id (e.g. `onnx_defect`) when its deps/weight were present.
+    #[serde(default)]
+    pub(crate) engine: String,
+    /// Engine the node asked for (may differ from `engine` on fallback).
+    #[serde(default)]
+    pub(crate) engine_requested: String,
+    /// Why the rule-only path was used when an ML engine was requested but could
+    /// not run (missing dep/weight, unknown engine, runtime error); else null.
+    #[serde(default)]
+    pub(crate) engine_fallback_reason: Option<String>,
+    /// Learned detector passes that ran on top of the rule layer.
+    #[serde(default)]
+    pub(crate) detectors: Vec<String>,
+    /// File name of the weight the ML detector loaded, when one ran.
+    #[serde(default)]
+    pub(crate) backend_model: Option<String>,
 }
 
 /// Result of the **Detail Watchdog** node: the (unchanged, Phase 1) candidate
@@ -1000,6 +1017,7 @@ pub(crate) fn detect_quality_issues(
     target_bounds: Option<String>,
     watch_targets: Option<String>,
     mode: Option<String>,
+    engine: Option<String>,
     output_dir: Option<String>,
     output_name: Option<String>,
 ) -> Result<DetectQualityResult, String> {
@@ -1025,6 +1043,8 @@ pub(crate) fn detect_quality_issues(
         .arg(mode.as_deref().unwrap_or("balanced"))
         .arg("--watch-targets")
         .arg(watch_targets.as_deref().unwrap_or(""))
+        .arg("--engine")
+        .arg(engine.as_deref().unwrap_or("rules"))
         .arg("--visual-context")
         .arg(visual_context.as_deref().unwrap_or(""))
         .arg("--target-bounds")

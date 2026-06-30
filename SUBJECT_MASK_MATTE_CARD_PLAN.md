@@ -348,6 +348,37 @@ PSD Export
   -> 写入 final.psd / preview.png / metadata.json
 ```
 
+## 架构决定（节点 / 共享弹窗 / 工具注册表）
+
+冻结契约见 [`docs/cards/subject-mask-matte.md`](docs/cards/subject-mask-matte.md)。
+关键决定：
+
+**节点本体要轻，重编辑放共享弹窗。** graph 已有 LOD（按缩放渲染）+ 懒加载缩略图
+（media discipline），把画笔/钢笔 canvas 塞进节点 body 会和这两个优化直接冲突。
+
+```text
+节点 body  = 缩略图预览 + Auto / Edit / Apply + 轻量"点选"
+共享弹窗   = 完整 canvas（画笔/橡皮/魔棒/羽化/撤销重做）—— 复用组件，非本卡专属
+节点只持有结果（mask / cutout / edit_paths），不持有编辑器
+```
+
+**共享弹窗 = 可复用组件，不是 Subject Mask 专属。** `Refine Mask Edge` /
+`Detail Repaint` 将来也要"预览 + 局部编辑"，应打开同一个弹窗、注册不同工具集。
+
+**工具注册表（ready / planned）支撑增量上线。** 弹窗不写死工具，渲染一张注册表，
+每个工具带状态：`ready` 正常显示，`planned` 灰掉。这就是"做好的放一个、没做的先放
+一个"——Phase 1 上画笔/橡皮/魔棒/羽化，钢笔(`pen`)、套索(`lasso`)、matting 先 `planned`
+占位，不阻塞出货。
+
+**"节点上点选计算选中的块" = 同一交互、两阶段后端。**
+
+```text
+Phase 1（无模型，CPU）：点选 = 魔棒 / 洪水填充，按颜色相似度选一块连通区域
+Phase 2（接模型）   ：点选 = SAM point-prompt，模型算 mask（executor: api/hybrid）
+```
+
+UI 先按"点 → 得到一块选区"做好，后端 Phase 1/2 热替换，前端不重写。
+
 ## 结论
 
 这个卡片应该做，而且应该是 H-Gripe Studio 的核心生产卡片之一。

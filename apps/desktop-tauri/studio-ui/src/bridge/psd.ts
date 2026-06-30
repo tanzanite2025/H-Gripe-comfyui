@@ -1091,3 +1091,79 @@ export async function compositeRepaint(
     outputName: req.outputName ?? null,
   })) as CompositeRepaintResult;
 }
+
+/** Result of the local inpaint step (mirrors Rust `LocalRepaintResult`). */
+export interface LocalRepaintResult {
+  /** Regenerated crops, ready to feed into {@link compositeRepaint}. */
+  repainted: RepaintedCrop[];
+  skipped: unknown[];
+  /** Engine that actually ran (`provider` when no local backend was used). */
+  engine: string;
+  engine_requested: string;
+  /** Why the local backend was not used (provider selected / missing deps/weight). */
+  engine_fallback_reason?: string | null;
+  /** Weight name when a local backend ran, else null. */
+  backend_model?: string | null;
+  requested_count: number;
+  repainted_count: number;
+}
+
+export interface LocalRepaintRequest {
+  /** Manifest returned by {@link prepareRepaintRegions}. */
+  manifest: PrepareRepaintResult;
+  /** Engine id: `provider` (default) or a local backend like `sd_inpaint`. */
+  engine?: string;
+  /** Repaint prompt applied to every region. */
+  prompt?: string;
+  /** Inline JSON mapping issue type -> prompt (overrides `prompt` per region). */
+  promptMap?: string;
+  negativePrompt?: string;
+  strength?: number;
+  guidanceScale?: number;
+  steps?: number;
+  /** Random seed (<0 / undefined = nondeterministic). */
+  seed?: number;
+  outputDir?: string;
+  outputName?: string;
+}
+
+/**
+ * Run the opt-in **local** inpaint backend over a prepare manifest via the
+ * backend (`local_repaint_regions`), an alternative to the remote `image.edit`
+ * provider. `provider` (the default) or any backend whose deps/weights are
+ * missing yields an empty `repainted` list and a recorded reason so the caller
+ * falls back to the provider loop. The GPU inpaint pipeline only exists in the
+ * desktop build, so outside Tauri this returns the provider-fallback shape.
+ */
+export async function localRepaintRegions(req: LocalRepaintRequest): Promise<LocalRepaintResult> {
+  const invoke = tauriInvoke();
+  const engine = req.engine ?? "provider";
+  if (!invoke) {
+    return {
+      repainted: [],
+      skipped: [],
+      engine: "provider",
+      engine_requested: engine,
+      engine_fallback_reason:
+        engine === "provider"
+          ? "engine 'provider': remote image.edit owned by orchestrator"
+          : "local inpaint unavailable in browser dev (mock)",
+      backend_model: null,
+      requested_count: req.manifest.regions?.length ?? 0,
+      repainted_count: 0,
+    };
+  }
+  return (await invoke("local_repaint_regions", {
+    manifest: JSON.stringify(req.manifest),
+    engine,
+    prompt: req.prompt ?? null,
+    promptMap: req.promptMap ?? null,
+    negativePrompt: req.negativePrompt ?? null,
+    strength: req.strength ?? null,
+    guidanceScale: req.guidanceScale ?? null,
+    steps: req.steps ?? null,
+    seed: req.seed ?? null,
+    outputDir: req.outputDir ?? null,
+    outputName: req.outputName ?? null,
+  })) as LocalRepaintResult;
+}

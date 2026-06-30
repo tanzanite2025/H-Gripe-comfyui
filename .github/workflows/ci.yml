@@ -125,3 +125,27 @@ jobs:
 
       - name: Run bridge tests
         run: python -m pytest python/bridge/tests -q
+
+  python-bridge-onnx:
+    name: python bridge (onnx inference)
+    # Real-inference lane for the opt-in ONNX engines (matting / colour
+    # harmonise / defect): the per-engine `requires_onnx` tests synthesise a
+    # tiny ONNX model and exercise the actual `ort` session path (incl.
+    # `sr_backends.onnx_providers` execution-provider selection), so they only
+    # run where `onnx` + `onnxruntime` are importable. The default
+    # `python-bridge` lane installs neither, so they skip there; this lane adds
+    # them. Unlike the ViTMatte e2e job it needs no weight download (the model
+    # is synthesised), so it stays in the per-PR matrix rather than dispatch.
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.x'
+
+      - name: Install runtime + test deps (incl. ONNX)
+        run: pip install Pillow numpy pytest attrs onnx onnxruntime
+
+      - name: Run bridge tests (gated ONNX inference active)
+        run: python -m pytest python/bridge/tests -q

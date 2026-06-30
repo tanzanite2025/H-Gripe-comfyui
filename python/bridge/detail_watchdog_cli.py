@@ -526,9 +526,14 @@ def _run_engine(
     result["engine"] = backend.id
     result["detectors"] = [backend.id]
     result["issues"] = issues
-    # The backend honestly covers the targets it watches, whether or not it found
-    # a defect there; those graduate out of ``skipped_targets``.
-    result["covered"] = set(getattr(backend, "targets", ())) & watch_set
+    # Targets the backend honestly covers (whether or not it found a defect
+    # there) graduate out of ``skipped_targets``. Prefer ``covered_targets()``
+    # when the backend reports what its *loaded weight* can actually detect, so
+    # a partial weight does not claim targets it cannot find; fall back to the
+    # static capability set otherwise.
+    covered_fn = getattr(backend, "covered_targets", None)
+    covered = covered_fn() if callable(covered_fn) else getattr(backend, "targets", ())
+    result["covered"] = set(covered) & watch_set
     try:
         from pathlib import Path as _Path
 

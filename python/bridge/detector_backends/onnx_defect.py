@@ -91,6 +91,27 @@ class OnnxDefectBackend:
             )
         return True, "ready"
 
+    def covered_targets(self) -> set[str]:
+        """Watch targets the *loaded weight* can actually detect.
+
+        Derived from the label-map sidecar (intersected with this detector's
+        semantic :attr:`targets`), so a weight that only maps ``hands`` does not
+        claim to cover ``text`` / ``logo``. That keeps the watchdog report's
+        ``skipped_targets`` truthful: a target the weight cannot detect stays
+        skipped instead of silently graduating. Cheap (reads only the sidecar,
+        no ONNX session); falls back to the static :attr:`targets` when no
+        weight is resolvable so listing / probe stay sane.
+        """
+        try:
+            weight = self.weight_path()
+            if weight.is_file():
+                mapped = set(self._label_map(weight).values()) & set(self.targets)
+                if mapped:
+                    return mapped
+        except OSError:
+            pass
+        return set(self.targets)
+
     def _label_map(self, weight: Path) -> dict[int, str]:
         """Class-id -> target name, from the sidecar JSON or the target order."""
         sidecar = weight.with_suffix(weight.suffix + ".labels.json")

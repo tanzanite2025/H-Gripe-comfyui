@@ -127,9 +127,12 @@ card).
   detector seam covering hands/text/logo (`malformed_hands` / `garbled_text` /
   `deformed_logo`). Its weight is not bundled; ⛔ the actual trained
   face/hand-quality, OCR/logo and VLM models behind it.
-- ⛔ A real-inference CI job (opt-in like the ViTMatte e2e), since CI does not
-  install `onnxruntime` + a weight. A gated unit test synthesises a tiny ONNX
-  detector to exercise the path when the deps are present.
+- 🟡 The gated unit test that synthesises a tiny ONNX detector to exercise the
+  session path (incl. the `onnx_providers` execution-provider selection) now
+  runs in CI: the **`python bridge (onnx inference)`** lane installs `onnx` +
+  `onnxruntime` per PR (no weight download needed since the model is
+  synthesised). ⛔ remaining: real *trained-weight* inference (opt-in like the
+  ViTMatte e2e), since CI does not fetch the trained detector weight.
 
 ### 2.4 Dependencies & risks
 `onnxruntime`/`torch`, OCR + detection weights. Risks: false positives causing

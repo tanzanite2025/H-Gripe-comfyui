@@ -164,7 +164,9 @@ function ImageSourceCard({ id, path }: { id: string; path: string }) {
         <button
           type="button"
           title={t("node.mediaCropTitle")}
-          onClick={() => editing?.addBoundEdit?.(id, "crop")}
+          onClick={() =>
+            editing?.addBoundEdit?.(id, "crop", { params: { mode: "manual" }, openEditor: true })
+          }
         >
           {t("node.mediaCrop")}
         </button>

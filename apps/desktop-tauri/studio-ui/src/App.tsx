@@ -522,25 +522,6 @@ function Studio({ onToggleLang }: { onToggleLang: () => void }) {
     setTimeout(() => fitView({ padding: 0.2, duration: 300 }), 0);
   }, [nodes, edges, setNodes, takeSnapshot, fitView]);
 
-  // Right-click menu items, depending on whether a node or empty pane was hit.
-  const menuItems = useMemo<MenuItem[]>(() => {
-    if (!menu) return [];
-    if (menu.nodeId) {
-      const id = menu.nodeId;
-      const connected = edges.some((e) => e.source === id || e.target === id);
-      return [
-        { label: "复制", onClick: () => duplicateNode(id) },
-        { label: "断开全部连线", onClick: () => disconnectNode(id), disabled: !connected },
-        { label: "删除", onClick: () => deleteNode(id) },
-      ];
-    }
-    return [
-      { label: "整理布局", onClick: tidyLayout },
-      { label: "适应视图", onClick: () => fitView({ padding: 0.2, duration: 300 }) },
-      { label: "粘贴", onClick: pasteClipboard, disabled: !clipboard.current },
-    ];
-  }, [menu, edges, duplicateNode, disconnectNode, deleteNode, tidyLayout, fitView, pasteClipboard]);
-
   // Select every node and edge (Ctrl/Cmd+A).
   const selectAll = useCallback(() => {
     setNodes((ns) => ns.map((n) => ({ ...n, selected: true })));
@@ -583,18 +564,27 @@ function Studio({ onToggleLang }: { onToggleLang: () => void }) {
   const openCropEdit = useCallback((nodeId: string) => setCropEditNodeId(nodeId), []);
 
   // Spawn a bound edit node from a media source card: place it to the right,
-  // wire a `binding` edge (source.image -> edit.image), select it, and open the
-  // matching editor. The source card is never mutated; the new node becomes the
-  // output the rest of the workflow consumes. See docs/cards/generic-media-card.md.
+  // wire a `binding` edge (source.image -> edit.image), and select it. The
+  // source card is never mutated; the new node becomes the output the rest of
+  // the workflow consumes. `opts` chooses the manual/auto entry (see
+  // docs/cards/generic-media-card.md): `params` seeds the node, `openEditor`
+  // (default true) opens its editor for manual edits, and `run` runs the
+  // ancestor subgraph so a computed (auto) edit surfaces its result directly.
   const addBoundEdit = useCallback(
-    (sourceId: string, editKind: string) => {
+    (
+      sourceId: string,
+      editKind: string,
+      opts?: { params?: Record<string, unknown>; openEditor?: boolean; run?: boolean },
+    ) => {
       const source = nodes.find((n) => n.id === sourceId);
       if (!source) return;
       takeSnapshot();
       const editId = newNodeId(editKind);
       const pos = { x: source.position.x + 320, y: source.position.y };
       setNodes((ns) =>
-        ns.map((n) => ({ ...n, selected: false })).concat({ ...makeNode(editId, editKind, pos.x, pos.y), selected: true }),
+        ns
+          .map((n) => ({ ...n, selected: false }))
+          .concat({ ...makeNode(editId, editKind, pos.x, pos.y, opts?.params), selected: true }),
       );
       setEdges((es) =>
         es.concat({
@@ -607,8 +597,13 @@ function Studio({ onToggleLang }: { onToggleLang: () => void }) {
         }),
       );
       setSelectedId(editId);
-      if (editKind === "subjectMask") setMaskEditNodeId(editId);
-      if (editKind === "crop") setCropEditNodeId(editId);
+      if (opts?.openEditor !== false) {
+        if (editKind === "subjectMask") setMaskEditNodeId(editId);
+        if (editKind === "crop") setCropEditNodeId(editId);
+      }
+      // Defer the partial run to the effect that fires once the new node has
+      // landed in `nodes` (setNodes is async), matching the editor-confirm path.
+      if (opts?.run) pendingRunNode.current = editId;
     },
     [nodes, setNodes, setEdges, takeSnapshot, newNodeId],
   );
@@ -618,6 +613,54 @@ function Studio({ onToggleLang }: { onToggleLang: () => void }) {
     () => ({ onParamChange, openPreview, openMaskEdit, openCropEdit, addBoundEdit, runUpToNode }),
     [onParamChange, openPreview, openMaskEdit, openCropEdit, addBoundEdit, runUpToNode],
   );
+
+  // Right-click menu items, depending on whether a node or empty pane was hit.
+  const menuItems = useMemo<MenuItem[]>(() => {
+    if (!menu) return [];
+    if (menu.nodeId) {
+      const id = menu.nodeId;
+      const connected = edges.some((e) => e.source === id || e.target === id);
+      const kind = (nodes.find((n) => n.id === id)?.data as HgripeNodeData | undefined)?.kind;
+      const items: MenuItem[] = [];
+      // Auto (computed) crop entry: image cards spawn a bound crop node in
+      // auto_subject mode and run it straight away — no editor. The manual box
+      // lives on the card's "Crop" button instead. See generic-media-card.md.
+      if (kind === "imageSource") {
+        items.push({
+          label: t("node.cropAuto"),
+          onClick: () =>
+            addBoundEdit(id, "crop", {
+              params: { mode: "auto_subject" },
+              openEditor: false,
+              run: true,
+            }),
+        });
+      }
+      items.push(
+        { label: "复制", onClick: () => duplicateNode(id) },
+        { label: "断开全部连线", onClick: () => disconnectNode(id), disabled: !connected },
+        { label: "删除", onClick: () => deleteNode(id) },
+      );
+      return items;
+    }
+    return [
+      { label: "整理布局", onClick: tidyLayout },
+      { label: "适应视图", onClick: () => fitView({ padding: 0.2, duration: 300 }) },
+      { label: "粘贴", onClick: pasteClipboard, disabled: !clipboard.current },
+    ];
+  }, [
+    menu,
+    edges,
+    nodes,
+    t,
+    addBoundEdit,
+    duplicateNode,
+    disconnectNode,
+    deleteNode,
+    tidyLayout,
+    fitView,
+    pasteClipboard,
+  ]);
 
   const previewNode = useMemo(
     () => nodes.find((n) => n.id === previewNodeId) ?? null,

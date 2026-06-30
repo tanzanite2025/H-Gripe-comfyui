@@ -347,6 +347,46 @@ describe("matchLightColor", () => {
       defaultExecutors.matchLightColor(ctx("matchLightColor", {})),
     ).rejects.toThrow(/connected image/);
   });
+
+  it("defaults to the cpu engine and carries the engine telemetry through", async () => {
+    const out = (await defaultExecutors.matchLightColor(
+      ctx(
+        "matchLightColor",
+        { mode: "color_transfer", output_dir: "/out" },
+        { image: "/subject.png", background: "/bg.png" },
+      ),
+    )) as Record<string, unknown>;
+    const report = out.match_report as {
+      engine: string;
+      engine_requested: string;
+      engine_fallback_reason: string | null;
+      backend_model: string | null;
+    };
+    expect(report.engine).toBe("cpu");
+    expect(report.engine_requested).toBe("cpu");
+    expect(report.engine_fallback_reason).toBeNull();
+    expect(report.backend_model).toBeNull();
+  });
+
+  it("forwards an opt-in learned engine and records the browser-dev fallback", async () => {
+    const out = (await defaultExecutors.matchLightColor(
+      ctx(
+        "matchLightColor",
+        { mode: "color_transfer", engine: "onnx_harmonize", output_dir: "/out" },
+        { image: "/subject.png", background: "/bg.png" },
+      ),
+    )) as Record<string, unknown>;
+    const report = out.match_report as {
+      engine: string;
+      engine_requested: string;
+      engine_fallback_reason: string | null;
+    };
+    // Outside Tauri the learned engine cannot run, so the mock falls back to
+    // cpu but still surfaces what was requested and why it was not used.
+    expect(report.engine).toBe("cpu");
+    expect(report.engine_requested).toBe("onnx_harmonize");
+    expect(report.engine_fallback_reason).toBe("engine unavailable in browser dev mock");
+  });
 });
 
 describe("refineMaskEdge", () => {

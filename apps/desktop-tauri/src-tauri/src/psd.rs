@@ -525,6 +525,20 @@ pub(crate) struct MatchReport {
     /// `[width, height]` of the written image.
     #[serde(default)]
     pub(crate) output_size: Option<[i64; 2]>,
+    /// The match engine that actually ran (`cpu` heuristic or a backend id,
+    /// e.g. `onnx_harmonize`).
+    #[serde(default)]
+    pub(crate) engine: String,
+    /// The engine the node asked for (may differ from `engine` on fallback).
+    #[serde(default)]
+    pub(crate) engine_requested: String,
+    /// Why the requested engine was not used (missing deps/weight, no
+    /// background reference, …); else `null`.
+    #[serde(default)]
+    pub(crate) engine_fallback_reason: Option<String>,
+    /// Weight file name when a learned backend ran, else `null`.
+    #[serde(default)]
+    pub(crate) backend_model: Option<String>,
 }
 
 /// Result of the **Light & Color Match** node: the written matched image, a
@@ -565,6 +579,7 @@ pub(crate) fn match_light_color(
     highlight_strength: Option<f64>,
     protect_saturation: Option<bool>,
     protect_brand_color: Option<bool>,
+    engine: Option<String>,
     output_dir: Option<String>,
     output_name: Option<String>,
 ) -> Result<ColorMatchResult, String> {
@@ -597,6 +612,8 @@ pub(crate) fn match_light_color(
         .arg(shadow_strength.unwrap_or(0.0).to_string())
         .arg("--highlight-strength")
         .arg(highlight_strength.unwrap_or(0.0).to_string())
+        .arg("--engine")
+        .arg(engine.as_deref().unwrap_or("cpu"))
         .arg("--output-dir")
         .arg(output_dir.as_deref().unwrap_or(""))
         .arg("--output-name")
@@ -1135,7 +1152,13 @@ fn run_engine_probe(python: &Path, dir: &Path, cli_name: &str) -> Result<CliEngi
         return Err(format!("{cli_name} not found at {}", script.display()));
     }
     let mut cmd = std::process::Command::new(python);
-    cmd.arg(&script).arg("--probe-engines").current_dir(dir);
+    // Every card CLI requires `--image`; the probe short-circuits before the
+    // image is read, so a placeholder satisfies argparse without touching disk.
+    cmd.arg(&script)
+        .arg("--image")
+        .arg("__engine_probe__")
+        .arg("--probe-engines")
+        .current_dir(dir);
     #[cfg(windows)]
     {
         use std::os::windows::process::CommandExt;
@@ -1166,7 +1189,8 @@ pub(crate) fn probe_engines(dir: Option<String>) -> Result<EngineProbeReport, St
     let python = project_python(&dir);
 
     // (node kind, CLI) for every card that exposes an `engine` param.
-    const CARDS: [(&str, &str); 3] = [
+    const CARDS: [(&str, &str); 4] = [
+        ("matchLightColor", "color_match_cli.py"),
         ("imageEnhance", "image_enhance_cli.py"),
         ("detailWatchdog", "detail_watchdog_cli.py"),
         ("detailRepaint", "detail_repaint_cli.py"),

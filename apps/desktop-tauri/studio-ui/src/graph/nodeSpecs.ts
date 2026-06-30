@@ -522,6 +522,16 @@ export const NODE_SPECS: Record<string, NodeSpec> = {
         inline: true,
       },
       {
+        key: "engine",
+        label: "Engine",
+        control: "select",
+        options: ["cpu", "onnx_harmonize"],
+        defaultValue: "cpu",
+        inline: true,
+        hint: "cpu = built-in Lab transfer / histogram match (always available); onnx_harmonize = opt-in learned harmoniser, falls back to cpu when its weight/deps are missing",
+        visibleWhen: { param: "mode", in: ["color_transfer", "histogram_match", "hybrid"] },
+      },
+      {
         key: "strength",
         label: "Strength",
         control: "slider",

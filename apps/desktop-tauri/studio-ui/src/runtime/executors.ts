@@ -318,6 +318,7 @@ export const defaultExecutors: ExecutorRegistry = {
       highlightStrength: Number(ctx.params.highlight_strength ?? 0),
       protectSaturation: Boolean(ctx.params.protect_saturation ?? false),
       protectBrandColor: Boolean(ctx.params.protect_brand_color ?? true),
+      engine: String(ctx.params.engine ?? "cpu") || undefined,
       outputDir: outputDir || undefined,
       outputName: String(ctx.params.output_name ?? "").trim() || undefined,
     });

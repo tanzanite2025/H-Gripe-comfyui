@@ -237,3 +237,75 @@ def test_default_output_name(tmp_path: Path) -> None:
     subj = _solid_rgb(tmp_path / "subject.png", (16, 16), (40, 90, 180))
     out = _run(subj, output_dir=tmp_path)
     assert Path(out["matched_image"]).name == "subject_matched.png"
+
+
+# --------------------------------------------------------------------------- #
+# engine seam (learned matcher dispatch + telemetry)
+# --------------------------------------------------------------------------- #
+def test_engine_defaults_to_cpu(tmp_path: Path) -> None:
+    subj = _solid_rgb(tmp_path / "s.png", (16, 16), (40, 90, 180))
+    bg = _solid_rgb(tmp_path / "b.png", (16, 16), (200, 120, 40))
+    report = _run(subj, background=bg, mode="color_transfer", output_dir=tmp_path)["match_report"]
+    assert report["engine"] == "cpu"
+    assert report["engine_requested"] == "cpu"
+    assert report["engine_fallback_reason"] is None
+    assert report["backend_model"] is None
+
+
+def test_learned_engine_falls_back_to_cpu_when_unavailable(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # No onnxruntime / weight on this box: the heuristic still runs and the
+    # report explains why the learned engine was not used.
+    monkeypatch.delenv("HGRIPE_COLOR_MODEL", raising=False)
+    monkeypatch.setenv("HGRIPE_MODEL_CACHE", "/definitely/not/here")
+    subj = _solid_rgb(tmp_path / "s.png", (16, 16), (40, 90, 180))
+    bg = _solid_rgb(tmp_path / "b.png", (16, 16), (200, 120, 40))
+    report = _run(
+        subj, background=bg, mode="color_transfer", engine="onnx_harmonize", output_dir=tmp_path
+    )["match_report"]
+    assert report["engine"] == "cpu"
+    assert report["engine_requested"] == "onnx_harmonize"
+    assert report["engine_fallback_reason"]
+    assert report["backend_model"] is None
+    assert report["applied"] is True
+
+
+def test_unknown_engine_falls_back_with_reason(tmp_path: Path) -> None:
+    subj = _solid_rgb(tmp_path / "s.png", (16, 16), (40, 90, 180))
+    bg = _solid_rgb(tmp_path / "b.png", (16, 16), (200, 120, 40))
+    report = _run(
+        subj, background=bg, mode="color_transfer", engine="bogus", output_dir=tmp_path
+    )["match_report"]
+    assert report["engine"] == "cpu"
+    assert "unknown engine" in report["engine_fallback_reason"]
+
+
+def test_learned_engine_skipped_when_no_background(tmp_path: Path) -> None:
+    subj = _solid_rgb(tmp_path / "s.png", (16, 16), (40, 90, 180))
+    report = _run(subj, mode="color_transfer", engine="onnx_harmonize", output_dir=tmp_path)[
+        "match_report"
+    ]
+    assert report["engine"] == "cpu"
+    assert report["engine_fallback_reason"] == "no background reference"
+
+
+def test_learned_engine_skipped_for_prompt_only(tmp_path: Path) -> None:
+    subj = _solid_rgb(tmp_path / "s.png", (16, 16), (40, 90, 180))
+    bg = _solid_rgb(tmp_path / "b.png", (16, 16), (200, 120, 40))
+    report = _run(
+        subj, background=bg, mode="prompt_only", engine="onnx_harmonize", output_dir=tmp_path
+    )["match_report"]
+    assert report["engine"] == "cpu"
+    assert report["engine_fallback_reason"] == "mode does not change pixels"
+
+
+def test_probe_engines_flag_emits_capability_json(tmp_path: Path, capsys) -> None:
+    rc = cli.main(["--image", "ignored", "--probe-engines"])
+    assert rc == 0
+    import json
+
+    payload = json.loads(capsys.readouterr().out)
+    assert payload["engines"]["cpu"]["available"] is True
+    assert "onnx_harmonize" in payload["engines"]
+    assert "model_cache_dir" in payload

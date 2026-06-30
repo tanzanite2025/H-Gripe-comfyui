@@ -271,6 +271,14 @@ export interface MatchReport {
   note?: string;
   /** `[width, height]` of the written image. */
   output_size?: [number, number];
+  /** Match engine that actually ran (`cpu` heuristic, or a backend id). */
+  engine?: string;
+  /** Engine the node asked for (differs from `engine` on fallback). */
+  engine_requested?: string;
+  /** Why the requested engine was not used (missing deps/weight, no background, …). */
+  engine_fallback_reason?: string | null;
+  /** Weight file name when a learned backend ran, else `null`. */
+  backend_model?: string | null;
 }
 
 /** Result of the Light & Color Match node (`match_light_color`). */
@@ -300,6 +308,8 @@ export interface MatchLightColorRequest {
   protectSaturation?: boolean;
   /** Damp the shift on high-chroma (brand) pixels. */
   protectBrandColor?: boolean;
+  /** Match engine: `cpu` (default heuristic) or `onnx_harmonize` (opt-in, falls back to cpu). */
+  engine?: string;
   /** Directory for the written matched PNG. */
   outputDir?: string;
   /** Base name for the matched PNG. */
@@ -337,6 +347,11 @@ export async function matchLightColor(req: MatchLightColorRequest): Promise<Colo
         before,
         after: applied ? { mean_color: [150, 138, 120], color_temperature: 5200, contrast: 0.27 } : before,
         output_size: [1024, 1400],
+        engine: "cpu",
+        engine_requested: req.engine ?? "cpu",
+        engine_fallback_reason:
+          (req.engine ?? "cpu") === "cpu" ? null : "engine unavailable in browser dev mock",
+        backend_model: null,
       },
     };
   }
@@ -351,6 +366,7 @@ export async function matchLightColor(req: MatchLightColorRequest): Promise<Colo
     highlightStrength: req.highlightStrength ?? null,
     protectSaturation: req.protectSaturation ?? null,
     protectBrandColor: req.protectBrandColor ?? null,
+    engine: req.engine ?? null,
     outputDir: req.outputDir ?? null,
     outputName: req.outputName ?? null,
   })) as ColorMatchResult;

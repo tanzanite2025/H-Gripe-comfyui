@@ -20,6 +20,7 @@ this same contract.
 | `mask` | image path | no | An explicit matte; takes precedence over the subject alpha. |
 | `background` | image path | no | Target background; its colour is blended into the edge band when `background_blend_strength > 0`. |
 | `placeholder_mask` | image path | no | PSD placeholder mask (advisory in Phase 1; not consumed by the pipeline). |
+| `trimap` | image path | no | Matting trimap (FG=255 / unknown=128 / BG=0) from `Subject Mask`. Its *unknown* band is protected from the erode/feather clean-up so hair / fur / glass continuous alpha survives instead of being treated as binary fringe. |
 
 ## Parameters
 
@@ -66,6 +67,14 @@ refined; the connected `background` is resampled the same way.
 6. **Background blend** — when a background is connected, blend the band toward
    the target colour with weight `band * background_blend_strength`.
 
+When a `trimap` is connected, an extra **unknown-band protection** step runs
+right after the feather (before the edge band is measured): inside the trimap's
+unknown level (mid-grey, `0.25 < t < 0.75`, loaded nearest-neighbour so the
+three levels survive resize) the refined matte is replaced with the upstream
+soft alpha, blended via a lightly-feathered weight so the protected region joins
+the cleaned-up definite areas without a step. This keeps genuine continuous
+alpha (hair / fur / glass) intact rather than eroding/feathering it as fringe.
+
 ## Colour space & bit depth
 
 Inputs are normalised to an 8-bit RGB working space so decontamination and
@@ -96,7 +105,8 @@ background blend sample honest colour; the subject's original mode is recorded a
 
 `preset`, `source_mask`, `source_mode`, `exif_transposed`, `max_decode_pixels`,
 `erode_px`, `dilate_px`, `feather_px`, `guided_radius`, `edge_decontaminate`,
-`background_blend_strength`, `background_applied`, `edge_band_px`,
+`background_blend_strength`, `background_applied`, `trimap_applied`,
+`protected_band_px`, `edge_band_px`,
 `coverage_before`, `coverage_after`, `output_size`, and an optional `note` when
 there was no transitional edge to refine.
 
@@ -114,7 +124,8 @@ there was no transitional edge to refine.
   feather widens the band, guided filter snaps to the luminance edge,
   decontamination pulls subject colour into the band, background blend, explicit
   mask precedence, the no-edge note, preset parsing, decode guard, CMYK source
-  mode, invalid preset, missing image / background, output naming (run:
-  `pytest python/bridge/tests`).
+  mode, invalid preset, missing image / background, output naming, and trimap
+  unknown-band protection (the protected matte tracks the original soft alpha
+  where erosion would otherwise bite it away) (run: `pytest python/bridge/tests`).
 - `src-tauri/src/studio/edge_refine.rs` — the connected-image-input guard and
   param defaults matching the Python bridge.

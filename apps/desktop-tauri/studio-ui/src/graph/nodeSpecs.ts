@@ -606,6 +606,7 @@ export const NODE_SPECS: Record<string, NodeSpec> = {
       port("mask", "mask", "image"),
       port("alpha_image", "alpha image", "image"),
       port("cutout_image", "cutout image", "image"),
+      port("trimap", "trimap", "image"),
       port("matte_report", "matte report", "any"),
       port("edit_paths", "edit paths", "any"),
     ],
@@ -703,13 +704,14 @@ export const NODE_SPECS: Record<string, NodeSpec> = {
     executor: "local",
     title: "Mask Edge Refine",
     description:
-      "Clean a cut-out subject's matte so it drops into a PSD placeholder without white halos or fringing: erode/dilate morphology, guided-filter edge snapping, feather, and edge colour decontamination. Emits the refined image, refined mask, and an edge report. Presets hide the detail; pick 'custom' to expose every parameter.",
+      "Clean a cut-out subject's matte so it drops into a PSD placeholder without white halos or fringing: erode/dilate morphology, guided-filter edge snapping, feather, and edge colour decontamination. Connect the Subject Mask 'trimap' output to protect its unknown band (hair / fur / glass continuous alpha) from the erode/feather clean-up so fine detail survives. Emits the refined image, refined mask, and an edge report. Presets hide the detail; pick 'custom' to expose every parameter.",
     category: "control",
     inputs: [
       port("image", "image", "image"),
       port("mask", "mask", "image"),
       port("background", "background", "image"),
       port("placeholder_mask", "placeholder mask", "image"),
+      port("trimap", "trimap", "image"),
     ],
     outputs: [
       port("refined_image", "refined image", "image"),

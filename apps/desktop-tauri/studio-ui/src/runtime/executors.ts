@@ -341,6 +341,7 @@ export const defaultExecutors: ExecutorRegistry = {
       mask: (ctx.inputs.mask as string | undefined) || undefined,
       background: (ctx.inputs.background as string | undefined) || undefined,
       placeholderMask: (ctx.inputs.placeholder_mask as string | undefined) || undefined,
+      trimap: (ctx.inputs.trimap as string | undefined) || undefined,
       preset: String(ctx.params.preset ?? "natural") || undefined,
       erodePx: Number(ctx.params.erode_px ?? 1),
       dilatePx: Number(ctx.params.dilate_px ?? 0),

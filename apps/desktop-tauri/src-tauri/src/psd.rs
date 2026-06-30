@@ -696,6 +696,7 @@ pub(crate) fn refine_mask_edge(
     mask: Option<String>,
     background: Option<String>,
     placeholder_mask: Option<String>,
+    trimap: Option<String>,
     preset: Option<String>,
     erode_px: Option<i64>,
     dilate_px: Option<i64>,
@@ -727,6 +728,8 @@ pub(crate) fn refine_mask_edge(
         .arg(background.as_deref().unwrap_or(""))
         .arg("--placeholder-mask")
         .arg(placeholder_mask.as_deref().unwrap_or(""))
+        .arg("--trimap")
+        .arg(trimap.as_deref().unwrap_or(""))
         .arg("--preset")
         .arg(preset.as_deref().unwrap_or("natural"))
         .arg("--erode-px")

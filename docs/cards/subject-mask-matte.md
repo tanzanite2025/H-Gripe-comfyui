@@ -143,6 +143,7 @@ the morphology/brush set while pen/lasso stay stubbed.
 | `mask` | grayscale PNG | The matte (`L`); binary or feathered. |
 | `alpha_image` | RGBA PNG | The full image with the mask as alpha. |
 | `cutout_image` | RGBA PNG | Subject cropped to its bbox; feeds `Refine Mask Edge`. |
+| `trimap` | grayscale PNG | The matting trimap (FG=255 / unknown=128 / BG=0) that drove the soft alpha; empty when matting did not run. Wire it to `Refine Mask Edge`'s `trimap` input to protect the unknown band from the erode/feather clean-up. |
 | `matte_report` | object | Operations + provenance (see schema). |
 | `edit_paths` | object | Pen/lasso/brush record for re-editing (see schema). |
 
@@ -311,7 +312,13 @@ model id in `matte_report`.
    - *Landed (cascade 4, UI):* a dedicated `matting` paint tool in the Mask-Edit
      modal records `matte_strokes` (per-region trimap-unknown painting); the
      backend stamps them onto the trimap before matting (`parse_matte_strokes`).
-   - *Pending:* a trimap-aware hair refine path.
+   - *Landed (cascade 5, hand-off):* when matting runs the node persists its
+     driving trimap and surfaces it on a new `trimap` output. Connect that to
+     `Refine Mask Edge`'s `trimap` input and the refiner **protects the unknown
+     band**: inside it the upstream continuous alpha is kept instead of the
+     eroded/feathered edge, so hair / fur / glass survives the clean-up rather
+     than being treated as binary fringe (`edge_report.trimap_applied` /
+     `protected_band_px`).
 
 ## Backend boundary
 

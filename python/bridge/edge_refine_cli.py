@@ -287,6 +287,58 @@ def _coverage(mask: "np.ndarray") -> float:
     return round(float(np.clip(mask, 0.0, 1.0).mean()), 4)
 
 
+# The always-available CPU heuristic is the default "engine"; learned matters
+# register in ``matting_backends`` and are selected by ``--engine``.
+_CPU_ENGINE = "cpu"
+
+
+def _run_matting(
+    engine_requested: str,
+    rgb: "np.ndarray",
+    trimap: "np.ndarray",
+) -> tuple[dict[str, Any], "np.ndarray | None"]:
+    """Run the opt-in learned matter for ``engine_requested`` (or the CPU path).
+
+    Returns ``(telemetry, alpha)``. Any unavailability (unknown engine, missing
+    deps / weight, runtime error) degrades to the heuristic path (``alpha is
+    None``) and records ``fallback_reason`` -- the node never crashes on a box
+    without the model.
+    """
+    state: dict[str, Any] = {
+        "engine": _CPU_ENGINE,
+        "fallback_reason": None,
+        "backend_model": None,
+    }
+
+    from matting_backends import MattingUnavailable, resolve
+
+    backend = resolve(engine_requested)
+    if backend is None:
+        state["fallback_reason"] = f"unknown engine {engine_requested!r}"
+        return state, None
+
+    ok, reason = backend.available()
+    if not ok:
+        state["fallback_reason"] = reason
+        return state, None
+
+    try:
+        alpha = backend.matte(rgb, trimap)
+    except MattingUnavailable as err:
+        state["fallback_reason"] = err.reason
+        return state, None
+    except Exception as err:  # noqa: BLE001 - degrade to heuristic, never crash
+        state["fallback_reason"] = f"{type(err).__name__}: {err}"
+        return state, None
+
+    state["engine"] = backend.id
+    try:
+        state["backend_model"] = Path(backend.weight_path()).name
+    except Exception:  # noqa: BLE001 - the model name is best-effort telemetry
+        state["backend_model"] = None
+    return state, alpha
+
+
 def refine(args: argparse.Namespace) -> dict[str, Any]:
     image_path = (args.image or "").strip()
     if not image_path or not Path(image_path).is_file():
@@ -350,6 +402,28 @@ def refine(args: argparse.Namespace) -> dict[str, Any]:
         # cleaned-up definite regions instead of leaving a step.
         protect = _feather(unknown, 1.5) if float(unknown.sum()) > _EPS else unknown
 
+    # Opt-in learned matter: solve a high-quality alpha for the unknown band. It
+    # only helps where a trimap marks genuine continuous alpha, so without one we
+    # keep the heuristic; any unavailability degrades gracefully (see below). The
+    # solved alpha replaces the source matte in the protected band only, so the
+    # definite FG/BG regions still get the heuristic edge clean-up.
+    engine_requested = (getattr(args, "engine", _CPU_ENGINE) or _CPU_ENGINE).strip()
+    engine_state: dict[str, Any] = {
+        "engine": _CPU_ENGINE,
+        "fallback_reason": None,
+        "backend_model": None,
+    }
+    band_source = mask
+    if engine_requested != _CPU_ENGINE:
+        if trimap is None:
+            engine_state["fallback_reason"] = (
+                "no trimap reference (learned matting needs an unknown band)"
+            )
+        else:
+            engine_state, engine_alpha = _run_matting(engine_requested, rgb, trimap)
+            if engine_alpha is not None:
+                band_source = engine_alpha
+
     coverage_before = _coverage(mask)
 
     # 1) Morphology: bite the fringe in (erode), optionally grow back (dilate).
@@ -367,7 +441,7 @@ def refine(args: argparse.Namespace) -> dict[str, Any]:
     # detail is refined as continuous alpha rather than flattened to an edge.
     protected_band_px = 0
     if protect is not None:
-        refined = refined * (1.0 - protect) + mask * protect
+        refined = refined * (1.0 - protect) + band_source * protect
         refined = np.clip(refined, 0.0, 1.0)
         protected_band_px = int(round(float((protect > 0.05).sum())))
 
@@ -430,6 +504,10 @@ def refine(args: argparse.Namespace) -> dict[str, Any]:
         "coverage_before": coverage_before,
         "coverage_after": _coverage(refined),
         "output_size": [width, height],
+        "engine": engine_state["engine"],
+        "engine_requested": engine_requested,
+        "engine_fallback_reason": engine_state["fallback_reason"],
+        "backend_model": engine_state["backend_model"],
     }
     if note is not None:
         edge_report["note"] = note
@@ -519,11 +597,28 @@ def build_parser() -> argparse.ArgumentParser:
         default=_DEFAULT_MAX_DECODE_PIXELS,
         help="refuse inputs larger than this many pixels before decoding (0 disables)",
     )
+    parser.add_argument(
+        "--engine",
+        default=_CPU_ENGINE,
+        help="matte engine: cpu (default heuristic) | onnx_matting (opt-in learned, "
+        "needs a trimap, falls back to cpu)",
+    )
+    parser.add_argument(
+        "--probe-engines",
+        dest="probe_engines",
+        action="store_true",
+        help="print engine availability JSON and exit (UI capability probe)",
+    )
     return parser
 
 
 def main(argv: list[str] | None = None) -> int:
     args = build_parser().parse_args(argv)
+    if getattr(args, "probe_engines", False):
+        from matting_backends import probe
+
+        sys.stdout.write(json.dumps(probe(), ensure_ascii=False))
+        return 0
     try:
         result = refine(args)
     except Exception as err:  # noqa: BLE001 - surface a single clean error line

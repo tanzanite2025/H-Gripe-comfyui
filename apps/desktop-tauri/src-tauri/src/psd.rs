@@ -682,6 +682,20 @@ pub(crate) struct EdgeReport {
     /// `[width, height]` of the written images.
     #[serde(default)]
     pub(crate) output_size: Option<[i64; 2]>,
+    /// The matte engine that actually ran (`cpu` heuristic or a backend id,
+    /// e.g. `onnx_matting`).
+    #[serde(default)]
+    pub(crate) engine: String,
+    /// The engine the node asked for (may differ from `engine` on fallback).
+    #[serde(default)]
+    pub(crate) engine_requested: String,
+    /// Why the requested engine was not used (missing deps/weight, no trimap,
+    /// unknown engine, runtime error); else null.
+    #[serde(default)]
+    pub(crate) engine_fallback_reason: Option<String>,
+    /// The weight file the backend loaded (`null` on the CPU path).
+    #[serde(default)]
+    pub(crate) backend_model: Option<String>,
 }
 
 /// Result of the **Mask Edge Refine** node: the written refined RGBA image, the
@@ -724,6 +738,7 @@ pub(crate) fn refine_mask_edge(
     background_blend_strength: Option<f64>,
     output_dir: Option<String>,
     output_name: Option<String>,
+    engine: Option<String>,
 ) -> Result<RefineEdgeResult, String> {
     let dir = resolve_project_dir(&dir)?;
     let python = project_python(&dir);
@@ -764,6 +779,8 @@ pub(crate) fn refine_mask_edge(
         .arg(output_dir.as_deref().unwrap_or(""))
         .arg("--output-name")
         .arg(output_name.as_deref().unwrap_or(""))
+        .arg("--engine")
+        .arg(engine.as_deref().unwrap_or("cpu"))
         .current_dir(&dir);
     if edge_decontaminate.unwrap_or(false) {
         cmd.arg("--edge-decontaminate");
@@ -1189,11 +1206,12 @@ pub(crate) fn probe_engines(dir: Option<String>) -> Result<EngineProbeReport, St
     let python = project_python(&dir);
 
     // (node kind, CLI) for every card that exposes an `engine` param.
-    const CARDS: [(&str, &str); 4] = [
+    const CARDS: [(&str, &str); 5] = [
         ("matchLightColor", "color_match_cli.py"),
         ("imageEnhance", "image_enhance_cli.py"),
         ("detailWatchdog", "detail_watchdog_cli.py"),
         ("detailRepaint", "detail_repaint_cli.py"),
+        ("refineMaskEdge", "edge_refine_cli.py"),
     ];
 
     let mut cards = Vec::with_capacity(CARDS.len());

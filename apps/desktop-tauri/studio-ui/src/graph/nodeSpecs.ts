@@ -739,6 +739,15 @@ export const NODE_SPECS: Record<string, NodeSpec> = {
         hint: "clean = tight 1px bite, natural = soft 6px feather, soft = no bite, custom = expose all",
       },
       {
+        key: "engine",
+        label: "Engine",
+        control: "select",
+        options: ["cpu", "onnx_matting"],
+        defaultValue: "cpu",
+        inline: true,
+        hint: "cpu = built-in heuristic refine (always available); onnx_matting = opt-in learned matter, needs a connected trimap and falls back to cpu when its weight/deps are missing",
+      },
+      {
         key: "erode_px",
         label: "Erode px",
         control: "slider",

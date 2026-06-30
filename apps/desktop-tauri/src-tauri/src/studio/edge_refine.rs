@@ -70,6 +70,7 @@ pub(super) fn execute_studio_refine_mask_edge(
         Some(number_param(node, "background_blend_strength", 0.4)),
         Some(output_dir),
         optional(studio_value_to_string(node.params.get("output_name"))),
+        optional(studio_value_to_string(node.params.get("engine"))),
     )?;
 
     let report = serde_json::to_value(&result.edge_report)

@@ -437,6 +437,44 @@ describe("refineMaskEdge", () => {
       defaultExecutors.refineMaskEdge(ctx("refineMaskEdge", {})),
     ).rejects.toThrow(/connected image/);
   });
+
+  it("defaults to the cpu engine and carries the engine telemetry through", async () => {
+    const out = (await defaultExecutors.refineMaskEdge(
+      ctx(
+        "refineMaskEdge",
+        { preset: "natural", output_dir: "/out" },
+        { image: "/subject.png", trimap: "/trimap.png" },
+      ),
+    )) as Record<string, unknown>;
+    const report = out.edge_report as {
+      engine: string;
+      engine_requested: string;
+      engine_fallback_reason: string | null;
+      backend_model: string | null;
+    };
+    expect(report.engine).toBe("cpu");
+    expect(report.engine_requested).toBe("cpu");
+    expect(report.engine_fallback_reason).toBeNull();
+    expect(report.backend_model).toBeNull();
+  });
+
+  it("forwards an opt-in learned matter and records the browser-dev fallback", async () => {
+    const out = (await defaultExecutors.refineMaskEdge(
+      ctx(
+        "refineMaskEdge",
+        { preset: "natural", engine: "onnx_matting", output_dir: "/out" },
+        { image: "/subject.png", trimap: "/trimap.png" },
+      ),
+    )) as Record<string, unknown>;
+    const report = out.edge_report as {
+      engine: string;
+      engine_requested: string;
+      engine_fallback_reason: string | null;
+    };
+    expect(report.engine).toBe("cpu");
+    expect(report.engine_requested).toBe("onnx_matting");
+    expect(report.engine_fallback_reason).toBe("engine unavailable in browser dev mock");
+  });
 });
 
 describe("imageEnhance", () => {

@@ -177,6 +177,15 @@ export interface EditPaths {
   version: 1;
   paths: EditPath[];
   brush_strokes: BrushStroke[];
+  /**
+   * Trimap "unknown band" strokes for alpha matting (same shape as
+   * `brush_strokes`). When present, the backend paints these regions as the
+   * trimap *unknown* level on top of the auto `matting_band_px` ring, so the
+   * matter (ViTMatte / builtin guided filter) resolves soft alpha exactly where
+   * the user marked hair / fur / glass. Non-empty ⇒ matting runs even if the
+   * node's `alpha_matting` toggle is off. Read as `edit_paths.matte_strokes`.
+   */
+  matte_strokes: BrushStroke[];
   /** Ordered morphology / selection operations applied by the backend. */
   operations: MaskOperation[];
   /**
@@ -189,7 +198,7 @@ export interface EditPaths {
 }
 
 export function emptyEditPaths(): EditPaths {
-  return { version: 1, paths: [], brush_strokes: [], operations: [], points: [] };
+  return { version: 1, paths: [], brush_strokes: [], matte_strokes: [], operations: [], points: [] };
 }
 
 /** A subject detected by a Phase 2 model (empty in Phase 1). */

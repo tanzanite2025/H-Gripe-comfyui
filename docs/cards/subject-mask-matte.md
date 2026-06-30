@@ -104,10 +104,10 @@ without a frontend rewrite.
 | `feather` | ready | Gaussian-feather the mask edge. |
 | `pen` (bezier path) | **planned** | Phase 3 — path rasterised + boolean-combined with the mask. |
 | `lasso` | **planned** | Phase 3. |
-| `matting` (continuous alpha) | backend ready | Cascade 3 — the node's **Alpha matting** toggle resolves the binary edge into continuous alpha via a trimap (ViTMatte, else a builtin **guided-filter** matte). A dedicated edit-modal tool is still **planned**. |
+| `matting` (continuous alpha) | ready | Cascade 3/4 — a **paint** tool: stroke the trimap *unknown band* over hair / fur / glass; the backend resolves it into continuous alpha via a trimap (ViTMatte, else a builtin **guided-filter** matte). Recorded as `matte_strokes`. |
 
 `planned` tools render greyed ("coming soon"); this is what lets Phase 1 ship with
-the morphology/brush set while pen/lasso/matting stay stubbed.
+the morphology/brush set while pen/lasso stay stubbed.
 
 ## Inputs (ports)
 
@@ -130,8 +130,8 @@ the morphology/brush set while pen/lasso/matting stay stubbed.
 | `feather_px` | float | `0.0` | `>= 0` | Edge feather applied last. |
 | `grow_px` | int | `0` | any | Positive dilates, negative erodes. |
 | `fill_holes` | bool | `false` | | Close interior holes before feather. |
-| `alpha_matting` | bool | `false` | | Resolve the binary edge into continuous alpha via a trimap (hair / glass). Runs **ViTMatte** when its weight resolves, else a deterministic `builtin-cpu-matte` guided-filter matte. Applied after morphology, before `feather_px`. |
-| `matting_band_px` | int | `12` | `>= 0` | Width of the trimap *unknown* band the matter resolves (only when `alpha_matting` is on). |
+| `alpha_matting` | bool | `false` | | Resolve the binary edge into continuous alpha via a trimap (hair / glass). Runs **ViTMatte** when its weight resolves, else a deterministic `builtin-cpu-matte` guided-filter matte. Applied after morphology, before `feather_px`. Also runs automatically when `edit_paths.matte_strokes` is non-empty. |
+| `matting_band_px` | int | `12` | `>= 0` | Width of the *auto* trimap *unknown* band the matter resolves; hand-painted `matte_strokes` add to it. Used whenever matting runs. |
 | `output_dir` | path | run output dir | | Triplet written here. |
 | `output_name` | basename | `<image>_mask` | plain basename | Rejected if it contains `..` or a path separator (`studio_reject_unsafe_basename`). |
 | `max_decode_pixels` | int | `96_000_000` | `>= 0` (0 disables) | Rejects an **input** image / mask larger than this before decoding (decompression-bomb guard, via `studio_image`, aligned with the other cards). |
@@ -169,7 +169,7 @@ the morphology/brush set while pen/lasso/matting stay stubbed.
       { "type": "wand", "tolerance": 24 },
       { "type": "brush_subtract", "radius": 18 },
       { "type": "fill_holes" },
-      { "type": "alpha_matting", "provider": "vitmatte", "band_px": 12 },
+      { "type": "alpha_matting", "provider": "vitmatte", "band_px": 12, "painted_strokes": 2 },
       { "type": "feather", "px": 2.5 }
     ],
     "triplet": { "mask": true, "alpha_image": true, "cutout_image": true },
@@ -202,6 +202,9 @@ is the no-points path).
   "brush_strokes": [
     { "id": "stroke_1", "mode": "subtract", "radius": 18, "points": [[100, 120], [105, 124]] }
   ],
+  "matte_strokes": [
+    { "id": "matte_1", "radius": 16, "points": [[300, 200], [312, 214]] }
+  ],
   "operations": [ { "type": "feather", "amount": 2 } ],
   "points": [[420, 360], [690, 540]]
 }
@@ -209,8 +212,11 @@ is the no-points path).
 
 In Phase 1 `paths` (pen / lasso) are **stored but not rasterised** — the field is
 versioned so a workflow saved now stays loadable once Phase 3 adds rasterisation.
-`brush_strokes` and the morphology `operations` are applied. `points` are
-positive SAM 2 point prompts (image-space `[x, y]`) consumed by the `auto_*`
+`brush_strokes` and the morphology `operations` are applied. `matte_strokes` are
+trimap *unknown-band* strokes painted by the **Matting** tool: the backend
+stamps them as the unknown level on top of the auto `matting_band_px` ring, and
+their presence runs matting even when the `alpha_matting` flag is off. `points`
+are positive SAM 2 point prompts (image-space `[x, y]`) consumed by the `auto_*`
 model lane (Phase 2); they are ignored by the manual lanes.
 
 ## Colour space & bit depth
@@ -298,8 +304,10 @@ model id in `matte_report`.
      resolves the unknown band along real edges, so the toggle always works
      without the weight. The op is recorded in `matte_report.operations` and
      the soft matte hands off to `Refine Mask Edge`.
-   - *Pending:* a dedicated `matting` tool in the Mask-Edit modal (per-region
-     trimap painting) and a trimap-aware hair refine path.
+   - *Landed (cascade 4, UI):* a dedicated `matting` paint tool in the Mask-Edit
+     modal records `matte_strokes` (per-region trimap-unknown painting); the
+     backend stamps them onto the trimap before matting (`parse_matte_strokes`).
+   - *Pending:* a trimap-aware hair refine path.
 
 ## Backend boundary
 

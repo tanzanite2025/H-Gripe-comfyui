@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import {
   addBrushStroke,
+  addMatteStroke,
   addOperation,
   addPoint,
   canRedo,
@@ -51,6 +52,17 @@ describe("maskEdit reducer-style helpers", () => {
     expect(s.current.operations).toHaveLength(1);
     expect(editCount(s.current)).toBe(2);
     expect(isEmpty(s.current)).toBe(false);
+  });
+
+  it("records trimap matting-band strokes and counts them", () => {
+    let s = initEditState();
+    s = addMatteStroke(s, stroke("m1"));
+    expect(s.current.matte_strokes).toHaveLength(1);
+    expect(s.current.brush_strokes).toHaveLength(0);
+    expect(editCount(s.current)).toBe(1);
+    expect(isEmpty(s.current)).toBe(false);
+    s = undo(s);
+    expect(s.current.matte_strokes).toHaveLength(0);
   });
 
   it("records SAM 2 point prompts and counts them", () => {
@@ -113,7 +125,7 @@ describe("maskEdit reducer-style helpers", () => {
   });
 
   it("seeds from an initial EditPaths", () => {
-    const s = initEditState({ version: 1, paths: [], brush_strokes: [stroke("s0")], operations: [], points: [] });
+    const s = initEditState({ version: 1, paths: [], brush_strokes: [stroke("s0")], matte_strokes: [], operations: [], points: [] });
     expect(editCount(s.current)).toBe(1);
     expect(canUndo(s)).toBe(false);
   });

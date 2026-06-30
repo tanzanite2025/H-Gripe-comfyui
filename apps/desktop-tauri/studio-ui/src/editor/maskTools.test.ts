@@ -13,16 +13,22 @@ describe("mask tool registry", () => {
     expect(new Set(ids).size).toBe(ids.length);
   });
 
-  it("keeps pen / lasso / matting planned (greyed) per the contract", () => {
-    for (const id of ["pen", "lasso", "matting"]) {
+  it("keeps pen / lasso planned (greyed) per the contract", () => {
+    for (const id of ["pen", "lasso"]) {
       expect(maskTool(id)?.status, id).toBe("planned");
     }
   });
 
-  it("ships brush / eraser / point / wand / morphology as ready", () => {
-    for (const id of ["brush", "eraser", "point", "wand", "rect", "ellipse", "invert", "fill_holes", "smooth", "grow", "shrink", "feather"]) {
+  it("ships brush / eraser / point / wand / morphology / matting as ready", () => {
+    for (const id of ["brush", "eraser", "point", "wand", "rect", "ellipse", "invert", "fill_holes", "smooth", "grow", "shrink", "feather", "matting"]) {
       expect(maskTool(id)?.status, id).toBe("ready");
     }
+  });
+
+  it("exposes the matting tool as a trimap-band paint tool", () => {
+    const matting = maskTool("matting");
+    expect(matting?.status).toBe("ready");
+    expect(matting?.kind).toBe("matte");
   });
 
   it("exposes the SAM 2 point-prompt tool", () => {

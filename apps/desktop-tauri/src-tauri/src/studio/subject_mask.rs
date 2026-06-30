@@ -177,11 +177,19 @@ pub(super) fn execute_studio_subject_mask(
 
     // Continuous alpha matting: resolve the binary edge into soft alpha (hair /
     // glass / translucency) via a trimap. Off by default so Phase 1 stays
-    // binary + deterministic; behind the flag it runs ViTMatte when its weight
-    // resolves, else the deterministic builtin feather fallback.
-    if bool_param(node, "alpha_matting", false) {
+    // binary + deterministic; behind the flag (or whenever the Mask-Edit
+    // "Matting" brush painted an unknown band) it runs ViTMatte when its weight
+    // resolves, else the deterministic builtin guided-filter fallback.
+    let matte_strokes = parse_matte_strokes(inputs.get("edit_paths"));
+    if bool_param(node, "alpha_matting", false) || !matte_strokes.is_empty() {
         let band = number_param(node, "matting_band_px", 12.0).max(0.0) as u32;
-        let trimap = subject_matte::trimap_from_mask(&mask, band);
+        let mut trimap = subject_matte::trimap_from_mask(&mask, band);
+        // Hand-painted unknown band: stamp the strokes as the trimap unknown
+        // level on top of the auto ring, so the matter resolves soft alpha
+        // exactly where the user marked hair / fur / glass.
+        for (points, radius) in &matte_strokes {
+            stamp_stroke(&mut trimap, points, *radius, subject_matte::TRIMAP_UNKNOWN);
+        }
         let matter = subject_matte::matter();
         let matte_provider = matter.provider().to_string();
         mask = matter.matte(&image, &trimap)?;
@@ -189,6 +197,7 @@ pub(super) fn execute_studio_subject_mask(
             "type": "alpha_matting",
             "provider": matte_provider,
             "band_px": band,
+            "painted_strokes": matte_strokes.len(),
         }));
     }
 
@@ -623,7 +632,7 @@ fn parse_edit_paths(value: Option<&Value>) -> Option<Value> {
 /// input when present, else an empty versioned envelope.
 fn normalise_edit_paths(value: Option<&Value>) -> Value {
     parse_edit_paths(value)
-        .unwrap_or_else(|| json!({ "version": 1, "paths": [], "brush_strokes": [] }))
+        .unwrap_or_else(|| json!({ "version": 1, "paths": [], "brush_strokes": [], "matte_strokes": [] }))
 }
 
 /// Optional point prompts for the auto-subject segmenter, read from a top-level
@@ -644,6 +653,34 @@ fn parse_point_prompts(edit_paths: Option<&Value>) -> Vec<(u32, u32)> {
             }
             Value::Object(_) => Some((json_u32(item.get("x"))?, json_u32(item.get("y"))?)),
             _ => None,
+        })
+        .collect()
+}
+
+/// Trimap unknown-band strokes painted by the Mask-Edit "Matting" tool, read
+/// from `edit_paths.matte_strokes` (same shape as `brush_strokes`: a polyline +
+/// radius). Each becomes a disc-stamped band the matter resolves into soft
+/// alpha. Empty ⇒ matting only runs when the `alpha_matting` flag is set.
+fn parse_matte_strokes(edit_paths: Option<&Value>) -> Vec<(Vec<(f32, f32)>, u32)> {
+    let Some(value) = parse_edit_paths(edit_paths) else {
+        return Vec::new();
+    };
+    value
+        .get("matte_strokes")
+        .and_then(Value::as_array)
+        .into_iter()
+        .flatten()
+        .filter_map(|stroke| {
+            let points = parse_points(stroke.get("points"));
+            if points.is_empty() {
+                return None;
+            }
+            let radius = stroke
+                .get("radius")
+                .and_then(Value::as_f64)
+                .unwrap_or(8.0)
+                .max(0.0) as u32;
+            Some((points, radius))
         })
         .collect()
 }
@@ -821,6 +858,31 @@ mod tests {
     fn normalise_edit_paths_defaults_to_versioned_envelope() {
         let value = normalise_edit_paths(None);
         assert_eq!(value.get("version").and_then(Value::as_i64), Some(1));
+    }
+
+    #[test]
+    fn matte_strokes_paint_trimap_unknown_band() {
+        // The Matting brush records `matte_strokes`; parsing them and stamping
+        // onto the trimap must mark exactly the painted disc as the unknown
+        // level (the matter then resolves soft alpha there), leaving the rest of
+        // a fully-foreground trimap untouched.
+        let value = json!({
+            "matte_strokes": [
+                { "mode": "add", "radius": 2, "points": [[5, 5]] },
+                { "radius": 1, "points": [] }
+            ]
+        });
+        let strokes = parse_matte_strokes(Some(&value));
+        assert_eq!(strokes.len(), 1, "empty-point stroke is dropped");
+
+        let mask = solid(11, 11, MASK_ON);
+        let mut trimap = subject_matte::trimap_from_mask(&mask, 0);
+        assert_eq!(trimap.get_pixel(5, 5).0[0], subject_matte::TRIMAP_FG);
+        for (points, radius) in &strokes {
+            stamp_stroke(&mut trimap, points, *radius, subject_matte::TRIMAP_UNKNOWN);
+        }
+        assert_eq!(trimap.get_pixel(5, 5).0[0], subject_matte::TRIMAP_UNKNOWN);
+        assert_eq!(trimap.get_pixel(0, 0).0[0], subject_matte::TRIMAP_FG);
     }
 
     #[test]

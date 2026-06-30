@@ -34,6 +34,7 @@ export function normalizeEditPaths(value: unknown): EditPaths {
     version: 1,
     paths: Array.isArray(v.paths) ? v.paths : [],
     brush_strokes: Array.isArray(v.brush_strokes) ? v.brush_strokes : [],
+    matte_strokes: Array.isArray(v.matte_strokes) ? v.matte_strokes : [],
     operations: Array.isArray(v.operations) ? v.operations : [],
     points: Array.isArray(v.points) ? v.points : [],
   };
@@ -53,6 +54,15 @@ export function addBrushStroke(state: EditState, stroke: BrushStroke): EditState
   return commit(state, {
     ...state.current,
     brush_strokes: [...state.current.brush_strokes, stroke],
+  });
+}
+
+/** Append a trimap unknown-band stroke (resolved to soft alpha by the matter). */
+export function addMatteStroke(state: EditState, stroke: BrushStroke): EditState {
+  if (stroke.points.length === 0) return state;
+  return commit(state, {
+    ...state.current,
+    matte_strokes: [...state.current.matte_strokes, stroke],
   });
 }
 
@@ -98,6 +108,7 @@ export function isEmpty(edits: EditPaths): boolean {
   return (
     edits.paths.length === 0 &&
     edits.brush_strokes.length === 0 &&
+    edits.matte_strokes.length === 0 &&
     edits.operations.length === 0 &&
     edits.points.length === 0
   );
@@ -108,6 +119,7 @@ export function editCount(edits: EditPaths): number {
   return (
     edits.paths.length +
     edits.brush_strokes.length +
+    edits.matte_strokes.length +
     edits.operations.length +
     edits.points.length
   );

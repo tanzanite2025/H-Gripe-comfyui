@@ -18,6 +18,7 @@ import { ContextMenu, type MenuItem } from "./editor/ContextMenu";
 import { NodeEditingContext } from "./editor/editingContext";
 import { PreviewModal } from "./editor/PreviewModal";
 import { MaskEditModal } from "./editor/MaskEditModal";
+import { CropEditModal } from "./editor/CropEditModal";
 import { normalizeEditPaths } from "./editor/maskEdit";
 import { useHistory } from "./editor/useHistory";
 import { buildPaste, clipFromSelection, type Clip } from "./editor/clipboard";
@@ -97,6 +98,7 @@ function Studio({ onToggleLang }: { onToggleLang: () => void }) {
   // Which node (if any) has the shared Preview / Mask-Edit modal open.
   const [previewNodeId, setPreviewNodeId] = useState<string | null>(null);
   const [maskEditNodeId, setMaskEditNodeId] = useState<string | null>(null);
+  const [cropEditNodeId, setCropEditNodeId] = useState<string | null>(null);
   const { fitView, screenToFlowPosition } = useReactFlow();
   const isDesktop = isTauri();
   const [message, setMessage] = useState<string>(
@@ -571,6 +573,7 @@ function Studio({ onToggleLang }: { onToggleLang: () => void }) {
 
   const openPreview = useCallback((nodeId: string) => setPreviewNodeId(nodeId), []);
   const openMaskEdit = useCallback((nodeId: string) => setMaskEditNodeId(nodeId), []);
+  const openCropEdit = useCallback((nodeId: string) => setCropEditNodeId(nodeId), []);
 
   // Spawn a bound edit node from a media source card: place it to the right,
   // wire a `binding` edge (source.image -> edit.image), select it, and open the
@@ -598,14 +601,15 @@ function Studio({ onToggleLang }: { onToggleLang: () => void }) {
       );
       setSelectedId(editId);
       if (editKind === "subjectMask") setMaskEditNodeId(editId);
+      if (editKind === "crop") setCropEditNodeId(editId);
     },
     [nodes, setNodes, setEdges, takeSnapshot, newNodeId],
   );
 
   // Stable context value so memoized node cards can edit their own params.
   const editing = useMemo(
-    () => ({ onParamChange, openPreview, openMaskEdit, addBoundEdit, runUpToNode }),
-    [onParamChange, openPreview, openMaskEdit, addBoundEdit, runUpToNode],
+    () => ({ onParamChange, openPreview, openMaskEdit, openCropEdit, addBoundEdit, runUpToNode }),
+    [onParamChange, openPreview, openMaskEdit, openCropEdit, addBoundEdit, runUpToNode],
   );
 
   const previewNode = useMemo(
@@ -615,6 +619,10 @@ function Studio({ onToggleLang }: { onToggleLang: () => void }) {
   const maskEditNode = useMemo(
     () => nodes.find((n) => n.id === maskEditNodeId) ?? null,
     [nodes, maskEditNodeId],
+  );
+  const cropEditNode = useMemo(
+    () => nodes.find((n) => n.id === cropEditNodeId) ?? null,
+    [nodes, cropEditNodeId],
   );
 
   return (
@@ -778,6 +786,59 @@ function Studio({ onToggleLang }: { onToggleLang: () => void }) {
             onParamChange(maskEditNode.id, "edit_paths", edits);
           }}
           onClose={() => setMaskEditNodeId(null)}
+        />
+      )}
+
+      {cropEditNode && (
+        <CropEditModal
+          title={t("crop.title")}
+          imagePath={connectedImagePath(cropEditNode.id)}
+          initialMode={
+            (cropEditNode.data as HgripeNodeData).params.mode === "auto_subject"
+              ? "auto_subject"
+              : "manual"
+          }
+          initialBox={
+            Array.isArray((cropEditNode.data as HgripeNodeData).params.crop_box) &&
+            ((cropEditNode.data as HgripeNodeData).params.crop_box as unknown[]).length === 4
+              ? ((cropEditNode.data as HgripeNodeData).params.crop_box as [
+                  number,
+                  number,
+                  number,
+                  number,
+                ])
+              : null
+          }
+          initialAspect={String((cropEditNode.data as HgripeNodeData).params.aspect ?? "free")}
+          initialMargin={Number((cropEditNode.data as HgripeNodeData).params.margin_pct ?? 6)}
+          onCommit={(commit) => {
+            // Fold the editor's auto/manual choice into the node's params, then
+            // run up to this node so the cropped result shows immediately. Both
+            // lanes resolve through the same Compute-lane render pipeline.
+            const id = cropEditNode.id;
+            takeSnapshot();
+            setNodes((ns) =>
+              ns.map((n) =>
+                n.id === id
+                  ? {
+                      ...n,
+                      data: {
+                        ...(n.data as HgripeNodeData),
+                        params: {
+                          ...(n.data as HgripeNodeData).params,
+                          mode: commit.mode,
+                          aspect: commit.aspect,
+                          margin_pct: commit.marginPct,
+                          crop_box: commit.cropBox,
+                        },
+                      },
+                    }
+                  : n,
+              ),
+            );
+            pendingRunNode.current = id;
+          }}
+          onClose={() => setCropEditNodeId(null)}
         />
       )}
     </div>

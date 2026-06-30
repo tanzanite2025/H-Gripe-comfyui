@@ -195,6 +195,31 @@ export const NODE_ZH: Record<string, NodeSpecZh> = {
       prompt_suffix: "提示词后缀",
     },
   },
+  crop: {
+    title: "裁剪",
+    description:
+      "裁剪图像——首个非蒙版编辑，用于端到端验证统一的自动/手动 + 绑定模型。在原生 Rust 内进程的 Compute 通路运行。manual（手动）模式裁剪到编辑器中绘制的裁剪框（记录为图像像素坐标的 crop_box，属人为空间意图通路）；auto_subject（自动到主体）模式裁剪到主体——它用与 Subject Mask 相同的 Compute 通路分割器算出基底抠像，取其包围盒并按主体边距外扩（属算法推导通路）。两条通路之后都可选按宽高比调整裁剪框（居中、裁剪到图像内）。输出裁剪后的图像与裁剪报告。",
+    params: {
+      mode: {
+        label: "模式",
+        hint: "manual 裁剪到编辑器中绘制的框；auto_subject 裁剪到检测出的主体",
+      },
+      aspect: {
+        label: "宽高比",
+        hint: "把裁剪锁定到某个宽高比（居中、裁剪到图像内）；free 保持绘制的框",
+      },
+      margin_pct: {
+        label: "主体边距 %",
+        hint: "在检测出的主体周围保留的内边距（仅 auto_subject 模式）",
+      },
+      output_dir: { label: "输出目录", hint: OUTPUT_DIR_HINT },
+      output_name: { label: "输出名", hint: "裁剪后 PNG 的基础名（空 = <image>_crop）" },
+    },
+    ports: {
+      image: "图像",
+      crop_report: "裁剪报告",
+    },
+  },
   subjectMask: {
     title: "主体蒙版 / 抠像",
     description:

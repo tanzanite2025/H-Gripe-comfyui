@@ -254,6 +254,16 @@ export const defaultExecutors: ExecutorRegistry = {
     return { image: image ?? null, result };
   },
 
+  // Crops the connected image. The real work runs in native Rust on the
+  // Compute lane (`run_studio_graph`); browser preview has no backend to
+  // rasterise against, so it passes the source path through as the result and
+  // leaves the report null. See docs/cards/generic-media-card.md.
+  crop: async (ctx) => {
+    const image = (ctx.inputs.image as string | undefined) ?? null;
+    if (!image) throw new Error("Crop needs a connected image input");
+    return { image, crop_report: null };
+  },
+
   preview: async (ctx) => ({ image: ctx.inputs.image ?? null }),
 
   save: async (ctx) => ({

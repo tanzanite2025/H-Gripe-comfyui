@@ -7,6 +7,8 @@ export interface NodeEditing {
   openPreview?: (nodeId: string) => void;
   /** Open the on-demand Mask-Edit modal for a node (brush/wand/morphology). */
   openMaskEdit?: (nodeId: string) => void;
+  /** Open the on-demand Crop-Edit modal for a crop node (manual box / auto). */
+  openCropEdit?: (nodeId: string) => void;
   /**
    * Spawn a bound edit node of `editKind` from a media source card: create the
    * node to the right, wire a `binding` edge from the source's `image` output

@@ -39,7 +39,7 @@ import os
 from pathlib import Path
 from typing import Any
 
-from sr_backends import onnx_providers
+from sr_backends import onnx_providers, provider_device
 
 from . import MattingUnavailable, model_cache_dir
 
@@ -74,11 +74,15 @@ class OnnxMattingBackend:
             )
         return True, "ready"
 
-    def matte(self, rgb: Any, trimap: Any) -> Any:
+    def matte(self, rgb: Any, trimap: Any, device: str | None = None) -> tuple[Any, str]:
         """Solve a refined alpha from ``rgb`` and ``trimap``.
 
-        Raises :class:`MattingUnavailable` if deps / weights vanished since the
-        probe. Only the alpha is returned, at the source geometry.
+        ``device`` selects the ONNX execution provider (``auto`` by default —
+        see :func:`onnx_providers`). Returns ``(alpha, device_used)`` so the
+        caller reports the device the session actually bound (an explicit
+        ``cuda`` degrades to ``cpu`` when ORT exposes no accelerator). The alpha
+        is at the source geometry. Raises :class:`MattingUnavailable` if deps /
+        weights vanished since the probe.
         """
         ok, reason = self.available()
         if not ok:
@@ -89,8 +93,10 @@ class OnnxMattingBackend:
 
         weight = self.weight_path()
         session = ort.InferenceSession(
-            str(weight), providers=onnx_providers(ort.get_available_providers())
+            str(weight),
+            providers=onnx_providers(ort.get_available_providers(), device=device),
         )
+        device_used = provider_device(session.get_providers())
         inputs = session.get_inputs()
         image_spec = _pick_input(inputs, "image", "input")
         trimap_spec = _pick_input(inputs, "trimap", "mask")
@@ -114,7 +120,7 @@ class OnnxMattingBackend:
         out_arr = np.asarray(out)[0]
         out_hw = out_arr[0] if out_arr.ndim == 3 else out_arr
         alpha = _resize_hw(out_hw, src_w, src_h, np)
-        return np.clip(alpha, 0.0, 1.0).astype(np.float32)
+        return np.clip(alpha, 0.0, 1.0).astype(np.float32), device_used
 
 
 def _pick_input(inputs: list[Any], *keys: str) -> Any | None:

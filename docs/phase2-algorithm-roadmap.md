@@ -300,8 +300,15 @@ real-inference CI is gated like ViTMatte.
   shared `sr_backends.resolve_device()` helper, and the enhance report records
   both `device_requested` and the `device` the run *actually* used (an explicit
   `cuda` degrades to `cpu` on a box with no CUDA device, reported truthfully).
-  ⛔ still: extend the `--device` param to the other engine cards + ONNX
-  backends, wire it through the Tauri commands / Graph executor and the
+  The seam now also covers the **ONNX** engines: the shared
+  `sr_backends.onnx_providers(available, device=…)` honours the same
+  `auto`/`cpu`/`cuda` selection (an explicit `cpu` pins the CPU provider; `cuda`
+  degrades to CPU when ORT exposes no accelerator) and `provider_device()` maps
+  the bound provider back to a `cpu`/`cuda` label for the report. **Refine Mask
+  Edge** (`onnx_matting`) is wired end-to-end (its `--device` threads into the
+  session and the edge report records `device_requested` + `device`). ⛔ still:
+  extend `--device` to the remaining ONNX cards (`onnx_harmonize`,
+  `onnx_defect`), wire it through the Tauri commands / Graph executor and the
   inspector UI, and a per-node `precision` selection (the "local model
   manager" surface).
 - **Determinism & safety:** seedable backends; keep the text/logo guards; require

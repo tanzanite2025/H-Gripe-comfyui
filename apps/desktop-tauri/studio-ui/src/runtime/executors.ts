@@ -8,7 +8,7 @@
 
 import { analyzePsdContext, composePsd, compositeRepaint, detectQualityIssues, enhanceImage, getOutputDir, localRepaintRegions, matchLightColor, prepareRepaintRegions, refineMaskEdge, runTaskJson } from "../bridge/tauri";
 import type { RepaintedCrop } from "../bridge/tauri";
-import type { Bounds, QualityReport, VisualContext } from "../types/production";
+import type { Bounds, QualityReport, RepaintReport, VisualContext } from "../types/production";
 import type { ExecutorRegistry } from "./dag";
 import {
   optimizePromptLocally,
@@ -462,6 +462,11 @@ export const defaultExecutors: ExecutorRegistry = {
     // `image.edit` loop. A missing backend (deps/weights) returns an empty set
     // with a reason, so we fall through to the provider path below.
     let localUsed = false;
+    // Local-engine telemetry to fold into the report, so the UI can show which
+    // engine ran and why it fell back to the provider path (when it did).
+    let engineTelemetry:
+      | Pick<RepaintReport, "engine" | "engine_requested" | "engine_fallback_reason" | "backend_model">
+      | null = null;
     if (engine !== "provider") {
       const promptMap: Record<string, string> = {};
       for (const region of prepared.regions) {
@@ -475,6 +480,12 @@ export const defaultExecutors: ExecutorRegistry = {
         promptMap: JSON.stringify(promptMap),
         outputDir: outputDir || undefined,
       });
+      engineTelemetry = {
+        engine: local.engine,
+        engine_requested: local.engine_requested,
+        engine_fallback_reason: local.engine_fallback_reason ?? null,
+        backend_model: local.backend_model ?? null,
+      };
       if (local.engine !== "provider" && local.repainted.length > 0) {
         localUsed = true;
         repainted.push(...local.repainted);
@@ -527,7 +538,11 @@ export const defaultExecutors: ExecutorRegistry = {
     });
     return {
       fixed_image: composed.fixed_image,
-      repaint_report: composed.repaint_report,
+      // Carry the local-engine telemetry alongside the unchanged RepaintReport
+      // shape; absent for the plain provider path.
+      repaint_report: engineTelemetry
+        ? { ...composed.repaint_report, ...engineTelemetry }
+        : composed.repaint_report,
     };
   },
 

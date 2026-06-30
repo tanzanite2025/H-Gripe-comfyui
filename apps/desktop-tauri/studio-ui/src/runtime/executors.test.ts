@@ -612,6 +612,88 @@ describe("detailRepaint", () => {
     expect(out.fixed_image).toBe("/out/candidate_repainted.png");
   });
 
+  it("routes to the local inpaint engine, skips the provider loop, and folds engine telemetry into the report", async () => {
+    const runSpy = vi.spyOn(bridge, "runTaskJson");
+    const reqs: unknown[] = [];
+    vi.spyOn(bridge, "localRepaintRegions").mockImplementation(async (req) => {
+      reqs.push(req);
+      return {
+        // The local backend repaints the one selected region offline.
+        repainted: req.manifest.regions.map((r) => ({ index: r.index, path: `/inp/r${r.index}.png` })),
+        skipped: [],
+        engine: "sd_inpaint",
+        engine_requested: "sd_inpaint",
+        engine_fallback_reason: null,
+        backend_model: "sd-inpaint.safetensors",
+        requested_count: req.manifest.regions.length,
+        repainted_count: req.manifest.regions.length,
+      };
+    });
+
+    const out = (await defaultExecutors.detailRepaint(
+      ctx(
+        "detailRepaint",
+        { provider: "mock", engine: "sd_inpaint", repaint_actions: "detail_redraw", min_confidence: 0.5, output_dir: "/out" },
+        { image: "/cand.png", quality_report: REPORT },
+      ),
+    )) as Record<string, unknown>;
+
+    // Local engine used => the provider broker loop is never entered.
+    expect(runSpy).not.toHaveBeenCalled();
+    expect(reqs).toHaveLength(1);
+    const report = out.repaint_report as {
+      repainted_count: number;
+      engine: string;
+      engine_requested: string;
+      engine_fallback_reason: string | null;
+      backend_model: string | null;
+    };
+    expect(report.repainted_count).toBe(1);
+    // The dropped-before telemetry now rides along with the RepaintReport.
+    expect(report.engine).toBe("sd_inpaint");
+    expect(report.engine_requested).toBe("sd_inpaint");
+    expect(report.engine_fallback_reason).toBeNull();
+    expect(report.backend_model).toBe("sd-inpaint.safetensors");
+  });
+
+  it("falls back to the provider loop and records the fallback reason when the local engine is unavailable", async () => {
+    vi.spyOn(bridge, "localRepaintRegions").mockResolvedValue({
+      repainted: [],
+      skipped: [],
+      engine: "provider",
+      engine_requested: "sd_inpaint",
+      engine_fallback_reason: "missing optional dependency: torch",
+      backend_model: null,
+      requested_count: 1,
+      repainted_count: 0,
+    });
+    const tasks: Record<string, unknown>[] = [];
+    vi.spyOn(bridge, "runTaskJson").mockImplementation(async (task: unknown) => {
+      const t = task as Record<string, unknown>;
+      tasks.push(t);
+      return { id: String(t.id), status: "succeeded", output_files: [{ path: `${String(t.id)}.png` }] };
+    });
+
+    const out = (await defaultExecutors.detailRepaint(
+      ctx(
+        "detailRepaint",
+        { provider: "openai_compatible", engine: "sd_inpaint", credentials_ref: "k", repaint_actions: "detail_redraw", min_confidence: 0.5, output_dir: "/out" },
+        { image: "/cand.png", quality_report: REPORT },
+      ),
+    )) as Record<string, unknown>;
+
+    // Local engine produced nothing => the provider path repaints the region.
+    expect(tasks).toHaveLength(1);
+    const report = out.repaint_report as {
+      repainted_count: number;
+      engine: string;
+      engine_fallback_reason: string | null;
+    };
+    expect(report.repainted_count).toBe(1);
+    expect(report.engine).toBe("provider");
+    expect(report.engine_fallback_reason).toBe("missing optional dependency: torch");
+  });
+
   it("requires a connected image input", async () => {
     await expect(
       defaultExecutors.detailRepaint(ctx("detailRepaint", {})),

@@ -108,6 +108,18 @@ export interface RepaintReport {
   requested_count: number;
   /** `[width, height]` of the fixed image. */
   image_size: [number, number];
+  // --- Optional local-engine telemetry (Detail Repaint `engine` seam) --------
+  // Present only when a non-`provider` engine was selected; carries which
+  // engine actually ran and why it fell back, so the UI can explain a
+  // provider/passthrough result. Absent for the plain provider path.
+  /** Engine that actually ran (`provider` when it fell back). */
+  engine?: string;
+  /** Engine the node asked for. */
+  engine_requested?: string;
+  /** Why the local backend was not used (missing deps/weight, etc.). */
+  engine_fallback_reason?: string | null;
+  /** Resolved local weight identifier, when a local backend ran. */
+  backend_model?: string | null;
 }
 
 /** Exported artifact paths recorded for a finished workflow. */

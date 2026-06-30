@@ -340,7 +340,9 @@ export function useStudioRunController({
       const str = (v: unknown): string | null => (typeof v === "string" && v ? v : null);
       for (const node of graph.nodes) {
         const out = result.outputs.get(node.id);
-        if (node.kind === "preview") {
+        if (node.kind === "preview" || node.kind === "crop") {
+          // Surface the result image onto the card so confirming an edit (or a
+          // run-up-to-node) shows the cropped result immediately.
           const imagePath = str(out?.image);
           patchNode(node.id, { imagePath });
           if (imagePath) paths.push(imagePath);

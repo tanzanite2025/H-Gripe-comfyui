@@ -27,6 +27,21 @@ describe("source executors", () => {
   });
 });
 
+describe("crop", () => {
+  it("passes the connected image through as the result in browser preview", async () => {
+    expect(await defaultExecutors.crop(ctx("crop", { mode: "manual" }, { image: "/a/b.png" }))).toEqual({
+      image: "/a/b.png",
+      crop_report: null,
+    });
+  });
+
+  it("throws when no image is connected", async () => {
+    await expect(defaultExecutors.crop(ctx("crop", { mode: "manual" }, {}))).rejects.toThrow(
+      /needs a connected image/i,
+    );
+  });
+});
+
 describe("batch", () => {
   it("parses non-empty trimmed lines", () => {
     expect(batchItems("a\n  b  \n\n c\n")).toEqual(["a", "b", "c"]);

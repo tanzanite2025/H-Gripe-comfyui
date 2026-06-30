@@ -161,7 +161,11 @@ function ImageSourceCard({ id, path }: { id: string; path: string }) {
         >
           {t("node.mediaEditMask")}
         </button>
-        <button type="button" disabled title={t("node.mediaCropSoon")}>
+        <button
+          type="button"
+          title={t("node.mediaCropTitle")}
+          onClick={() => editing?.addBoundEdit?.(id, "crop")}
+        >
           {t("node.mediaCrop")}
         </button>
       </div>
@@ -297,6 +301,28 @@ function HgripeNodeImpl({ id, data, selected }: NodeProps) {
                 onClick={() => editing?.openPreview?.(id)}
               >
                 {t("node.preview")}
+              </button>
+            </div>
+          </div>
+        ) : null}
+
+        {spec.kind === "crop" ? (
+          <div className="subject-mask">
+            {d.imagePath ? (
+              <LazyThumb path={d.imagePath} />
+            ) : (
+              <div className="node-thumb placeholder" title={t("node.mediaCropTitle")}>
+                {isConnected("image") ? t("crop.drawHint") : t("node.connectImage")}
+              </div>
+            )}
+            <div className="subject-mask-actions nodrag">
+              <button
+                type="button"
+                className="primary"
+                title={t("crop.applyTitle")}
+                onClick={() => editing?.openCropEdit?.(id)}
+              >
+                {t("crop.title")}
               </button>
             </div>
           </div>

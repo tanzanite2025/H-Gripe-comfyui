@@ -991,3 +991,71 @@ button:disabled { opacity: 0.6; cursor: default; }
   padding: 0 4px;
   border-radius: 4px;
 }
+
+/* Crop-Edit modal — reuses the mask-edit shell with a 2-column body. */
+.media-viewer.crop-edit { width: min(1080px, 92vw); height: 86vh; }
+.media-viewer.crop-edit .mask-edit-body { grid-template-columns: 1fr 240px; }
+.crop-edit-stage-wrap {
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+.crop-edit-stage {
+  position: relative;
+  min-width: 0;
+  max-width: 100%;
+  margin: auto;
+  max-height: 100%;
+  touch-action: none;
+  cursor: crosshair;
+  background:
+    repeating-conic-gradient(#1a1d26 0% 25%, #11131a 0% 50%) 50% / 24px 24px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  overflow: hidden;
+  user-select: none;
+}
+.crop-edit-stage.auto { cursor: default; }
+.crop-edit-img {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  object-fit: fill;
+  display: block;
+  pointer-events: none;
+}
+.crop-edit-img.placeholder { background: #11131a; }
+.crop-box {
+  position: absolute;
+  border: 1px solid var(--accent);
+  box-shadow: 0 0 0 9999px rgba(0, 0, 0, 0.5);
+  cursor: move;
+  touch-action: none;
+}
+.crop-handle {
+  position: absolute;
+  width: 12px;
+  height: 12px;
+  background: var(--accent);
+  border: 1px solid #00112e;
+  border-radius: 2px;
+  touch-action: none;
+}
+.crop-handle.nw { left: -6px; top: -6px; cursor: nwse-resize; }
+.crop-handle.ne { right: -6px; top: -6px; cursor: nesw-resize; }
+.crop-handle.sw { left: -6px; bottom: -6px; cursor: nesw-resize; }
+.crop-handle.se { right: -6px; bottom: -6px; cursor: nwse-resize; }
+.crop-mode-row { display: flex; gap: 6px; }
+.crop-mode-row button {
+  flex: 1;
+  padding: 6px 8px;
+  background: var(--panel-2);
+  color: var(--text);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  cursor: pointer;
+  font-size: 12px;
+}
+.crop-mode-row button.active { border-color: var(--accent); color: var(--accent); }

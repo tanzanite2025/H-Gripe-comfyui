@@ -15,6 +15,7 @@ use serde_json::{json, Value};
 use tauri::Emitter;
 
 use super::color_match::execute_studio_match_light_color;
+use super::crop::execute_studio_crop;
 use super::detail_watchdog::execute_studio_detail_watchdog;
 use super::edge_refine::execute_studio_refine_mask_edge;
 use super::graph::{
@@ -792,7 +793,7 @@ pub(crate) fn studio_executor_for_kind(kind: &str) -> Option<StudioExecutor> {
         | "compare" | "logic" | "if" | "switch" | "preview" | "save" => Graph,
         "psdContextAnalyze" | "matchLightColor" | "refineMaskEdge" | "imageEnhance"
         | "detailWatchdog" | "psdExport" => Local,
-        "subjectMask" => Compute,
+        "subjectMask" | "crop" => Compute,
         "generate" | "detailRepaint" => Api,
         "promptOptimize" => Hybrid,
         _ => return None,
@@ -959,6 +960,7 @@ fn execute_studio_compute_node(
 ) -> Result<BTreeMap<String, Value>, String> {
     match node.kind.as_str() {
         "subjectMask" => execute_studio_subject_mask(node, inputs),
+        "crop" => execute_studio_crop(node, inputs),
         other => Err(format!("node kind is not a compute node: {other}")),
     }
 }

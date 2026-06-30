@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 import { NODE_SPECS, type Executor } from "./nodeSpecs";
 
-const VALID: Executor[] = ["graph", "local", "api", "hybrid"];
+const VALID: Executor[] = ["graph", "local", "compute", "api", "hybrid"];
 
 describe("nodeSpecs executor tagging", () => {
   it("tags every node kind with a valid executor", () => {
@@ -18,6 +18,7 @@ describe("nodeSpecs executor tagging", () => {
       imageEnhance: "local",
       detailWatchdog: "local",
       psdExport: "local",
+      subjectMask: "compute",
       generate: "api",
       detailRepaint: "api",
       promptOptimize: "hybrid",

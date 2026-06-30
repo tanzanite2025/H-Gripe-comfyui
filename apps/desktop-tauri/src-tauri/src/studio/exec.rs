@@ -24,6 +24,7 @@ use super::graph::{
 use super::image_enhance::execute_studio_image_enhance;
 use super::psd_analyze::execute_studio_psd_context_analyze;
 use super::psd_export::execute_studio_psd_export;
+use super::subject_mask::execute_studio_subject_mask;
 use crate::broker;
 use crate::psd::{composite_repaint, prepare_repaint_regions};
 
@@ -772,6 +773,10 @@ pub(crate) enum StudioExecutor {
     Graph,
     /// Always a `python/bridge` CLI; must not touch the network.
     Local,
+    /// In-process native-Rust image / model work; must not touch the network.
+    /// (No broker handle, exactly like `Local`, so a `Compute` card can never
+    /// make a provider call.)
+    Compute,
     /// Always a provider call through the broker.
     Api,
     /// User picks per-node via a `mode` param (`promptOptimize`).
@@ -787,6 +792,7 @@ pub(crate) fn studio_executor_for_kind(kind: &str) -> Option<StudioExecutor> {
         | "compare" | "logic" | "if" | "switch" | "preview" | "save" => Graph,
         "psdContextAnalyze" | "matchLightColor" | "refineMaskEdge" | "imageEnhance"
         | "detailWatchdog" | "psdExport" => Local,
+        "subjectMask" => Compute,
         "generate" | "detailRepaint" => Api,
         "promptOptimize" => Hybrid,
         _ => return None,
@@ -805,6 +811,7 @@ async fn execute_studio_node(
     match studio_executor_for_kind(node.kind.as_str()) {
         Some(StudioExecutor::Graph) => execute_studio_graph_node(node, &inputs),
         Some(StudioExecutor::Local) => execute_studio_local_node(node, &inputs),
+        Some(StudioExecutor::Compute) => execute_studio_compute_node(node, &inputs),
         Some(StudioExecutor::Api) => execute_studio_api_node(node, &inputs, cancels, run_id).await,
         Some(StudioExecutor::Hybrid) => {
             execute_studio_prompt_optimize(node, &inputs, cancels, run_id).await
@@ -940,6 +947,19 @@ fn execute_studio_local_node(
         "detailWatchdog" => execute_studio_detail_watchdog(node, inputs),
         "psdExport" => execute_studio_psd_export(node, inputs),
         other => Err(format!("node kind is not a local node: {other}")),
+    }
+}
+
+/// Compute nodes: every arm runs in-process in native Rust (the `image` crate +
+/// the shared `studio_image` decode guard). Like `Local`, this handler is given
+/// no broker/network access, so a compute card can never make a provider call.
+fn execute_studio_compute_node(
+    node: &StudioGraphNode,
+    inputs: &BTreeMap<String, Value>,
+) -> Result<BTreeMap<String, Value>, String> {
+    match node.kind.as_str() {
+        "subjectMask" => execute_studio_subject_mask(node, inputs),
+        other => Err(format!("node kind is not a compute node: {other}")),
     }
 }
 
@@ -1204,8 +1224,19 @@ mod tests {
     fn executor_classification_partitions_kinds() {
         use StudioExecutor::*;
         for kind in [
-            "prompt", "batch", "imageSource", "psdTemplate", "number", "reroute", "group",
-            "compare", "logic", "if", "switch", "preview", "save",
+            "prompt",
+            "batch",
+            "imageSource",
+            "psdTemplate",
+            "number",
+            "reroute",
+            "group",
+            "compare",
+            "logic",
+            "if",
+            "switch",
+            "preview",
+            "save",
         ] {
             assert_eq!(studio_executor_for_kind(kind), Some(Graph), "{kind}");
         }
@@ -1219,6 +1250,7 @@ mod tests {
         ] {
             assert_eq!(studio_executor_for_kind(kind), Some(Local), "{kind}");
         }
+        assert_eq!(studio_executor_for_kind("subjectMask"), Some(Compute));
         assert_eq!(studio_executor_for_kind("generate"), Some(Api));
         assert_eq!(studio_executor_for_kind("detailRepaint"), Some(Api));
         assert_eq!(studio_executor_for_kind("promptOptimize"), Some(Hybrid));
@@ -1234,6 +1266,12 @@ mod tests {
         assert!(err.contains("not a local node"), "{err}");
         let err = execute_studio_graph_node(&node_with_kind("psdExport"), &inputs).unwrap_err();
         assert!(err.contains("not a graph node"), "{err}");
+        // A native-Rust compute kind must never run through the local (python)
+        // path, and a python-bridge kind must never run through compute.
+        let err = execute_studio_local_node(&node_with_kind("subjectMask"), &inputs).unwrap_err();
+        assert!(err.contains("not a local node"), "{err}");
+        let err = execute_studio_compute_node(&node_with_kind("psdExport"), &inputs).unwrap_err();
+        assert!(err.contains("not a compute node"), "{err}");
         // A genuine graph node still resolves through its own handler.
         assert!(execute_studio_graph_node(&node_with_kind("prompt"), &inputs).is_ok());
     }

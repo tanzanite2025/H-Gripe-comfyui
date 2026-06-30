@@ -50,6 +50,7 @@ The PSD chain is a set of small, CPU-only cards. Each shells out to a
 | --- | --- | --- |
 | [PSD Context Analyze](docs/cards/psd-context-analyze.md) | `analyze_psd_cli.py` | Extract a `VisualContext` (lighting, bounds, masks) from a PSD. |
 | [Match Light & Color](docs/cards/match-light-color.md) | `color_match_cli.py` | Match a generated image's light / colour to the scene. |
+| [Subject Mask / Matte Editor](docs/cards/subject-mask-matte.md) | native Rust *(planned)* | Identify the subject and produce / hand-edit a mask, cutout and alpha (magic-wand + brush in Phase 1; SAM / matting later). First card processed in-process in Rust rather than via `python/bridge`. |
 | [Refine Mask Edge](docs/cards/refine-mask-edge.md) | `edge_refine_cli.py` | Clean / feather a subject matte. |
 | [Image Enhance](docs/cards/image-enhance.md) | `image_enhance_cli.py` | Global sharpen / tone enhancement. |
 | [Detail Watchdog](docs/cards/detail-watchdog.md) | `detail_watchdog_cli.py` | Detect-only quality analysis (blur / halo / colour mismatch) → `QualityReport`. |

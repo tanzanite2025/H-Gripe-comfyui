@@ -135,6 +135,13 @@ export const messages = {
 
   "dashboard.runtime": { en: "Runtime", zh: "运行环境" },
   "dashboard.doctor": { en: "Doctor", zh: "诊断" },
+  "dashboard.engines": { en: "Engines", zh: "引擎" },
+  "dashboard.enginesDesc": {
+    en: "Opt-in ML detectors/backends. The CPU baseline is always available; learned engines need their dependency + weight.",
+    zh: "可选 ML 检测器/后端。CPU 基线始终可用；学习型引擎需要对应依赖与权重。",
+  },
+  "dashboard.engineAvailable": { en: "available", zh: "可用" },
+  "dashboard.engineUnavailable": { en: "unavailable", zh: "不可用" },
   "btn.refresh": { en: "Refresh", zh: "刷新" },
   "btn.validate": { en: "Validate", zh: "校验" },
   "btn.reload": { en: "Reload", zh: "重新加载" },
@@ -304,6 +311,10 @@ export const messages = {
     zh: "容器框。将节点拖入/拖出；成员随之移动。",
   },
   "inspector.label": { en: "Label", zh: "标签" },
+  "inspector.engineUnavailable": {
+    en: "This engine can't run on this machine — falls back to the CPU baseline.",
+    zh: "此引擎在本机无法运行——将回落到 CPU 基线。",
+  },
   "inspector.output": { en: "Output", zh: "输出" },
   "inspector.viewFull": { en: "View full size", zh: "查看原图" },
 

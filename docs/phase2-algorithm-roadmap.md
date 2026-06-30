@@ -180,9 +180,12 @@ drift inside masked region (low denoise strength + tight masks), seam visibility
   installer. Backends resolve weights from `HGRIPE_MODEL_CACHE` (downloaded /
   configured post-install). The bundled `python/bridge` + `custom_nodes` +
   `third_party` subtree stays the lightweight CPU baseline.
-- **Capability probing:** extend `doctor` to report GPU/CUDA, installed backends,
-  and cached weights so the UI can enable/disable GPU presets and always fall
-  back to CPU.
+- **Capability probing:** ✅ each local card's CLI exposes `--probe-engines`, and
+  the `probe_engines` Tauri command aggregates them into a **cross-card capability
+  report** (the `doctor`-style probe). The Dashboard surfaces it and the inspector
+  uses it to **grey out engines** whose deps/weights are missing on this box (the
+  CPU/`rules` baseline stays enabled, so the node always falls back to CPU). ⛔
+  still: GPU/CUDA device detail and cached-weight inventory in the report.
 - **Determinism & safety:** seedable backends; keep the text/logo guards; require
   rule+ML agreement before any *automatic* (non-user-confirmed) repaint.
 - **Contracts are stable:** every Phase 2 backend emits the existing

@@ -534,6 +534,7 @@ fn main() {
             psd::refine_mask_edge,
             psd::enhance_image,
             psd::detect_quality_issues,
+            psd::probe_engines,
             psd::prepare_repaint_regions,
             psd::composite_repaint
         ])

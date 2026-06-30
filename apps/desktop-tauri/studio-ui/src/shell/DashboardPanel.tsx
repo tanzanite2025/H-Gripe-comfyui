@@ -3,6 +3,7 @@
 import { useCallback, useEffect, useState } from "react";
 
 import { commands, pretty, type PathInfo, type RuntimeInfo } from "../bridge/desktop";
+import { probeEngines, type EngineProbeReport } from "../bridge/psd";
 import { useT } from "../i18n";
 
 function PathCard({ label, info }: { label: string; info: PathInfo }) {
@@ -23,6 +24,7 @@ export function DashboardPanel() {
   const [info, setInfo] = useState<RuntimeInfo | null>(null);
   const [infoErr, setInfoErr] = useState<string | null>(null);
   const [doctor, setDoctor] = useState<string>(() => t("common.loading"));
+  const [engines, setEngines] = useState<EngineProbeReport | null>(null);
 
   const load = useCallback(async () => {
     try {
@@ -36,6 +38,11 @@ export function DashboardPanel() {
       setDoctor(pretty(await commands.doctor()));
     } catch (err) {
       setDoctor(String(err));
+    }
+    try {
+      setEngines(await probeEngines());
+    } catch {
+      setEngines(null);
     }
   }, []);
 
@@ -69,6 +76,36 @@ export function DashboardPanel() {
           </>
         )}
       </div>
+      {engines && engines.cards.length > 0 && (
+        <>
+          <h2>{t("dashboard.engines")}</h2>
+          <p className="hint">{t("dashboard.enginesDesc")}</p>
+          <div className="cards">
+            {engines.cards.map((card) => (
+              <div className="card" key={card.node_kind}>
+                <div className="label">
+                  {card.node_kind} ({card.cli})
+                </div>
+                {card.error ? (
+                  <div className="value missing">{card.error}</div>
+                ) : (
+                  Object.entries(card.engines).map(([id, state]) => (
+                    <div className="value" key={id}>
+                      <span className={state.available ? "ok" : "missing"}>
+                        {id} —{" "}
+                        {state.available
+                          ? t("dashboard.engineAvailable")
+                          : t("dashboard.engineUnavailable")}
+                      </span>
+                      {state.reason && <small className="hint"> {state.reason}</small>}
+                    </div>
+                  ))
+                )}
+              </div>
+            ))}
+          </div>
+        </>
+      )}
       <h2>{t("dashboard.doctor")}</h2>
       <pre className="json">{doctor}</pre>
     </>

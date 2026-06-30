@@ -35,6 +35,11 @@ DEVICE_AUTO = "auto"
 #: Selectable ``device`` values for the GPU-capable engines.
 KNOWN_DEVICES = (DEVICE_AUTO, "cpu", "cuda")
 
+#: The default ``precision`` selection: fp16 on a CUDA device, fp32 on CPU.
+PRECISION_AUTO = "auto"
+#: Selectable ``precision`` values for the torch (fp16-capable) engines.
+KNOWN_PRECISIONS = (PRECISION_AUTO, "fp32", "fp16")
+
 
 def resolve_device(requested: str | None, cuda_available: bool) -> str:
     """Concrete torch device for a requested ``device`` selection.
@@ -51,6 +56,28 @@ def resolve_device(requested: str | None, cuda_available: bool) -> str:
         return "cpu"
     # ``cuda`` and ``auto`` both want the accelerator when it exists, else CPU.
     return "cuda" if cuda_available else "cpu"
+
+
+def resolve_precision(requested: str | None, device: str) -> str:
+    """Concrete compute precision (``fp32``/``fp16``) for a requested selection.
+
+    Precision is only meaningful for the fp16-capable torch backends, so it is
+    resolved against the *device the run actually bound* (see
+    :func:`resolve_device`). ``auto`` (the default) keeps the long-standing
+    behaviour the torch backends hard-coded -- ``fp16`` on a CUDA device (faster,
+    lower VRAM), ``fp32`` on CPU (deterministic; fp16 math is unsupported / slow
+    on CPU). An explicit ``fp16`` is honoured only on CUDA; on a CPU run it
+    degrades to ``fp32`` (which the caller reports truthfully) rather than
+    producing a broken / glacial run. An explicit ``fp32`` always runs full
+    precision. An unknown value is treated as ``auto`` so a stale saved graph
+    never fails.
+    """
+    name = (requested or PRECISION_AUTO).strip().lower() or PRECISION_AUTO
+    if name == "fp32":
+        return "fp32"
+    # ``fp16`` and ``auto`` both want half precision, but only a CUDA device can
+    # run it usefully; a CPU run always degrades to fp32 (reported truthfully).
+    return "fp16" if device == "cuda" else "fp32"
 
 
 class BackendUnavailable(RuntimeError):
@@ -86,15 +113,23 @@ class SrBackend(Protocol):
         """
         ...
 
-    def upscale(self, rgb: Any, scale: float, device: str | None = None) -> tuple[Any, str]:
+    def upscale(
+        self,
+        rgb: Any,
+        scale: float,
+        device: str | None = None,
+        precision: str | None = None,
+    ) -> tuple[Any, str, str]:
         """Upscale a PIL ``RGB`` image by ``scale`` (no alpha — handled by the caller).
 
         ``device`` selects the compute device (``auto`` by default — see
-        :func:`resolve_device`). Returns ``(image, device_used)`` so the caller
-        can report truthfully which device actually ran (an explicit ``cuda``
-        degrades to ``cpu`` on a box with no CUDA device). Raises
-        :class:`BackendUnavailable` if deps/weights vanished between the probe
-        and the call.
+        :func:`resolve_device`); ``precision`` selects the compute precision
+        (``auto`` by default — see :func:`resolve_precision`). Returns
+        ``(image, device_used, precision_used)`` so the caller can report
+        truthfully what actually ran (an explicit ``cuda`` degrades to ``cpu`` on
+        a box with no CUDA device, and ``fp16`` degrades to ``fp32`` on a CPU
+        run). Raises :class:`BackendUnavailable` if deps/weights vanished between
+        the probe and the call.
         """
         ...
 

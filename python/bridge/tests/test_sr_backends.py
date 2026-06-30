@@ -88,6 +88,30 @@ def test_resolve_device_explicit_cuda_degrades_truthfully() -> None:
     assert sr_backends.resolve_device("cuda", False) == "cpu"
 
 
+def test_resolve_precision_auto_follows_device() -> None:
+    # auto (the default) mirrors the torch backends' long-standing behaviour:
+    # fp16 on a CUDA device, fp32 on CPU. Blank / None / unknown == auto.
+    assert sr_backends.resolve_precision("auto", "cuda") == "fp16"
+    assert sr_backends.resolve_precision("auto", "cpu") == "fp32"
+    assert sr_backends.resolve_precision(None, "cuda") == "fp16"
+    assert sr_backends.resolve_precision("", "cpu") == "fp32"
+    assert sr_backends.resolve_precision("bogus", "cuda") == "fp16"
+
+
+def test_resolve_precision_explicit_fp32_always_fp32() -> None:
+    # An explicit fp32 keeps full precision even on a CUDA device.
+    assert sr_backends.resolve_precision("fp32", "cuda") == "fp32"
+    assert sr_backends.resolve_precision("FP32", "cpu") == "fp32"
+
+
+def test_resolve_precision_explicit_fp16_degrades_truthfully() -> None:
+    # fp16 is honoured only on a CUDA device; on a CPU run it degrades to fp32
+    # (reported truthfully by the caller) since fp16 math is unsupported / slow
+    # on CPU.
+    assert sr_backends.resolve_precision("fp16", "cuda") == "fp16"
+    assert sr_backends.resolve_precision("fp16", "cpu") == "fp32"
+
+
 def test_resolve_cpu_and_blank_return_none() -> None:
     assert resolve("cpu") is None
     assert resolve("") is None

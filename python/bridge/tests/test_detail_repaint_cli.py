@@ -322,7 +322,12 @@ class _FakeBackend:
 
     def inpaint(self, crop, mask, prompt, **kwargs):  # noqa: ANN001
         self.calls.append({"size": crop.size, "prompt": prompt, **kwargs})
-        return Image.new("RGB", crop.size, self._color)
+        # Mimic a CPU-only box: report the cpu device + the precision an
+        # explicit fp16 degrades to there, exactly like the real torch backend.
+        import sr_backends
+
+        precision = sr_backends.resolve_precision(kwargs.get("precision"), "cpu")
+        return Image.new("RGB", crop.size, self._color), "cpu", precision
 
 
 def _prepared_manifest(tmp_path: Path) -> dict:
@@ -365,7 +370,9 @@ def test_repaint_runs_available_backend(tmp_path: Path, monkeypatch) -> None:
     backend = _FakeBackend()
     monkeypatch.setattr(inpaint_backends, "resolve", lambda engine: backend)
     prep = _prepared_manifest(tmp_path)
-    out = _run_repaint(tmp_path, prep, engine="fake_inpaint", prompt="restore the face")
+    out = _run_repaint(
+        tmp_path, prep, engine="fake_inpaint", prompt="restore the face", precision="fp16"
+    )
 
     assert out["engine"] == "fake_inpaint"
     assert out["engine_fallback_reason"] is None
@@ -378,6 +385,12 @@ def test_repaint_runs_available_backend(tmp_path: Path, monkeypatch) -> None:
     # The repainted crop is the backend's output, same size as the source crop.
     assert Image.open(entry["path"]).size == tuple(region["size"])
     assert backend.calls[0]["prompt"] == "restore the face"
+    # precision threads to the backend; on this (faked) CPU-only box an explicit
+    # fp16 request is reported as the fp32 it actually ran, never lying.
+    assert backend.calls[0]["precision"] == "fp16"
+    assert out["precision_requested"] == "fp16"
+    assert out["precision"] == "fp32"
+    assert out["device"] == "cpu"
 
 
 def test_repaint_per_type_prompt_map_overrides(tmp_path: Path, monkeypatch) -> None:

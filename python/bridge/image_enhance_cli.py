@@ -88,6 +88,10 @@ _CPU_ENGINE = "cpu"
 # accelerator present (mirrors sr_backends.DEVICE_AUTO; kept local so the module
 # stays import-light, like _CPU_ENGINE).
 _DEVICE_AUTO = "auto"
+# Default compute-precision selection for the torch engine: fp16 on a CUDA
+# device, fp32 on CPU (mirrors sr_backends.PRECISION_AUTO; kept local so the
+# module stays import-light).
+_PRECISION_AUTO = "auto"
 
 # Default ceiling on *input* pixels (~96 MP). The decode is refused above this
 # so a decompression-bomb workflow asset cannot exhaust memory before we even
@@ -362,6 +366,14 @@ def enhance(args: argparse.Namespace) -> dict[str, Any]:
     # degrades to ``cpu`` on a box with no CUDA device).
     device_requested = (getattr(args, "device", None) or _DEVICE_AUTO).strip().lower() or _DEVICE_AUTO
     device_used: str | None = None
+    # ``precision`` selects fp16/fp32 for the torch engine (the CPU path is
+    # always fp32). ``precision_used`` is what the backend actually ran, which
+    # can differ from the request (an explicit ``fp16`` degrades to ``fp32`` on
+    # a CPU run).
+    precision_requested = (
+        getattr(args, "precision", None) or _PRECISION_AUTO
+    ).strip().lower() or _PRECISION_AUTO
+    precision_used: str | None = None
 
     if engine_requested != _CPU_ENGINE:
         from sr_backends import BackendUnavailable, resolve
@@ -378,8 +390,8 @@ def enhance(args: argparse.Namespace) -> dict[str, Any]:
                     engine_fallback_reason = reason
                 else:
                     try:
-                        rgb, device_used = backend.upscale(
-                            rgb, scale, device=device_requested
+                        rgb, device_used, precision_used = backend.upscale(
+                            rgb, scale, device=device_requested, precision=precision_requested
                         )
                         used_backend = True
                         engine_used = backend.id
@@ -459,6 +471,8 @@ def enhance(args: argparse.Namespace) -> dict[str, Any]:
         "backend_model": backend_model,
         "device": device_used,
         "device_requested": device_requested,
+        "precision": precision_used,
+        "precision_requested": precision_requested,
         "processing_time_ms": elapsed_ms,
     }
 
@@ -551,6 +565,14 @@ def build_parser() -> argparse.ArgumentParser:
         help=(
             "compute device for the GPU-capable engine: auto (default, cuda if "
             "present else cpu) | cpu | cuda (degrades to cpu without a CUDA device)"
+        ),
+    )
+    parser.add_argument(
+        "--precision",
+        default=_PRECISION_AUTO,
+        help=(
+            "compute precision for the torch engine: auto (default, fp16 on cuda "
+            "else fp32) | fp32 | fp16 (degrades to fp32 on a cpu run)"
         ),
     )
     parser.add_argument(

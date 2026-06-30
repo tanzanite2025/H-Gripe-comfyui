@@ -1,41 +1,73 @@
-# Contributing to ComfyUI
+# Contributing to H-Gripe Studio
 
-Welcome, and thank you for your interest in contributing to ComfyUI!
+Thanks for your interest in contributing to H-Gripe Studio — the Rust/Tauri
+desktop workflow editor for AI image generation and PSD production. This
+document is a high-level overview of how to get involved.
 
-There are several ways in which you can contribute, beyond writing code. The goal of this document is to provide a high-level overview of how you can get involved.
+> H-Gripe began as a ComfyUI source branch, but ComfyUI has been removed from the
+> product. Contributions target H-Gripe's own desktop app (`apps/desktop-tauri`),
+> the `hgripe-api` broker (`crates/hgripe-api`), and the Python bridge
+> (`python/bridge`).
 
-## Asking Questions
+## Reporting issues and feature requests
 
-Have a question? Instead of opening an issue, please ask on [Discord](https://comfy.org/discord) or [Matrix](https://app.element.io/#/room/%23comfyui_space%3Amatrix.org) channels. Our team and the community will help you.
+Before opening a new issue, search [open issues](https://github.com/tanzanite2025/H-Gripe-Studio/issues)
+to see whether it has already been filed — add a 👍 reaction or a relevant
+comment instead of a duplicate. When filing a bug, include repro steps, what you
+expected vs. what happened, your OS, and relevant logs.
 
-## Providing Feedback
+## Development setup
 
-Your comments and feedback are welcome, and the development team is available via a handful of different channels.
+See [`README.md`](README.md) for the architecture and the full build/run/test
+commands. In short:
 
-See the `#bug-report`, `#feature-request` and `#feedback` channels on Discord.
+```sh
+# Desktop front end (build before running the Rust app, or use the Tauri CLI)
+npm --prefix apps/desktop-tauri/studio-ui ci
+npm --prefix apps/desktop-tauri/studio-ui run build
 
-## Reporting Issues
+# Desktop app
+cargo run -p hgripe-desktop
+# or, with the Tauri CLI: cd apps/desktop-tauri && tauri dev
+```
 
-Have you identified a reproducible problem in ComfyUI? Do you have a feature request? We want to hear about it! Here's how you can report your issue as effectively as possible.
+Prerequisites (Windows): Rust `stable-x86_64-pc-windows-msvc`, Visual Studio
+Build Tools 2022 (C++ workload + Windows SDK), and the WebView2 runtime.
 
+## Before you open a pull request
 
-### Look For an Existing Issue
+Run the checks for the area you touched and keep changes focused:
 
-Before you create a new issue, please do a search in [open issues](https://github.com/comfyanonymous/ComfyUI/issues) to see if the issue or feature request has already been filed.
+```sh
+# Rust (broker + desktop backend)
+cargo test
+cargo clippy --all-targets
 
-If you find your issue already exists, make relevant comments and add your [reaction](https://github.com/blog/2119-add-reactions-to-pull-requests-issues-and-comments). Use a reaction in place of a "+1" comment:
+# Python bridge (CPU-only image/PSD CLIs)
+ruff check python/bridge
+python -m pytest python/bridge/tests
 
-* 👍 - upvote
-* 👎 - downvote
+# Front end
+npm --prefix apps/desktop-tauri/studio-ui test
+npm --prefix apps/desktop-tauri/studio-ui run typecheck
+```
 
-If you cannot find an existing issue that describes your bug or feature, create a new issue. We have an issue template in place to organize new issues.
+Guidelines:
 
+- Match the surrounding style and conventions; prefer minimal, scoped edits.
+- Add or update tests for behaviour changes. New PSD cards should ship a
+  `python/bridge/*_cli.py` helper, tests under `python/bridge/tests/`, the
+  matching Rust report/struct, and a contract doc under [`docs/cards/`](docs/cards/).
+- Don't commit secrets (`credentials.json`, API keys) or build artifacts
+  (`apps/desktop-tauri/dist/`, `target/`).
+- Write a clear PR description: what changed and why. CI must be green before review.
 
-### Creating Pull Requests
+## License
 
-* Please refer to the article on [creating pull requests](https://github.com/comfyanonymous/ComfyUI/wiki/How-to-Contribute-Code) and contributing to this project.
+By contributing, you agree that your contributions are licensed under the
+project's [GPL-3.0](LICENSE) license.
 
+## Thank you
 
-## Thank You
-
-Your contributions to open source, large or small, make great projects like this possible. Thank you for taking the time to contribute.
+Your contributions, large or small, make the project better. Thank you for taking
+the time to contribute.

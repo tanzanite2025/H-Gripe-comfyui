@@ -25,10 +25,20 @@ bodies move less), and ``--protect-brand-color`` damps the shift on
 high-chroma pixels so a perfume bottle / logo keeps its brand colour. The
 correction only ever acts inside the subject's alpha (optionally further masked).
 
+Phase 2 adds an **opt-in** learned matcher behind the ``--engine`` seam
+(``color_backends/``): ``--engine onnx_harmonize`` runs a learned light/colour
+harmoniser when its optional dep + weight are present, otherwise it degrades to
+the heuristic above and the report records why (``engine_fallback_reason``).
+``cpu`` stays the default and the always-available baseline; weights are not
+bundled. ``--probe-engines`` prints which engines are usable so the UI can grey
+out the unavailable ones.
+
 The emitted JSON is ``{"matched_image", "prompt_suffix", "match_report"}`` where
 ``match_report`` records the before/after mean colour, colour temperature and
-contrast plus the Lab statistics used. On failure the process exits non-zero
-with a single message on stderr.
+contrast plus the Lab statistics used, plus the ``engine`` telemetry (which
+engine ran, what was requested, any ``engine_fallback_reason`` and the resolved
+``backend_model``). On failure the process exits non-zero with a single message
+on stderr.
 """
 
 from __future__ import annotations
@@ -323,6 +333,59 @@ def _apply_color_transfer(
     return transferred, stats
 
 
+# The always-available CPU heuristic is the default "engine"; learned matchers
+# register in ``color_backends`` and are selected by ``--engine``.
+_CPU_ENGINE = "cpu"
+
+
+def _run_engine(
+    engine_requested: str,
+    rgb: "np.ndarray",
+    alpha: "np.ndarray",
+    background_rgb: "np.ndarray",
+) -> tuple[dict[str, Any], "np.ndarray | None"]:
+    """Run the opt-in learned matcher for ``engine_requested`` (or the CPU path).
+
+    Returns ``(telemetry, harmonized_rgb)``. Any unavailability (unknown engine,
+    missing deps / weight, runtime error) degrades to the heuristic path
+    (``harmonized_rgb is None``) and records ``fallback_reason`` -- the node never
+    crashes on a box without the model.
+    """
+    state: dict[str, Any] = {
+        "engine": _CPU_ENGINE,
+        "fallback_reason": None,
+        "backend_model": None,
+    }
+
+    from color_backends import MatcherUnavailable, resolve
+
+    backend = resolve(engine_requested)
+    if backend is None:
+        state["fallback_reason"] = f"unknown engine {engine_requested!r}"
+        return state, None
+
+    ok, reason = backend.available()
+    if not ok:
+        state["fallback_reason"] = reason
+        return state, None
+
+    try:
+        harmonized = backend.match(rgb, alpha, background_rgb)
+    except MatcherUnavailable as err:
+        state["fallback_reason"] = err.reason
+        return state, None
+    except Exception as err:  # noqa: BLE001 - degrade to heuristic, never crash
+        state["fallback_reason"] = f"{type(err).__name__}: {err}"
+        return state, None
+
+    state["engine"] = backend.id
+    try:
+        state["backend_model"] = Path(backend.weight_path()).name
+    except Exception:  # noqa: BLE001 - the model name is best-effort telemetry
+        state["backend_model"] = None
+    return state, harmonized
+
+
 def match(args: argparse.Namespace) -> dict[str, Any]:
     image_path = (args.image or "").strip()
     if not image_path or not Path(image_path).is_file():
@@ -393,8 +456,41 @@ def match(args: argparse.Namespace) -> dict[str, Any]:
         "after": before,
     }
 
+    # Learned-matcher ``engine`` seam (``color_backends``). ``cpu`` is the
+    # always-on heuristic baseline; a learned engine is opt-in and degrades back
+    # to the heuristic (recording why) when its deps / weights are missing.
+    engine_requested = (getattr(args, "engine", _CPU_ENGINE) or _CPU_ENGINE).strip().lower() or _CPU_ENGINE
+    report["engine"] = _CPU_ENGINE
+    report["engine_requested"] = engine_requested
+    report["engine_fallback_reason"] = None
+    report["backend_model"] = None
+
     pixels_change = mode != "prompt_only" and strength > 0.0
-    if not pixels_change or background_rgb is None:
+
+    engine_rgb: "np.ndarray | None" = None
+    if engine_requested != _CPU_ENGINE:
+        if pixels_change and background_rgb is not None:
+            engine_state, engine_rgb = _run_engine(engine_requested, rgb, alpha, background_rgb)
+            report["engine"] = engine_state["engine"]
+            report["engine_fallback_reason"] = engine_state["fallback_reason"]
+            report["backend_model"] = engine_state["backend_model"]
+        else:
+            # A learned matcher was requested but there is nothing for it to
+            # harmonise against; keep the passthrough path and say why.
+            report["engine_fallback_reason"] = (
+                "no background reference" if background_rgb is None else "mode does not change pixels"
+            )
+
+    if engine_rgb is not None:
+        # Apply the learned correction only inside the subject region, scaled by
+        # ``strength``, so the matcher honours the same region/strength contract
+        # as the heuristic path.
+        weight = (region * strength)[..., None]
+        blended = rgb.astype(np.float32) * (1.0 - weight) + engine_rgb.astype(np.float32) * weight
+        out_rgb = np.clip(np.rint(blended), 0, 255).astype(np.uint8)
+        report["applied"] = True
+        report["after"] = _appearance(out_rgb, region)
+    elif not pixels_change or background_rgb is None:
         # prompt_only, zero strength, or nothing to match against: pass the
         # subject through untouched so the node is still wired-up correctly.
         if mode != "prompt_only" and background_rgb is None:
@@ -523,11 +619,27 @@ def build_parser() -> argparse.ArgumentParser:
         default=_DEFAULT_MAX_DECODE_PIXELS,
         help="refuse inputs larger than this many pixels before decoding (0 disables)",
     )
+    parser.add_argument(
+        "--engine",
+        default=_CPU_ENGINE,
+        help="match engine: cpu (default heuristic) | onnx_harmonize (opt-in learned, falls back to cpu)",
+    )
+    parser.add_argument(
+        "--probe-engines",
+        dest="probe_engines",
+        action="store_true",
+        help="print engine availability JSON and exit (UI capability probe)",
+    )
     return parser
 
 
 def main(argv: list[str] | None = None) -> int:
     args = build_parser().parse_args(argv)
+    if getattr(args, "probe_engines", False):
+        from color_backends import probe
+
+        sys.stdout.write(json.dumps(probe(), ensure_ascii=False))
+        return 0
     try:
         result = match(args)
     except Exception as err:  # noqa: BLE001 - surface a single clean error line

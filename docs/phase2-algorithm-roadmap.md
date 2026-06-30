@@ -17,6 +17,7 @@ and UI can be exercised without a GPU or large model downloads.
 | Image Enhance (super-res) | `enhance_image` | Pillow Lanczos upscale + Gaussian-blur denoise + unsharp mask (CPU) | SupIR / CCSR / Real-ESRGAN GPU restoration |
 | Detail Watchdog | `detect_quality_issues` | Pillow+numpy rule heuristics (Laplacian variance, tile sharpness grid, alpha-rim halo, mean-colour drift) | ML/VLM semantic defect detection |
 | Detail Repaint | `prepare_repaint_regions` + `composite_repaint` | crop/mask + feathered paste around a provider `image.edit` call | dedicated GPU inpainting backend |
+| Match Light & Color | `match_light_color` | Reinhard Lab transfer / per-channel histogram match weighted to shadows/highlights, brand-colour protected (CPU) | learned image-harmonisation backend |
 
 The guiding principle for Phase 2 is **additive, opt-in backends**: the existing
 CPU path stays as the always-available default and fallback; GPU/ML strength is
@@ -182,7 +183,48 @@ drift inside masked region (low denoise strength + tight masks), seam visibility
 
 ---
 
-## 4. Cross-cutting concerns
+## 4. Match Light & Color — `match_light_color`
+
+### 4.1 Phase 1 baseline
+`python/bridge/color_match_cli.py` runs, on CPU only: a Reinhard Lab statistics
+transfer / per-channel histogram match (`color_transfer` | `histogram_match` |
+`hybrid`), weighted toward shadows/highlights, sparing high-chroma (brand)
+pixels, and acting only inside the subject's alpha. `prompt_only` emits just the
+prompt suffix. Emits `{matched_image, prompt_suffix, match_report}`.
+
+### 4.2 Phase 2 target
+A **learned image-harmonisation** network (foreground harmonisation, e.g.
+PCT-Net / Harmonizer-style) that predicts a per-pixel light/colour correction
+consistent with the background while preserving brand colours and material cues
+better than the global Lab/histogram statistics.
+
+### 4.3 Integration plan
+**Status: the seam + `onnx_harmonize` have landed** (the trained weight is the
+remaining piece). Mirroring the SR / Watchdog / Repaint seams:
+
+- A new **`engine` param** (`cpu` | `onnx_harmonize` | …); `cpu` stays the
+  default and always-available heuristic baseline.
+- `python/bridge/color_backends/` is the registry (`known_engines` / `resolve` /
+  `probe`); 🟡 `onnx_harmonize` is the first concrete backend: it composites the
+  subject over the resized background for context, runs an ONNX harmoniser
+  (lazy `onnxruntime`, weight from `HGRIPE_COLOR_MODEL` / `HGRIPE_MODEL_CACHE`),
+  and returns the harmonised RGB at the source geometry.
+- The learned correction is applied **inside the subject alpha, scaled by
+  `strength`**, so it honours the same region/strength contract as the
+  heuristic, and emits into the **same** `match_report` (plus `engine` /
+  `engine_requested` / `engine_fallback_reason` / `backend_model` telemetry).
+- `--probe-engines` reports availability; `match_light_color` joins the
+  cross-card `probe_engines` aggregation so the inspector greys it out when its
+  dep/weight is missing. Missing dep/weight → graceful fallback to the heuristic.
+
+### 4.4 Dependencies & risks
+`onnxruntime` + a harmonisation weight (not bundled). Risks: identity / brand-
+colour drift (mitigated by the alpha-masked, strength-scaled blend), and the
+weight is opt-in so real-inference CI is gated like ViTMatte.
+
+---
+
+## 5. Cross-cutting concerns
 
 - **Packaging (ties to Issue #2):** model weights are **not** bundled in the
   installer. Backends resolve weights from `HGRIPE_MODEL_CACHE` (downloaded /
@@ -200,7 +242,7 @@ drift inside masked region (low denoise strength + tight masks), seam visibility
   `QualityReport` / `RepaintReport` / enhance JSON shapes. Phase 2 is selected
   per run via `profile_ref`; the CPU path remains the default and fallback.
 
-## 5. Suggested sequencing
+## 6. Suggested sequencing
 
 1. **SR first (highest visible win, lowest risk):** Real-ESRGAN backend behind
    `profile_ref` + capability probe + CPU fallback.

@@ -166,6 +166,10 @@ export const NODE_ZH: Record<string, NodeSpecZh> = {
       "将生成主体的光照与色彩向 PSD 背景靠拢，让合成不再显得「贴上去」：Reinhard Lab 迁移 / 直方图匹配，并向阴影与高光加权，同时保护品牌色。输出匹配后图像、匹配报告与提示词后缀。",
     params: {
       mode: { label: "模式" },
+      engine: {
+        label: "引擎",
+        hint: "cpu = 内置 Lab 迁移 / 直方图匹配（始终可用）；onnx_harmonize = 可选学习型协调器，权重/依赖缺失时回落 cpu",
+      },
       strength: { label: "强度" },
       shadow_strength: { label: "阴影强度", hint: "阴影区的额外校正权重" },
       highlight_strength: { label: "高光强度", hint: "高光区的额外校正权重" },

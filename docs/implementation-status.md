@@ -24,7 +24,7 @@
 | Capability | Status | Notes |
 | --- | --- | --- |
 | PSD Context Analyze (`analyze_psd_cli.py`) | ✅ Landed | `VisualContext` (lighting / bounds / masks) extraction. |
-| Match Light & Color (`color_match_cli.py`) | ✅ Landed (CPU) | Rule-based light/colour match. Learned matcher `engine` is ⛔ planned. |
+| Match Light & Color (`color_match_cli.py`) | 🟡 Partial | Rule-based light/colour match (CPU baseline), plus an opt-in **`engine` seam** (`python/bridge/color_backends/`) with an **`onnx_harmonize`** learned matcher + capability probe + CPU fallback. Real ONNX inference is opt-in (deps/weight not bundled). See §2. |
 | PSD Export (`compose_psd_cli.py`) | ✅ Landed | Smart-object replacement + `.psd`/preview/metadata triplet. |
 | Refine Mask Edge (`edge_refine_cli.py`) | 🟡 Partial | CPU clean/feather + trimap-aware hand-off (protects the matte unknown band) landed. A learned-matting / `guidedFilter` `profile_ref` **engine mode** is ⛔ planned. |
 | Image Enhance (`image_enhance_cli.py`) | 🟡 Partial | CPU Lanczos upscale + denoise + unsharp default, plus an opt-in **`engine` seam** (`python/bridge/sr_backends/`) with a **Real-ESRGAN** backend + capability probe + CPU fallback. Real GPU inference is opt-in (deps/weight not bundled). See §2. |
@@ -33,7 +33,8 @@
 
 ## 2. Phase 2 algorithm backends — [`phase2-algorithm-roadmap.md`](phase2-algorithm-roadmap.md)
 
-The roadmap is **mostly design-only today**, the first backend has landed. The
+The roadmap is **partly landed**: the per-card `engine` seams now ship across
+four cards (only their trained weights are pending). The
 guiding principle is additive, opt-in backends selected per run via the local
 card's `engine` param (the API-card `profile_ref` is a separate credentials
 concept), with the CPU path remaining the default and fallback.
@@ -43,7 +44,8 @@ concept), with the CPU path remaining the default and fallback.
 | **Super-resolution** GPU backend | 🟡 Partial | `engine` seam + `python/bridge/sr_backends/` registry + **Real-ESRGAN** backend (lazy torch, weight from `HGRIPE_MODEL_CACHE`) + `--probe-engines` capability probe + graceful CPU fallback **landed**. Still ⛔: CCSR / SupIR backends, real-inference CI (opt-in like ViTMatte), installer weight story. |
 | **Detail Watchdog** ML/VLM passes | 🟡 Partial | `engine` seam + `python/bridge/detector_backends/` registry + **`onnx_defect`** detector (lazy `onnxruntime`, weight from `HGRIPE_WATCHDOG_MODEL` / `HGRIPE_MODEL_CACHE`, hands/text/logo) + `--probe-engines` probe + graceful rule-only fallback **landed**. Still ⛔: the actual trained face/hand-quality, OCR + logo/template, and VLM defect models behind it, plus real-inference CI (opt-in like ViTMatte). Currently-`skipped` targets graduate to real findings only once a real weight lands. |
 | **Detail Repaint** local inpaint backend | 🟡 Partial | `engine` seam + `python/bridge/inpaint_backends/` registry + **`sd_inpaint`** backend (lazy `torch`/`diffusers`, weight from `HGRIPE_INPAINT_MODEL` / `HGRIPE_MODEL_CACHE`) consuming the existing crop+mask+prompt manifest via the `repaint` subcommand + `--probe-engines` probe + graceful provider fallback **landed**. Still ⛔: SDXL / Flux Fill backends, optional ControlNet, Poisson/gradient-domain seam blending, real-inference CI (opt-in like ViTMatte). |
-| **Capability probe / weight cache** | 🟡 Partial | Per-engine `--probe-engines` + `HGRIPE_MODEL_CACHE` resolution **landed for Image Enhance, Detail Watchdog and Detail Repaint**; the `probe_engines` Tauri command aggregates all three into a **cross-card capability report** that the Dashboard surfaces and the inspector uses to **grey out unavailable engines** (the CPU/`rules`/`provider` baseline stays enabled) **landed**. Still ⛔: GPU/CUDA device detail in the report. |
+| **Match Light & Color** learned matcher | 🟡 Partial | `engine` seam + `python/bridge/color_backends/` registry + **`onnx_harmonize`** backend (lazy `onnxruntime`, weight from `HGRIPE_COLOR_MODEL` / `HGRIPE_MODEL_CACHE`) consuming the same subject/alpha/background inputs and emitting into the existing `match_report` contract + `--probe-engines` probe + graceful CPU-heuristic fallback **landed**. The learned correction is applied inside the subject alpha, scaled by `strength`. Still ⛔: the actual trained harmonisation weight, real-inference CI (opt-in like ViTMatte), installer weight story. |
+| **Capability probe / weight cache** | 🟡 Partial | Per-engine `--probe-engines` + `HGRIPE_MODEL_CACHE` resolution **landed for Image Enhance, Detail Watchdog, Detail Repaint and Match Light & Color**; the `probe_engines` Tauri command aggregates all four into a **cross-card capability report** that the Dashboard surfaces and the inspector uses to **grey out unavailable engines** (the CPU/`rules`/`provider` baseline stays enabled) **landed**. Still ⛔: GPU/CUDA device detail in the report. |
 
 ## 3. Subject Mask / Matte — [`subject-mask-matte.md`](cards/subject-mask-matte.md)
 
@@ -67,7 +69,7 @@ concept), with the CPU path remaining the default and fallback.
 | Input hardening (CMYK/ICC normalise, EXIF, `--max-decode-pixels`) | ✅ Landed | Across the PSD cards. |
 | **Local model management surface** | ⛔ Planned | `engine` + future `weights_path` / `device` / `precision` as the only surface a "local model manager" UI would need. |
 | **"API manager" UI** | ⛔ Planned | Enumerate `api` cards + profiles/credentials. |
-| Per-card `engine` seams (matcher) | 🟡 Partial | Image Enhance, Detail Watchdog and Detail Repaint expose real opt-in `engine` seams (`realesrgan` / `onnx_defect` / `sd_inpaint`); the Match Light & Color learned matcher seam is still ⛔ (`cpu` only). |
+| Per-card `engine` seams (matcher) | 🟡 Partial | Image Enhance, Detail Watchdog, Detail Repaint and Match Light & Color expose real opt-in `engine` seams (`realesrgan` / `onnx_defect` / `sd_inpaint` / `onnx_harmonize`); Refine Mask Edge's learned-matting seam is still ⛔ (`cpu` only). |
 
 ## 5. Packaging & verification gaps
 

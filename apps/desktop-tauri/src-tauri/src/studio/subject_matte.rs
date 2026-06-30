@@ -495,8 +495,13 @@ mod tests {
         assert_eq!(alpha.get_pixel(0, 3).0[0], 0);
     }
 
-    /// Real inference, only when the weight resolves. Skipped otherwise so CI
-    /// without the blob still passes.
+    /// Real ViTMatte inference, only when the weight resolves (set
+    /// `HGRIPE_VITMATTE_MODEL` or bundle `resources/models/vitmatte.onnx`).
+    /// Skipped otherwise so CI without the blob still passes; the opt-in
+    /// `vitmatte-e2e` CI job fetches the weight and runs this. Beyond shape, it
+    /// asserts the matte honours the trimap — the definite-foreground core comes
+    /// back (near-)opaque and the definite-background corner (near-)transparent,
+    /// which is what proves the weight is actually wired through `ort`.
     #[test]
     fn vitmatte_inference_when_weight_present() {
         let Some(path) = resolve_model_file(MODEL_ENV, MODEL_FILE) else {
@@ -505,6 +510,9 @@ mod tests {
         };
         let matter = VitMatteMatter::load(&path).expect("load vitmatte");
         assert_eq!(matter.provider(), "vitmatte");
+
+        // A red square subject on a grey field; the trimap fixes a definite-FG
+        // core, a definite-BG exterior, and an unknown ring between.
         let mut image = RgbaImage::from_pixel(64, 64, Rgba([120, 120, 120, 255]));
         for y in 20..44 {
             for x in 20..44 {
@@ -512,7 +520,17 @@ mod tests {
             }
         }
         let trimap = trimap_from_mask(&block_mask(64, 64, 20, 20, 44, 44), 6);
+        // Sanity: the sample points are in the trimap regions we assert on.
+        assert_eq!(trimap.get_pixel(32, 32).0[0], TRIMAP_FG);
+        assert_eq!(trimap.get_pixel(2, 2).0[0], TRIMAP_BG);
+
         let alpha = matter.matte(&image, &trimap).expect("inference");
         assert_eq!(alpha.dimensions(), (64, 64));
+
+        let fg = alpha.get_pixel(32, 32).0[0];
+        let bg = alpha.get_pixel(2, 2).0[0];
+        assert!(fg > 200, "definite-FG core should stay opaque, got {fg}");
+        assert!(bg < 55, "definite-BG corner should stay transparent, got {bg}");
+        assert!(fg > bg, "matte must separate subject from background");
     }
 }

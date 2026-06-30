@@ -1140,6 +1140,60 @@ pub(crate) struct CardEngineProbe {
     pub(crate) error: Option<String>,
 }
 
+/// One CUDA device reported by the machine device probe.
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub(crate) struct DeviceInfo {
+    #[serde(default)]
+    pub(crate) index: u32,
+    #[serde(default)]
+    pub(crate) name: String,
+    #[serde(default)]
+    pub(crate) total_memory_mb: u64,
+}
+
+/// `torch` presence + CUDA flag from the device probe (filled when importable).
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub(crate) struct TorchInfo {
+    #[serde(default)]
+    pub(crate) installed: bool,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub(crate) version: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub(crate) cuda: Option<bool>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub(crate) reason: Option<String>,
+}
+
+/// `onnxruntime` presence + the execution providers available on this box.
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub(crate) struct OnnxRuntimeInfo {
+    #[serde(default)]
+    pub(crate) installed: bool,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub(crate) version: Option<String>,
+    #[serde(default)]
+    pub(crate) providers: Vec<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub(crate) reason: Option<String>,
+}
+
+/// Machine compute capability (which accelerator the opt-in GPU engines would
+/// actually run on): CUDA device names / VRAM via `torch` and the ONNX Runtime
+/// execution providers. The per-card probes only say *which* engines could run;
+/// this says *where*, so the UI can warn that a GPU engine falls back to CPU on
+/// a box with no CUDA device. Machine-global, so it is probed once.
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub(crate) struct DeviceProbe {
+    #[serde(default)]
+    pub(crate) cuda_available: bool,
+    #[serde(default)]
+    pub(crate) devices: Vec<DeviceInfo>,
+    #[serde(default)]
+    pub(crate) torch: TorchInfo,
+    #[serde(default)]
+    pub(crate) onnxruntime: OnnxRuntimeInfo,
+}
+
 /// Cross-card engine capability report (the `doctor`-style probe). Aggregates
 /// every local card that exposes an opt-in ML `engine` seam so the UI can grey
 /// out engines whose deps/weights are missing on this box.
@@ -1149,6 +1203,10 @@ pub(crate) struct EngineProbeReport {
     /// The shared weight cache (`HGRIPE_MODEL_CACHE` or the bundled dir).
     #[serde(default)]
     pub(crate) model_cache_dir: Option<String>,
+    /// Machine compute capability (CUDA devices / ONNX Runtime providers),
+    /// probed once; `None` when the device probe itself could not run.
+    #[serde(default)]
+    pub(crate) runtime: Option<DeviceProbe>,
 }
 
 /// Shape of a single CLI's `--probe-engines` JSON. `engines` carries extra
@@ -1160,6 +1218,37 @@ struct CliEngineProbe {
     engines: BTreeMap<String, EngineAvailability>,
     #[serde(default)]
     model_cache_dir: Option<String>,
+}
+
+/// Run the one-shot device probe CLI and parse its machine-capability JSON.
+/// Unlike the per-card probes this is the same for every card, so it is run
+/// once; a failure leaves `runtime` `None` rather than failing the report.
+fn run_device_probe(python: &Path, dir: &Path) -> Result<DeviceProbe, String> {
+    let script = dir
+        .join("python")
+        .join("bridge")
+        .join("device_probe_cli.py");
+    if !script.is_file() {
+        return Err(format!("device_probe_cli.py not found at {}", script.display()));
+    }
+    let mut cmd = std::process::Command::new(python);
+    cmd.arg(&script).current_dir(dir);
+    #[cfg(windows)]
+    {
+        use std::os::windows::process::CommandExt;
+        // CREATE_NO_WINDOW: don't pop a console window for the child.
+        cmd.creation_flags(0x0800_0000);
+    }
+    let output = cmd
+        .output()
+        .map_err(|err| format!("failed to launch {}: {err}", python.display()))?;
+    if !output.status.success() {
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        return Err(format!("device probe failed: {}", stderr.trim()));
+    }
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    serde_json::from_str::<DeviceProbe>(stdout.trim())
+        .map_err(|err| format!("could not parse device probe: {err} (raw: {})", stdout.trim()))
 }
 
 /// Run one card CLI's `--probe-engines` and parse its JSON.
@@ -1240,9 +1329,12 @@ pub(crate) fn probe_engines(dir: Option<String>) -> Result<EngineProbeReport, St
         cards.push(card);
     }
 
+    let runtime = run_device_probe(&python, &dir).ok();
+
     Ok(EngineProbeReport {
         cards,
         model_cache_dir,
+        runtime,
     })
 }
 
@@ -1589,7 +1681,7 @@ pub(crate) fn local_repaint_regions(
 mod tests {
     use super::{
         is_project_root, reject_unsafe_output_name, require_project_root, resolve_project_dir,
-        CliEngineProbe, EngineProbeReport,
+        CliEngineProbe, DeviceProbe, EngineProbeReport,
     };
     use std::fs;
     use std::path::PathBuf;
@@ -1678,6 +1770,64 @@ mod tests {
         assert!(probe.engines["rules"].available);
         assert!(!probe.engines["onnx_defect"].available);
         assert!(probe.engines["onnx_defect"].reason.contains("onnxruntime"));
+    }
+
+    #[test]
+    fn device_probe_parses_gpu_box() {
+        // A CUDA box: torch sees one device, ORT exposes the CUDA provider.
+        let raw = r#"{
+            "cuda_available": true,
+            "devices": [{"index": 0, "name": "NVIDIA RTX 4090", "total_memory_mb": 24564}],
+            "torch": {"installed": true, "version": "2.3.0", "cuda": true},
+            "onnxruntime": {"installed": true, "version": "1.18.0",
+                "providers": ["CUDAExecutionProvider", "CPUExecutionProvider"]}
+        }"#;
+        let probe: DeviceProbe = serde_json::from_str(raw).unwrap();
+        assert!(probe.cuda_available);
+        assert_eq!(probe.devices.len(), 1);
+        assert_eq!(probe.devices[0].name, "NVIDIA RTX 4090");
+        assert_eq!(probe.devices[0].total_memory_mb, 24564);
+        assert_eq!(probe.torch.cuda, Some(true));
+        assert!(probe
+            .onnxruntime
+            .providers
+            .iter()
+            .any(|p| p == "CUDAExecutionProvider"));
+    }
+
+    #[test]
+    fn device_probe_parses_cpu_only_box() {
+        // The common case (CI / no GPU): no CUDA, no devices, deps may be absent;
+        // missing optional fields default rather than failing to parse.
+        let raw = r#"{
+            "cuda_available": false,
+            "devices": [],
+            "torch": {"installed": false, "reason": "ModuleNotFoundError: torch"},
+            "onnxruntime": {"installed": true, "providers": ["CPUExecutionProvider"]}
+        }"#;
+        let probe: DeviceProbe = serde_json::from_str(raw).unwrap();
+        assert!(!probe.cuda_available);
+        assert!(probe.devices.is_empty());
+        assert!(!probe.torch.installed);
+        assert_eq!(probe.torch.cuda, None);
+        assert_eq!(probe.onnxruntime.version, None);
+        assert_eq!(probe.onnxruntime.providers, ["CPUExecutionProvider"]);
+    }
+
+    #[test]
+    fn engine_probe_report_carries_optional_runtime() {
+        // `runtime` is absent on older payloads -> None; present -> parsed.
+        let without = r#"{"cards": [], "model_cache_dir": null}"#;
+        let report: EngineProbeReport = serde_json::from_str(without).unwrap();
+        assert!(report.runtime.is_none());
+
+        let with = r#"{"cards": [], "model_cache_dir": null,
+            "runtime": {"cuda_available": false, "devices": [],
+                "torch": {"installed": false},
+                "onnxruntime": {"installed": false, "providers": []}}}"#;
+        let report: EngineProbeReport = serde_json::from_str(with).unwrap();
+        assert!(report.runtime.is_some());
+        assert!(!report.runtime.unwrap().cuda_available);
     }
 
     #[test]

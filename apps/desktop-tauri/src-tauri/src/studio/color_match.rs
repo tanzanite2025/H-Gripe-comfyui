@@ -76,6 +76,9 @@ pub(super) fn execute_studio_match_light_color(
         Some(number_param(node, "highlight_strength", 0.0)),
         Some(bool_param(node, "protect_saturation", false)),
         Some(bool_param(node, "protect_brand_color", true)),
+        // `engine` selects the opt-in learned matcher (default `cpu`); the bridge
+        // falls back to the always-on CPU heuristic when it is unavailable.
+        optional(studio_value_to_string(node.params.get("engine"))),
         Some(output_dir),
         optional(studio_value_to_string(node.params.get("output_name"))),
     )?;

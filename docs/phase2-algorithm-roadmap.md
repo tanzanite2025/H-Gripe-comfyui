@@ -282,8 +282,14 @@ real-inference CI is gated like ViTMatte.
   the `probe_engines` Tauri command aggregates them into a **cross-card capability
   report** (the `doctor`-style probe). The Dashboard surfaces it and the inspector
   uses it to **grey out engines** whose deps/weights are missing on this box (the
-  CPU/`rules` baseline stays enabled, so the node always falls back to CPU). ⛔
-  still: GPU/CUDA device detail and cached-weight inventory in the report.
+  CPU/`rules` baseline stays enabled, so the node always falls back to CPU). ✅
+  the report also carries **GPU/CUDA device detail** (the machine `runtime`
+  probe — Dashboard **Compute** section + the inspector's per-engine "runs on
+  GPU / falls back to CPU" badge) and a **cached-weight inventory** per engine
+  (each ML engine's non-bundled `weight` path / `present` / `size_mb`, surfaced
+  in the Dashboard so it is clear what is downloaded vs still missing). ⛔ still:
+  an explicit per-node `device` / `precision` selection (the "local model
+  manager" surface).
 - **Determinism & safety:** seedable backends; keep the text/logo guards; require
   rule+ML agreement before any *automatic* (non-user-confirmed) repaint.
 - **Contracts are stable:** every Phase 2 backend emits the existing

@@ -34,11 +34,12 @@ Design rules (mirroring the ``sr_backends`` / ``detector_backends`` /
 
 from __future__ import annotations
 
+from pathlib import Path
 from typing import Any, Protocol
 
 # Reuse the one model-cache resolver (torch-free, defined for the SR seam) so
 # downloadable weights for every node land in the same place.
-from sr_backends import model_cache_dir
+from sr_backends import _engine_weight, model_cache_dir
 
 CPU_ENGINE = "cpu"
 
@@ -73,6 +74,10 @@ class MattingBackend(Protocol):
 
     def available(self) -> tuple[bool, str]:
         """Return ``(ok, reason)``; ``reason`` explains *why not* when not ok."""
+        ...
+
+    def weight_path(self) -> Path:
+        """Resolved path of the (non-bundled) weight this matter would load."""
         ...
 
     def matte(self, rgb: Any, trimap: Any) -> Any:
@@ -134,6 +139,12 @@ def probe() -> dict[str, Any]:
         except Exception as err:  # noqa: BLE001 - a broken probe must not crash the report
             ok, reason = False, f"{type(err).__name__}: {err}"
         # GPU-capable engine: the UI pairs this with the machine device probe to
-        # warn it would fall back to CPU on a box with no CUDA device.
-        engines[name] = {"available": bool(ok), "reason": reason, "accelerated": True}
+        # warn it would fall back to CPU on a box with no CUDA device. ``weight``
+        # is the cached-weight inventory (which non-bundled weight it loads).
+        engines[name] = {
+            "available": bool(ok),
+            "reason": reason,
+            "accelerated": True,
+            "weight": _engine_weight(backend),
+        }
     return {"engines": engines, "model_cache_dir": str(model_cache_dir())}

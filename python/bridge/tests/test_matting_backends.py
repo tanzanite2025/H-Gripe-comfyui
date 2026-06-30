@@ -57,6 +57,11 @@ def test_probe_always_reports_cpu_available() -> None:
     assert "onnx_matting" in report["engines"]
     assert report["engines"]["cpu"]["accelerated"] is False
     assert report["engines"]["onnx_matting"]["accelerated"] is True
+    # Cached-weight inventory: the CPU baseline loads none; the ML engine names it.
+    assert "weight" not in report["engines"]["cpu"]
+    weight = report["engines"]["onnx_matting"]["weight"]
+    assert weight["path"].endswith("matting.onnx")
+    assert isinstance(weight["present"], bool)
     assert "model_cache_dir" in report
 
 

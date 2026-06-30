@@ -55,6 +55,15 @@ class SrBackend(Protocol):
         """Return ``(ok, reason)``; ``reason`` explains *why not* when not ok."""
         ...
 
+    def weight_path(self) -> Path:
+        """Resolved path of the (non-bundled) weight this backend would load.
+
+        Used by :func:`probe` to inventory which weights are cached, without
+        importing the heavy deps. The path need not exist (a missing weight is
+        what makes the backend unavailable).
+        """
+        ...
+
     def upscale(self, rgb: Any, scale: float) -> Any:
         """Upscale a PIL ``RGB`` image by ``scale`` (no alpha — handled by the caller).
 
@@ -78,6 +87,34 @@ def model_cache_dir() -> Path:
     here = Path(__file__).resolve()
     repo = here.parents[2]
     return repo / "apps" / "desktop-tauri" / "src-tauri" / "resources" / "models"
+
+
+def weight_info(path: Path) -> dict[str, Any]:
+    """Cached-weight inventory entry for one backend's resolved weight path.
+
+    The big ML weights are **not** bundled (Issue #2); they are fetched into the
+    model cache. This reports whether a backend's weight is already present and
+    how big it is, so the capability report can show what is downloaded vs still
+    missing rather than only "engine unavailable". A directory weight (e.g. a
+    diffusers / HF snapshot) reports ``present`` without a single file size.
+    """
+    try:
+        size_mb = int(path.stat().st_size // (1024 * 1024)) if path.is_file() else None
+        return {"path": str(path), "present": path.exists(), "size_mb": size_mb}
+    except OSError as err:
+        return {"path": str(path), "present": False, "size_mb": None, "reason": f"{type(err).__name__}: {err}"}
+
+
+def _engine_weight(backend: Any) -> dict[str, Any] | None:
+    """Weight inventory for a registered backend, or ``None`` if it has none.
+
+    Never raises: a backend whose ``weight_path`` cannot be resolved simply has
+    no inventory entry, so the probe still reports its availability.
+    """
+    try:
+        return weight_info(backend.weight_path())
+    except Exception:  # noqa: BLE001 - a broken weight_path must not crash the report
+        return None
 
 
 def device_probe() -> dict[str, Any]:
@@ -198,5 +235,7 @@ def probe() -> dict[str, Any]:
             # GPU-capable engine: the UI pairs this with the machine device probe
             # to warn it would fall back to CPU on a box with no CUDA device.
             "accelerated": True,
+            # Cached-weight inventory: which non-bundled weight it loads + size.
+            "weight": _engine_weight(backend),
         }
     return {"engines": engines, "model_cache_dir": str(model_cache_dir())}

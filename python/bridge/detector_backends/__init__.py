@@ -28,11 +28,12 @@ Design rules (mirroring the ``sr_backends`` super-resolution seam):
 
 from __future__ import annotations
 
+from pathlib import Path
 from typing import Any, Protocol
 
 # Reuse the one model-cache resolver (torch-free, defined for the SR seam) so
 # downloadable weights for every node land in the same place.
-from sr_backends import model_cache_dir
+from sr_backends import _engine_weight, model_cache_dir
 
 RULES_ENGINE = "rules"
 
@@ -69,6 +70,10 @@ class DetectorBackend(Protocol):
 
     def available(self) -> tuple[bool, str]:
         """Return ``(ok, reason)``; ``reason`` explains *why not* when not ok."""
+        ...
+
+    def weight_path(self) -> Path:
+        """Resolved path of the (non-bundled) weight this detector would load."""
         ...
 
     def detect(
@@ -138,5 +143,7 @@ def probe() -> dict[str, Any]:
             # GPU-capable engine: the UI pairs this with the machine device probe
             # to warn it would fall back to CPU on a box with no CUDA device.
             "accelerated": True,
+            # Cached-weight inventory: which non-bundled weight it loads + size.
+            "weight": _engine_weight(backend),
         }
     return {"engines": engines, "model_cache_dir": str(model_cache_dir())}

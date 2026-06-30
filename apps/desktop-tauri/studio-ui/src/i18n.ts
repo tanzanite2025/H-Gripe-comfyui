@@ -151,6 +151,8 @@ export const messages = {
   "dashboard.computeCpuOnly": { en: "CPU only", zh: "仅 CPU" },
   "dashboard.computeProviders": { en: "ONNX Runtime providers", zh: "ONNX Runtime 提供者" },
   "dashboard.computeNotInstalled": { en: "not installed", zh: "未安装" },
+  "dashboard.weightCached": { en: "weight cached", zh: "权重已缓存" },
+  "dashboard.weightMissing": { en: "weight not downloaded", zh: "权重未下载" },
   "btn.refresh": { en: "Refresh", zh: "刷新" },
   "btn.validate": { en: "Validate", zh: "校验" },
   "btn.reload": { en: "Reload", zh: "重新加载" },

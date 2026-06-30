@@ -60,6 +60,11 @@ def test_probe_always_reports_rules_available() -> None:
     assert "onnx_defect" in report["engines"]
     assert report["engines"]["rules"]["accelerated"] is False
     assert report["engines"]["onnx_defect"]["accelerated"] is True
+    # Cached-weight inventory: the rule baseline loads none; the ML engine names it.
+    assert "weight" not in report["engines"]["rules"]
+    weight = report["engines"]["onnx_defect"]["weight"]
+    assert weight["path"].endswith("watchdog_defect.onnx")
+    assert isinstance(weight["present"], bool)
     assert "model_cache_dir" in report
 
 

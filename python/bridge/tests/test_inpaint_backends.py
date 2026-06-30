@@ -65,6 +65,12 @@ def test_probe_always_reports_provider_available() -> None:
     # The remote provider is not a local accelerator; the local engine is.
     assert report["engines"]["provider"]["accelerated"] is False
     assert report["engines"]["sd_inpaint"]["accelerated"] is True
+    # Cached-weight inventory: the remote provider loads none; the local engine
+    # names its (directory) weight.
+    assert "weight" not in report["engines"]["provider"]
+    weight = report["engines"]["sd_inpaint"]["weight"]
+    assert weight["path"].endswith("sd-inpaint")
+    assert isinstance(weight["present"], bool)
     assert "model_cache_dir" in report
 
 

@@ -843,11 +843,12 @@ mod tests {
         let out = execute_studio_subject_mask(&node, &inputs).unwrap();
         let report = out.get("matte_report").unwrap();
         // An auto mode reports the segmenter that produced the base matte: the
-        // builtin fallback, or the model backend when a weight is bundled. Both
-        // are valid here; the point is it is no longer the manual `rust-native`.
+        // builtin fallback, or a model backend (u2netp / birefnet) when a weight
+        // resolves. All are valid; the point is it is no longer manual
+        // `rust-native`.
         let provider = report.get("provider").and_then(Value::as_str).unwrap();
         assert!(
-            matches!(provider, "builtin-cpu" | "u2netp"),
+            matches!(provider, "builtin-cpu" | "u2netp" | "birefnet"),
             "unexpected auto provider {provider}"
         );
         assert_eq!(

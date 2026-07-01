@@ -268,23 +268,9 @@ impl AlphaMatter for BuiltinCpuMatter {
         let soft = pixel_ops::resize_gray(&soft, width, height, FilterType::Triangle);
 
         // Composite at full res: hard FG/BG from the trimap, guided alpha in the
-        // unknown band. Rows are independent, so fill the raw buffer in parallel.
-        let w = width as usize;
-        let trimap_buf = trimap.as_raw();
-        let soft_buf = soft.as_raw();
-        let mut out_buf = vec![0u8; w * height as usize];
-        out_buf.par_chunks_mut(w).enumerate().for_each(|(y, row)| {
-            let base = y * w;
-            for (x, slot) in row.iter_mut().enumerate() {
-                *slot = match trimap_buf[base + x] {
-                    TRIMAP_FG => 255,
-                    TRIMAP_BG => 0,
-                    _ => soft_buf[base + x],
-                };
-            }
-        });
-        let out = GrayImage::from_raw(width, height, out_buf)
-            .expect("matte composite buffer matches dimensions");
+        // unknown band. Shared (rayon-parallel) with the compute lane's other
+        // composite via `pixel_ops`.
+        let out = pixel_ops::composite_trimap_alpha(&trimap, &soft, TRIMAP_FG, TRIMAP_BG);
         Ok(out)
     }
 }

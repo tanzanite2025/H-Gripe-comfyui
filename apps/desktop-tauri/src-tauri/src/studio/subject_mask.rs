@@ -596,23 +596,9 @@ fn mask_coverage(mask: &GrayImage) -> f64 {
 }
 
 fn compose_alpha(image: &RgbaImage, mask: &GrayImage) -> RgbaImage {
-    let (width, _height) = image.dimensions();
-    let w = width as usize;
-    let mask_buf = mask.as_raw();
-    // Full-resolution op (the cutout is the original size): copy the RGB and
-    // overwrite the alpha channel from the mask, one independent row per worker.
-    let mut out = image.clone();
-    // `ImageBuffer` derefs to its packed `[u8]` sample buffer (RGBA, 4 bytes/px).
-    let buf: &mut [u8] = &mut out;
-    buf.par_chunks_mut(w * 4)
-        .enumerate()
-        .for_each(|(y, row)| {
-            let base = y * w;
-            for x in 0..w {
-                row[x * 4 + 3] = mask_buf[base + x];
-            }
-        });
-    out
+    // Full-resolution "cutout": keep the RGB, take alpha from the mask. Shared
+    // (rayon-parallel) with the rest of the compute lane via `pixel_ops`.
+    pixel_ops::apply_alpha_mask(image, mask)
 }
 
 fn cutout_to_bbox(alpha_image: &RgbaImage, mask: &GrayImage) -> RgbaImage {

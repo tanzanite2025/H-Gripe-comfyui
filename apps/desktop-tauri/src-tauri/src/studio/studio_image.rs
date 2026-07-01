@@ -143,10 +143,49 @@ pub(crate) fn load_rgba(path: &Path, max_pixels: u64) -> Result<LoadedRgba, Stri
     if let Some(hit) = image_buffer::lookup_rgba(path, max_pixels) {
         return Ok(hit);
     }
+    // CMYK-family sources (Adobe CMYK / YCCK JPEG, CMYK TIFF): the `image` crate
+    // would decode them to RGB and silently discard the embedded ICC, so every
+    // native card that loaded through here (crop, subject mask, ...) got
+    // colour-shifted pixels. Decode the raw inks + profile ourselves and
+    // colour-manage to sRGB, mirroring the enhance fast path. `decode_cmyk`
+    // returns `None` for non-CMYK sources and the CMYK shapes it won't take
+    // faithfully (an unmarked CMYK JPEG); both, and any decode error, fall
+    // through to the generic decode below (unchanged behaviour).
+    if let Ok(Some(raw)) = super::cmyk_decode::decode_cmyk(path, max_pixels) {
+        if let Some(loaded) = cmyk_to_loaded_rgba(&raw) {
+            return Ok(loaded);
+        }
+    }
     let (image, meta) = load_dynamic(path, max_pixels)?;
     Ok(LoadedRgba {
         image: image.into_rgba8(),
         meta,
+    })
+}
+
+/// Build an opaque 8-bit RGBA surface from raw CMYK samples colour-managed to
+/// sRGB (CMYK carries no alpha, so the alpha track is fully opaque). Returns
+/// `None` on an empty or malformed buffer so the caller falls back to the
+/// generic decode.
+fn cmyk_to_loaded_rgba(raw: &super::cmyk_decode::RawCmyk) -> Option<LoadedRgba> {
+    if raw.width == 0 || raw.height == 0 {
+        return None;
+    }
+    let rgb = super::cmyk_transform::cmyk_to_rgb8(raw);
+    let expected = raw.width as usize * raw.height as usize * 3;
+    if rgb.len() != expected {
+        return None;
+    }
+    let mut out = RgbaImage::new(raw.width, raw.height);
+    for (px, chunk) in out.pixels_mut().zip(rgb.chunks_exact(3)) {
+        *px = image::Rgba([chunk[0], chunk[1], chunk[2], 255]);
+    }
+    Some(LoadedRgba {
+        image: out,
+        meta: LoadMeta {
+            source_mode: "CMYK".to_string(),
+            exif_transposed: false,
+        },
     })
 }
 
@@ -331,6 +370,45 @@ mod tests {
         .unwrap();
         let probe = probe_source(&path).unwrap();
         assert_eq!(probe.color, ExtendedColorType::Cmyk8);
+        let _ = std::fs::remove_file(&path);
+    }
+
+    // A native card (crop, subject mask, ...) loading a CMYK JPEG must get
+    // colour-managed sRGB, not the `image` crate's lossy CMYK->RGB with the ICC
+    // dropped. The tile centres must land on the sRGB Pillow produces (naive
+    // path; the fixture carries no ICC), the source mode must read `CMYK`, and
+    // the alpha track must be fully opaque.
+    #[test]
+    fn load_rgba_colour_manages_cmyk_jpeg() {
+        let path = unique_tmp("enhance_cmyk.jpg");
+        std::fs::write(
+            &path,
+            include_bytes!("../../tests/fixtures/cmyk_adobe_app14.jpg"),
+        )
+        .unwrap();
+
+        let loaded = load_rgba(&path, DEFAULT_MAX_DECODE_PIXELS).unwrap();
+        assert_eq!(loaded.image.dimensions(), (32, 32));
+        assert_eq!(loaded.meta.source_mode, "CMYK");
+
+        let expected: [((u32, u32), [u8; 3]); 4] = [
+            ((8, 8), [255, 255, 255]),
+            ((24, 8), [0, 255, 255]),
+            ((8, 24), [0, 0, 0]),
+            ((24, 24), [119, 179, 209]),
+        ];
+        for ((x, y), want) in expected {
+            let px = loaded.image.get_pixel(x, y).0;
+            assert_eq!(px[3], 255, "alpha must be opaque at ({x},{y})");
+            for ch in 0..3 {
+                assert!(
+                    (i32::from(px[ch]) - i32::from(want[ch])).abs() <= 6,
+                    "tile ({x},{y}) ch {ch}: rust {} vs PIL {}",
+                    px[ch],
+                    want[ch]
+                );
+            }
+        }
         let _ = std::fs::remove_file(&path);
     }
 

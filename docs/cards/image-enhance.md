@@ -96,7 +96,7 @@ falls straight through to `image_enhance_cli.py`, so no input regresses.
 | `CMYK` (TIFF) | ✅ | Raw ink samples + embedded ICC read via `cmyk_decode` (bypassing the `image` crate, which drops them at decode), then colour-managed to sRGB via `cmyk_transform` (the profile's A2B LUT through `moxcms`, else PIL's naive formula). Output is sRGB, so the source CMYK profile is dropped (`icc_preserved: false`), matching Python. See below. |
 | `CMYK` (Adobe JPEG) | ✅ | APP14 transform-0 JPEGs store *inverted* ink (0 = full ink); `cmyk_decode` undoes it (`255 - v`) so the samples match TIFF Separated, then the same `cmyk_transform` path applies. |
 | `CMYK` (YCCK JPEG) | ✅ | APP14 transform-2 JPEGs (`zune` reports a `YCCK` input colourspace). Instead of `zune`'s lossy YCCK→RGB (which drops the ICC), the output colourspace is pinned to `YCCK` so `zune` copies the raw Y/Cb/Cr/K planes through; `cmyk_decode` reconstructs CMYK (libjpeg's `ycck_cmyk_convert`) and undoes the inversion, keeping the ICC, then the same `cmyk_transform` path applies. |
-| `CMYK` (unmarked JPEG) | ⛔ defers to Python | An unmarked CMYK JPEG is too rare to validate a round-trip for, so it stays on the colour-managed Python path. |
+| `CMYK` (unmarked JPEG) | ✅ | A 4-component JPEG with no APP14 Adobe marker (`zune` defaults it to `CMYK`). Pillow inverts the stored ink to the device direction whether or not the marker is present, so `cmyk_decode` treats it exactly like Adobe CMYK (`255 - v`) and the same `cmyk_transform` path applies. |
 | `Rgb32F` / `Rgba32F` (float) | ⛔ defers to Python | |
 
 Landed: [#172](https://github.com/tanzanite2025/H-Gripe-Studio/pull/172)
@@ -146,7 +146,7 @@ independently reviewable, CI-verifiable steps:
     production. `probe_source` now sniffs the JPEG itself
     (`cmyk_decode::is_cmyk_family_jpeg`, via `zune`'s input colourspace) and
     reclassifies CMYK-family JPEGs as `Cmyk8` so they reach the CMYK fast path;
-    `decode_cmyk` still returns `None` for shapes it won't take (unmarked CMYK),
+    `decode_cmyk` still returns `None` for shapes it won't take (float, etc.),
     keeping those on Python.
   - **YCCK decode.** `zune` only offers a lossy YCCK→RGB that drops the ICC.
     Instead the output colourspace is pinned to `YCCK`, so `zune`'s same
@@ -167,6 +167,25 @@ independently reviewable, CI-verifiable steps:
   either engine breaks CI. The ICC (profiled) path is checked against a
   littleCMS reference locally (moxcms is not byte-identical to littleCMS; small
   ΔE), skipped on runners without a system CMYK profile.
+- **c5 — ICC fidelity: tetrahedral interpolation + rendering intent
+  ([#185](https://github.com/tanzanite2025/H-Gripe-Studio/pull/185)).** The
+  profiled path now walks the CMYK A2B LUT with **tetrahedral** interpolation
+  and high-precision barycentric weights (moxcms `options` feature), matching
+  littleCMS/lcms2 instead of moxcms's default quadlinear, so the residual ΔE vs
+  the Python reference shrinks. Rendering intent is configurable
+  (`cmyk_to_rgb8_with_intent`) but defaults to Perceptual, mirroring Pillow's
+  `profileToProfile`. No black-point compensation: Pillow defaults to `flags=0`
+  (BPC off) and moxcms 0.8.1 does not expose it, so adding it would *diverge*
+  from the reference rather than align.
+- **c6 — unmarked CMYK JPEG in-process
+  ([#186](https://github.com/tanzanite2025/H-Gripe-Studio/pull/186)).** A
+  4-component JPEG with no APP14 Adobe marker (`zune` defaults it to `CMYK`).
+  Pillow inverts the stored ink to the device direction *unconditionally* —
+  marker or not — so `cmyk_decode` now takes `(CMYK, transform 0 | no marker)`
+  and applies the same `255 - v` as Adobe CMYK. A committed fixture
+  (`tests/fixtures/cmyk_unmarked.jpg`, the Adobe fixture with its APP14 segment
+  stripped, regenerable via `scripts/gen_unmarked_cmyk_jpeg_fixture.py`) is
+  decoded + transformed in Rust and compared to Pillow's RGB within tolerance.
 
 Because there is no local Rust toolchain, each step leans on CI + the fixture
 assertions rather than manual inspection.

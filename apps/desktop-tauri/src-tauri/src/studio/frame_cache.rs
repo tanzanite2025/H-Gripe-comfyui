@@ -26,7 +26,10 @@ pub(crate) fn frame_key(timestamp_sec: f64) -> i64 {
         // Covers <= 0 and NaN (NaN fails every comparison).
         return 0;
     }
-    (timestamp_sec * 1000.0).round() as i64
+    // Round ties to even so a timestamp landing exactly on a half-millisecond
+    // (e.g. 1.2345 s -> 1234.5 ms) is deterministic and matches the documented
+    // quantisation; plain `round()` breaks ties away from zero (1235).
+    (timestamp_sec * 1000.0).round_ties_even() as i64
 }
 
 /// A fixed-capacity LRU map from frame key -> decoded poster path.

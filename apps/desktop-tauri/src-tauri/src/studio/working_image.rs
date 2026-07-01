@@ -5,14 +5,15 @@
 //! deferred to the model-egress boundary. See
 //! [`docs/design/colour-pipeline.md`](../../../../../docs/design/colour-pipeline.md).
 //!
-//! **Phase 1 (this file): scaffolding only.** The type, the working-space enum,
-//! and the lossless-ish conversions to/from the existing 8-bit `RgbaImage` land
-//! here with tests, but nothing is rewired yet — the shared loaders and cards
-//! still produce 8-bit sRGB. Later phases (P2 wide-gamut, P3 model egress, P4
-//! file output) adopt this type. It is deliberately not referenced by
-//! production code yet, hence the module-level `dead_code` allowance below; each
-//! later phase removes another piece of that scaffolding as it wires the type
-//! in.
+//! **Phase 2 (current):** the shared loader now decodes into this carrier
+//! ([`super::studio_image::load_working`]) — a 16-bit RGBA surface tagged
+//! `Srgb` and carrying the source ICC — then narrows it back to the 8-bit
+//! `RgbaImage` the cards still consume, so behaviour is unchanged (pure
+//! plumbing, no gamut change). Later phases consume the 16-bit surface + its
+//! `space` / `icc` directly: P2b switches the canonical `space` to `ProPhoto`,
+//! P3 adds the sRGB model-egress convert, P4 the manual-path file output. Until
+//! those land the `space` / `icc` fields and the `ProPhoto` variant are written
+//! but not yet read in production, hence the module-level `dead_code` allowance.
 #![allow(dead_code)]
 
 use image::{Rgba, RgbaImage};

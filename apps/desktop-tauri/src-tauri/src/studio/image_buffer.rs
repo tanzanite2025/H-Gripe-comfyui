@@ -69,10 +69,7 @@ enum Freshness {
     /// File-backed: the producer wrote a PNG, so the buffer is only served
     /// while the file's `(mtime, len)` still match what was captured at publish
     /// time (an edited / replaced output invalidates its own entry).
-    File {
-        mtime: Option<SystemTime>,
-        len: u64,
-    },
+    File { mtime: Option<SystemTime>, len: u64 },
     /// Deferred: the producer *skipped* the PNG write (its output is consumed
     /// only by in-process compute cards), so there is no file to check against.
     /// The entry is served unconditionally, and if it is ever evicted it is
@@ -186,10 +183,7 @@ fn key_for(path: &Path) -> Option<(String, Option<SystemTime>, u64)> {
 fn key_for_lookup(path: &Path) -> (String, Option<(Option<SystemTime>, u64)>) {
     match key_for(path) {
         Some((id, mtime, len)) => (id, Some((mtime, len))),
-        None => (
-            crate::resource::id_for(&path.to_string_lossy()),
-            None,
-        ),
+        None => (crate::resource::id_for(&path.to_string_lossy()), None),
     }
 }
 
@@ -461,9 +455,7 @@ fn fetch_fresh(path: &Path) -> Option<Entry> {
         // A deferred entry has no file to check; it is served until evicted.
         Freshness::Deferred { .. } => Some(entry),
         Freshness::File { mtime, len } => match disk {
-            Some((disk_mtime, disk_len)) if *mtime == disk_mtime && *len == disk_len => {
-                Some(entry)
-            }
+            Some((disk_mtime, disk_len)) if *mtime == disk_mtime && *len == disk_len => Some(entry),
             _ => {
                 lru.remove(&id);
                 None
@@ -537,7 +529,9 @@ mod tests {
 
         // Gray publish -> ImageLuma8.
         let gray_path = unique_tmp("dyn_gray.png");
-        GrayImage::from_pixel(2, 2, Luma([5])).save(&gray_path).unwrap();
+        GrayImage::from_pixel(2, 2, Luma([5]))
+            .save(&gray_path)
+            .unwrap();
         publish_gray(&gray_path, &GrayImage::from_pixel(2, 2, Luma([222])));
         match lookup_dynamic(&gray_path).expect("gray hit") {
             DynamicImage::ImageLuma8(img) => {
@@ -548,7 +542,9 @@ mod tests {
 
         // A path that was never published is a miss.
         let missing = unique_tmp("dyn_missing.png");
-        GrayImage::from_pixel(1, 1, Luma([0])).save(&missing).unwrap();
+        GrayImage::from_pixel(1, 1, Luma([0]))
+            .save(&missing)
+            .unwrap();
         assert!(lookup_dynamic(&missing).is_none());
 
         let _ = std::fs::remove_file(&rgba_path);
@@ -686,14 +682,19 @@ mod tests {
 
         let filler = Entry {
             image: DecodedImage::Gray(Arc::new(GrayImage::from_pixel(1, 1, Luma([0])))),
-            freshness: Freshness::File { mtime: None, len: 0 },
+            freshness: Freshness::File {
+                mtime: None,
+                len: 0,
+            },
         };
         for entry in &lru.insert("filler".to_string(), filler) {
             materialize(entry);
         }
         // An evicted Srgb-space surface lands on disk as the exact 8-bit
         // narrow, same as the producing card's direct write.
-        let reloaded = image::open(&path).expect("materialised png decodes").to_rgba8();
+        let reloaded = image::open(&path)
+            .expect("materialised png decodes")
+            .to_rgba8();
         assert_eq!(reloaded, work.to_srgb_rgba8());
         let _ = std::fs::remove_file(&path);
     }
@@ -703,7 +704,10 @@ mod tests {
         let mut lru = Lru::new(2);
         let entry = |v: u8| Entry {
             image: DecodedImage::Gray(Arc::new(GrayImage::from_pixel(1, 1, Luma([v])))),
-            freshness: Freshness::File { mtime: None, len: 0 },
+            freshness: Freshness::File {
+                mtime: None,
+                len: 0,
+            },
         };
         lru.insert("a".to_string(), entry(1));
         lru.insert("b".to_string(), entry(2));
@@ -762,15 +766,23 @@ mod tests {
         // A second insert evicts the deferred entry; the caller materialises it.
         let filler = Entry {
             image: DecodedImage::Gray(Arc::new(GrayImage::from_pixel(1, 1, Luma([0])))),
-            freshness: Freshness::File { mtime: None, len: 0 },
+            freshness: Freshness::File {
+                mtime: None,
+                len: 0,
+            },
         };
         let evicted = lru.insert("filler".to_string(), filler);
         assert_eq!(evicted.len(), 1);
         for entry in &evicted {
             materialize(entry);
         }
-        assert!(path.exists(), "the evicted deferred surface is written to disk");
-        let reloaded = image::open(&path).expect("materialised png decodes").to_rgba8();
+        assert!(
+            path.exists(),
+            "the evicted deferred surface is written to disk"
+        );
+        let reloaded = image::open(&path)
+            .expect("materialised png decodes")
+            .to_rgba8();
         assert_eq!(reloaded.dimensions(), (3, 3));
         assert_eq!(reloaded.get_pixel(0, 0).0, [7, 8, 9, 255]);
         let _ = std::fs::remove_file(&path);

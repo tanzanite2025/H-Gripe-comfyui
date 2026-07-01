@@ -299,7 +299,9 @@ mod tests {
         // sRGB is a subset of ProPhoto, so sRGB -> ProPhoto16 -> sRGB8 must come
         // back within a rounding step. This bounds the egress error the cards
         // see for anything that *did* travel through ProPhoto.
-        let rgb8: Vec<u8> = vec![0, 0, 0, 255, 255, 255, 1, 128, 254, 64, 32, 16, 200, 100, 50, 12, 240, 33];
+        let rgb8: Vec<u8> = vec![
+            0, 0, 0, 255, 255, 255, 1, 128, 254, 64, 32, 16, 200, 100, 50, 12, 240, 33,
+        ];
         let px = rgb8.len() / 3;
         let wide = srgb8_rgb_to_prophoto16(&rgb8, px).expect("srgb->prophoto");
         assert_eq!(wide.len(), px * 3);
@@ -322,8 +324,14 @@ mod tests {
         work.pixels[3] = widen(128); // set a non-opaque alpha
         let out = work.to_srgb_rgba8();
         let px = out.get_pixel(0, 0).0;
-        assert!(px[0] >= 253 && px[1] >= 253 && px[2] >= 253, "white must stay white");
-        assert_eq!(px[3], 128, "alpha must narrow straight, not be colour-managed");
+        assert!(
+            px[0] >= 253 && px[1] >= 253 && px[2] >= 253,
+            "white must stay white"
+        );
+        assert_eq!(
+            px[3], 128,
+            "alpha must narrow straight, not be colour-managed"
+        );
     }
 
     #[test]

@@ -73,6 +73,6 @@ pub(crate) use color::{cmyk_decode, cmyk_transform, working_image};
 // command macro generates beside it; the glob carries both.
 pub(crate) use exec::*;
 pub(crate) use history::*;
-pub(crate) use schedule::StudioScheduler;
 pub(crate) use persist::*;
+pub(crate) use schedule::StudioScheduler;
 pub(crate) use subject_model::set_resource_dir as set_subject_model_resource_dir;

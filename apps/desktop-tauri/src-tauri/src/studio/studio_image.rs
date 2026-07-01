@@ -848,9 +848,13 @@ mod tests {
     #[test]
     fn probes_plain_rgb_jpeg_as_rgb() {
         let path = unique_tmp("rgb.jpg");
-        DynamicImage::ImageRgb8(image::RgbImage::from_pixel(4, 4, image::Rgb([200, 120, 60])))
-            .save_with_format(&path, ImageFormat::Jpeg)
-            .unwrap();
+        DynamicImage::ImageRgb8(image::RgbImage::from_pixel(
+            4,
+            4,
+            image::Rgb([200, 120, 60]),
+        ))
+        .save_with_format(&path, ImageFormat::Jpeg)
+        .unwrap();
         let probe = probe_source(&path).unwrap();
         assert_eq!(probe.color, ExtendedColorType::Rgb8);
         let _ = std::fs::remove_file(&path);

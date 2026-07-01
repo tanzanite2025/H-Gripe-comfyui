@@ -188,7 +188,11 @@ pub(super) fn execute_studio_crop(
     // suppressed if a file already exists at the path, so a stale output can
     // never linger behind the buffer.
     if skip_write_ports.contains("image") && !out_path.exists() {
-        image_buffer::publish_working_deferred(&out_path, &cropped, studio_image::png_output_meta());
+        image_buffer::publish_working_deferred(
+            &out_path,
+            &cropped,
+            studio_image::png_output_meta(),
+        );
     } else {
         studio_image::write_working_output(&out_path, &cropped)?;
         // Hand the decoded crop to the next compute card in memory so it skips
@@ -254,7 +258,12 @@ fn parse_crop_box(value: Option<&Value>, width: u32, height: u32) -> (i64, i64, 
     if items.len() != 4 {
         return full;
     }
-    let n = |i: usize| items.get(i).and_then(Value::as_f64).map(|v| v.round() as i64);
+    let n = |i: usize| {
+        items
+            .get(i)
+            .and_then(Value::as_f64)
+            .map(|v| v.round() as i64)
+    };
     match (n(0), n(1), n(2), n(3)) {
         (Some(x), Some(y), Some(w), Some(h)) if w > 0 && h > 0 => (x, y, w, h),
         _ => full,
@@ -377,20 +386,29 @@ mod tests {
         );
         // missing / malformed -> whole image
         assert_eq!(parse_crop_box(None, 40, 30), (0, 0, 40, 30));
-        assert_eq!(parse_crop_box(Some(&json!([1, 2, 0, 7])), 40, 30), (0, 0, 40, 30));
+        assert_eq!(
+            parse_crop_box(Some(&json!([1, 2, 0, 7])), 40, 30),
+            (0, 0, 40, 30)
+        );
     }
 
     #[test]
     fn pad_box_grows_symmetrically() {
         // 10% of a 100x50 box = 10px / 5px each side
-        assert_eq!(pad_box((20, 20, 100, 50), 10.0, 1000, 1000), (10, 15, 120, 60));
+        assert_eq!(
+            pad_box((20, 20, 100, 50), 10.0, 1000, 1000),
+            (10, 15, 120, 60)
+        );
     }
 
     #[test]
     fn fit_aspect_shrinks_the_over_long_axis() {
         // a 200x100 (2:1) box fit to 1:1 keeps height, shrinks width to 100,
         // re-centred about (100, 50).
-        assert_eq!(fit_aspect((0, 0, 200, 100), 1.0, 1000, 1000), (50, 0, 100, 100));
+        assert_eq!(
+            fit_aspect((0, 0, 200, 100), 1.0, 1000, 1000),
+            (50, 0, 100, 100)
+        );
     }
 
     #[test]

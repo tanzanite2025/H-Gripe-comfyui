@@ -327,7 +327,13 @@ pub(crate) fn local_repaint_regions(
     // only it is routed through the warm worker; the default `provider` (remote
     // `image.edit`) and any other engine stay a one-shot.
     let stdout = if engine == "sd_inpaint" {
-        run_torch_cli(&python, &dir, "detail_repaint_cli.py", "detail_repaint", &argv)
+        run_torch_cli(
+            &python,
+            &dir,
+            "detail_repaint_cli.py",
+            "detail_repaint",
+            &argv,
+        )
     } else {
         run_bridge_oneshot(&python, &dir, "detail_repaint_cli.py", &argv)
     }

@@ -318,8 +318,16 @@ mod tests {
         // A positive then a negative point on a half-encoder-size image: labels
         // mirror SAM 2 (1.0 / 0.0) and coords double into the 1024 space.
         let prompts = [
-            PointPrompt { x: 128, y: 256, positive: true },
-            PointPrompt { x: 384, y: 0, positive: false },
+            PointPrompt {
+                x: 128,
+                y: 256,
+                positive: true,
+            },
+            PointPrompt {
+                x: 384,
+                y: 0,
+                positive: false,
+            },
         ];
         let (coords, labels) = prompt_tensors(&prompts, 512, 512);
         assert_eq!(labels, vec![LABEL_FOREGROUND, LABEL_BACKGROUND]);
@@ -360,7 +368,11 @@ mod tests {
                 mode: super::super::subject_segment::AutoMode::Subject,
                 placeholder: None,
                 prompt: None,
-                points: &[PointPrompt { x: 32, y: 32, positive: true }],
+                points: &[PointPrompt {
+                    x: 32,
+                    y: 32,
+                    positive: true,
+                }],
             })
             .expect("sam2 inference");
         assert_eq!(result.mask.dimensions(), (64, 64));

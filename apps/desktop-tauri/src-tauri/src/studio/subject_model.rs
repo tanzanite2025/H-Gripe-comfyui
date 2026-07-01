@@ -447,8 +447,7 @@ mod tests {
             AutoMode::Product,
             AutoMode::TransparentObject,
         ] {
-            let providers: Vec<&str> =
-                priority_for(mode).iter().map(|s| s.provider).collect();
+            let providers: Vec<&str> = priority_for(mode).iter().map(|s| s.provider).collect();
             assert_eq!(providers, ["birefnet", "u2netp"]);
         }
     }

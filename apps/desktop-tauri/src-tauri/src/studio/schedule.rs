@@ -84,7 +84,10 @@ impl StudioScheduler {
     pub(crate) fn with_cpu_pool(cpu_pool: usize) -> Self {
         let cpu_pool = cpu_pool.max(1);
         Self {
-            gpu: Arc::new(Semaphore::new(concurrency_limit(JobCategory::Gpu, cpu_pool))),
+            gpu: Arc::new(Semaphore::new(concurrency_limit(
+                JobCategory::Gpu,
+                cpu_pool,
+            ))),
             cpu: Arc::new(Semaphore::new(cpu_pool)),
             cpu_pool,
         }

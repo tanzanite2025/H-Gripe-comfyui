@@ -77,13 +77,7 @@ pub(super) fn crop_working(
 
 /// Crop the `(x, y, width, height)` window out of an RGBA surface into an owned
 /// image (an immutable view, so the source is untouched).
-pub(super) fn crop_rgba(
-    image: &RgbaImage,
-    x: u32,
-    y: u32,
-    width: u32,
-    height: u32,
-) -> RgbaImage {
+pub(super) fn crop_rgba(image: &RgbaImage, x: u32, y: u32, width: u32, height: u32) -> RgbaImage {
     imageops::crop_imm(image, x, y, width, height).to_image()
 }
 
@@ -119,12 +113,15 @@ pub(super) fn apply_alpha_mask_working(image: &WorkingImage, mask: &GrayImage) -
     let w = image.width as usize;
     let mask_buf = mask.as_raw();
     let mut pixels = image.pixels.clone();
-    pixels.par_chunks_mut(w * 4).enumerate().for_each(|(y, row)| {
-        let base = y * w;
-        for x in 0..w {
-            row[x * 4 + 3] = working_image::widen(mask_buf[base + x]);
-        }
-    });
+    pixels
+        .par_chunks_mut(w * 4)
+        .enumerate()
+        .for_each(|(y, row)| {
+            let base = y * w;
+            for x in 0..w {
+                row[x * 4 + 3] = working_image::widen(mask_buf[base + x]);
+            }
+        });
     WorkingImage {
         width: image.width,
         height: image.height,
@@ -162,8 +159,7 @@ pub(super) fn composite_trimap_alpha(
             };
         }
     });
-    GrayImage::from_raw(width, height, out_buf)
-        .expect("composite buffer matches trimap dimensions")
+    GrayImage::from_raw(width, height, out_buf).expect("composite buffer matches trimap dimensions")
 }
 
 #[cfg(test)]

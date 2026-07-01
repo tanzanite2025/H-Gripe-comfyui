@@ -118,6 +118,9 @@ mod tests {
     #[test]
     fn optional_maps_blank_to_none() {
         assert_eq!(optional("   ".to_string()), None);
-        assert_eq!(optional(" Layer 1 ".to_string()), Some("Layer 1".to_string()));
+        assert_eq!(
+            optional(" Layer 1 ".to_string()),
+            Some("Layer 1".to_string())
+        );
     }
 }

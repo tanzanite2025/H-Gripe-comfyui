@@ -527,7 +527,13 @@ pub(crate) fn enhance_image(
     // only it is routed through the warm worker; the always-available CPU path
     // stays a one-shot and never spawns a worker.
     let stdout = if engine == "realesrgan" {
-        run_torch_cli(&python, &dir, "image_enhance_cli.py", "image_enhance", &argv)
+        run_torch_cli(
+            &python,
+            &dir,
+            "image_enhance_cli.py",
+            "image_enhance",
+            &argv,
+        )
     } else {
         run_bridge_oneshot(&python, &dir, "image_enhance_cli.py", &argv)
     }

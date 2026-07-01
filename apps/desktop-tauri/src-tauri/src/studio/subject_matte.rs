@@ -319,7 +319,8 @@ fn box_filter(src: &[f32], width: usize, height: usize, radius: usize) -> Vec<f3
         for (x, slot) in row.iter_mut().enumerate() {
             let x0 = x.saturating_sub(radius);
             let x1 = (x + radius + 1).min(width);
-            let sum = integral[y1 * stride + x1] - integral[y0 * stride + x1]
+            let sum = integral[y1 * stride + x1]
+                - integral[y0 * stride + x1]
                 - integral[y1 * stride + x0]
                 + integral[y0 * stride + x0];
             let count = ((y1 - y0) * (x1 - x0)) as f64;
@@ -510,7 +511,11 @@ mod tests {
         assert!((data[0] - 1.0).abs() < 1e-3, "r={}", data[0]);
         assert!((data[plane] + 1.0).abs() < 1e-3, "g={}", data[plane]);
         // Trimap channel: 128/255 ≈ 0.502, rescaled only (not normalised).
-        assert!((data[3 * plane] - 0.50196).abs() < 1e-3, "t={}", data[3 * plane]);
+        assert!(
+            (data[3 * plane] - 0.50196).abs() < 1e-3,
+            "t={}",
+            data[3 * plane]
+        );
     }
 
     #[test]
@@ -558,7 +563,10 @@ mod tests {
         let fg = alpha.get_pixel(32, 32).0[0];
         let bg = alpha.get_pixel(2, 2).0[0];
         assert!(fg > 200, "definite-FG core should stay opaque, got {fg}");
-        assert!(bg < 55, "definite-BG corner should stay transparent, got {bg}");
+        assert!(
+            bg < 55,
+            "definite-BG corner should stay transparent, got {bg}"
+        );
         assert!(fg > bg, "matte must separate subject from background");
     }
 }

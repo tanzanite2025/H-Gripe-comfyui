@@ -38,8 +38,8 @@ pub(crate) fn pick_file(
 #[tauri::command]
 pub(crate) fn read_text_file(path: String, max_bytes: usize) -> Result<String, String> {
     let path = Path::new(path.trim());
-    let bytes = std::fs::read(path)
-        .map_err(|err| format!("failed to read {}: {err}", path.display()))?;
+    let bytes =
+        std::fs::read(path).map_err(|err| format!("failed to read {}: {err}", path.display()))?;
     let limit = if max_bytes == 0 {
         bytes.len()
     } else {

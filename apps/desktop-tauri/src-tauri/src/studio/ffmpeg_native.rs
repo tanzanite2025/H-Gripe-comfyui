@@ -117,12 +117,8 @@ impl Decoder {
             .map_err(|_| "video path contains a NUL byte".to_string())?;
         unsafe {
             let mut fmt: *mut ffi::AVFormatContext = ptr::null_mut();
-            let ret = ffi::avformat_open_input(
-                &mut fmt,
-                path.as_ptr(),
-                ptr::null_mut(),
-                ptr::null_mut(),
-            );
+            let ret =
+                ffi::avformat_open_input(&mut fmt, path.as_ptr(), ptr::null_mut(), ptr::null_mut());
             if ret < 0 {
                 return Err(format!("avformat_open_input failed ({ret})"));
             }
@@ -132,14 +128,8 @@ impl Decoder {
             }
 
             let mut decoder: *const ffi::AVCodec = ptr::null();
-            let stream_index = ffi::av_find_best_stream(
-                fmt,
-                ffi::AVMEDIA_TYPE_VIDEO,
-                -1,
-                -1,
-                &mut decoder,
-                0,
-            );
+            let stream_index =
+                ffi::av_find_best_stream(fmt, ffi::AVMEDIA_TYPE_VIDEO, -1, -1, &mut decoder, 0);
             if stream_index < 0 || decoder.is_null() {
                 ffi::avformat_close_input(&mut fmt);
                 return Err("no decodable video stream found".to_string());
@@ -332,7 +322,12 @@ impl Decoder {
 
         let stride = width * 4;
         let mut buffer = vec![0u8; (stride * height) as usize];
-        let dst_data: [*mut u8; 4] = [buffer.as_mut_ptr(), ptr::null_mut(), ptr::null_mut(), ptr::null_mut()];
+        let dst_data: [*mut u8; 4] = [
+            buffer.as_mut_ptr(),
+            ptr::null_mut(),
+            ptr::null_mut(),
+            ptr::null_mut(),
+        ];
         let dst_stride: [i32; 4] = [stride, 0, 0, 0];
 
         let scaled = ffi::sws_scale(
@@ -390,7 +385,8 @@ mod tests {
     fn decode_missing_file_errors_cleanly() {
         let mut source = NativeFfmpegFrameSource::new();
         let out = std::env::temp_dir().join("hgripe_native_ffmpeg_probe_test.png");
-        let result = source.decode_frame(Path::new("definitely_not_a_real_clip_zzx.mp4"), 0.0, &out);
+        let result =
+            source.decode_frame(Path::new("definitely_not_a_real_clip_zzx.mp4"), 0.0, &out);
         assert!(result.is_err());
     }
 }

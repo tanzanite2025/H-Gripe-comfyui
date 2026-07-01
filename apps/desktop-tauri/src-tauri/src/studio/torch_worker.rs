@@ -84,8 +84,12 @@ impl Worker {
         if read == 0 {
             return Err("torch worker closed its stdout".to_string());
         }
-        serde_json::from_str::<WorkerResponse>(resp_line.trim())
-            .map_err(|err| format!("torch worker sent invalid json: {err} (raw: {})", resp_line.trim()))
+        serde_json::from_str::<WorkerResponse>(resp_line.trim()).map_err(|err| {
+            format!(
+                "torch worker sent invalid json: {err} (raw: {})",
+                resp_line.trim()
+            )
+        })
     }
 }
 
@@ -185,7 +189,12 @@ fn matches(worker: &Option<Worker>, python: &Path, dir: &Path) -> bool {
 /// itself exited non-zero (surfaced via its captured `error`). Either way the
 /// authoritative one-shot subprocess then runs, so behaviour is unchanged when
 /// the worker is absent and a genuine CLI error still surfaces to the user.
-pub(crate) fn run_cli(python: &Path, dir: &Path, cmd: &str, argv: &[String]) -> Result<String, String> {
+pub(crate) fn run_cli(
+    python: &Path,
+    dir: &Path,
+    cmd: &str,
+    argv: &[String],
+) -> Result<String, String> {
     let mut guard = worker_cell()
         .lock()
         .map_err(|_| "torch worker mutex poisoned".to_string())?;

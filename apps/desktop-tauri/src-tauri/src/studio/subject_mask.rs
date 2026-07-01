@@ -87,6 +87,7 @@ fn optional(value: String) -> Option<String> {
 pub(super) fn execute_studio_subject_mask(
     node: &StudioGraphNode,
     inputs: &BTreeMap<String, Value>,
+    skip_write_ports: &std::collections::HashSet<String>,
 ) -> Result<BTreeMap<String, Value>, String> {
     let started = Instant::now();
 
@@ -253,26 +254,54 @@ pub(super) fn execute_studio_subject_mask(
     let trimap_out = match &matting_trimap {
         Some(trimap) => {
             let trimap_path = dir.join(format!("{base}_trimap.png"));
-            save_png(&DynamicGray(trimap), &trimap_path)?;
-            image_buffer::publish_gray(&trimap_path, trimap);
+            if skip_write_ports.contains("trimap") && !trimap_path.exists() {
+                image_buffer::publish_gray_deferred(&trimap_path, trimap);
+            } else {
+                save_png(&DynamicGray(trimap), &trimap_path)?;
+                image_buffer::publish_gray(&trimap_path, trimap);
+            }
             trimap_path.to_string_lossy().to_string()
         }
         None => String::new(),
     };
 
-    save_png(&DynamicGray(&mask), &mask_path)?;
-    alpha_image
-        .save(&alpha_path)
-        .map_err(|err| format!("failed to write {}: {err}", alpha_path.display()))?;
-    cutout
-        .save(&cutout_path)
-        .map_err(|err| format!("failed to write {}: {err}", cutout_path.display()))?;
-    // Publish the decoded outputs so a downstream compute card (a chained
-    // Subject Mask reading `previous_mask`, or a crop consuming the cutout)
-    // reuses them from memory instead of re-decoding the freshly-written PNGs.
-    image_buffer::publish_gray(&mask_path, &mask);
-    image_buffer::publish_rgba(&alpha_path, &alpha_image, studio_image::png_output_meta());
-    image_buffer::publish_rgba(&cutout_path, &cutout, studio_image::png_output_meta());
+    // For each image output, skip the PNG encode+write when graph analysis
+    // proved every consumer resolves it from the in-process buffer (another
+    // compute card, or a leaf preview) — publishing a *deferred* surface that is
+    // materialised only if evicted. Otherwise write the file and publish a
+    // file-backed buffer as before (a `refineMaskEdge`/`psdExport` consumer, an
+    // exported artifact, or the returned result all read the PNG). The
+    // `!exists()` guard keeps a stale prior file from lingering behind a buffer.
+    if skip_write_ports.contains("mask") && !mask_path.exists() {
+        image_buffer::publish_gray_deferred(&mask_path, &mask);
+    } else {
+        save_png(&DynamicGray(&mask), &mask_path)?;
+        image_buffer::publish_gray(&mask_path, &mask);
+    }
+    if skip_write_ports.contains("alpha_image") && !alpha_path.exists() {
+        image_buffer::publish_rgba_deferred(
+            &alpha_path,
+            &alpha_image,
+            studio_image::png_output_meta(),
+        );
+    } else {
+        alpha_image
+            .save(&alpha_path)
+            .map_err(|err| format!("failed to write {}: {err}", alpha_path.display()))?;
+        image_buffer::publish_rgba(&alpha_path, &alpha_image, studio_image::png_output_meta());
+    }
+    if skip_write_ports.contains("cutout_image") && !cutout_path.exists() {
+        image_buffer::publish_rgba_deferred(
+            &cutout_path,
+            &cutout,
+            studio_image::png_output_meta(),
+        );
+    } else {
+        cutout
+            .save(&cutout_path)
+            .map_err(|err| format!("failed to write {}: {err}", cutout_path.display()))?;
+        image_buffer::publish_rgba(&cutout_path, &cutout, studio_image::png_output_meta());
+    }
 
     let edit_paths_value = normalise_edit_paths(inputs.get("edit_paths"));
     std::fs::write(
@@ -292,10 +321,13 @@ pub(super) fn execute_studio_subject_mask(
         mask_coverage: coverage,
         detected_subjects,
         operations,
+        // "available" (buffer-or-file), not strictly `is_file`: a skipped write
+        // leaves the surface resident in the buffer with no PNG, yet the output
+        // still resolves for every reader.
         triplet: Triplet {
-            mask: mask_path.is_file(),
-            alpha_image: alpha_path.is_file(),
-            cutout_image: cutout_path.is_file(),
+            mask: image_buffer::is_available(&mask_path),
+            alpha_image: image_buffer::is_available(&alpha_path),
+            cutout_image: image_buffer::is_available(&cutout_path),
         },
         processing_time_ms: started.elapsed().as_millis(),
     };
@@ -756,6 +788,13 @@ fn save_png(gray: &DynamicGray, path: &Path) -> Result<(), String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::collections::HashSet;
+
+    /// Run a subject-mask node with no skippable ports (the default for every
+    /// test that isn't specifically exercising the write-skip path).
+    fn run(node: &StudioGraphNode, inputs: &BTreeMap<String, Value>) -> BTreeMap<String, Value> {
+        execute_studio_subject_mask(node, inputs, &HashSet::new()).unwrap()
+    }
 
     fn node() -> StudioGraphNode {
         StudioGraphNode {
@@ -771,7 +810,8 @@ mod tests {
 
     #[test]
     fn rejects_missing_image_input() {
-        let err = execute_studio_subject_mask(&node(), &BTreeMap::new()).unwrap_err();
+        let err =
+            execute_studio_subject_mask(&node(), &BTreeMap::new(), &HashSet::new()).unwrap_err();
         assert!(err.contains("connected image input"), "{err}");
     }
 
@@ -779,7 +819,7 @@ mod tests {
     fn rejects_blank_image_input() {
         let mut inputs = BTreeMap::new();
         inputs.insert("image".to_string(), json!("   "));
-        let err = execute_studio_subject_mask(&node(), &inputs).unwrap_err();
+        let err = execute_studio_subject_mask(&node(), &inputs, &HashSet::new()).unwrap_err();
         assert!(err.contains("connected image input"), "{err}");
     }
 
@@ -1075,7 +1115,7 @@ mod tests {
             json!(image_path.to_string_lossy().to_string()),
         );
 
-        let out = execute_studio_subject_mask(&node, &inputs).unwrap();
+        let out = run(&node, &inputs);
         let report = out.get("matte_report").unwrap();
         // An auto mode reports the segmenter that produced the base matte: the
         // builtin fallback, or a model backend (u2netp / birefnet) when a weight
@@ -1132,7 +1172,7 @@ mod tests {
             json!(image_path.to_string_lossy().to_string()),
         );
 
-        let out = execute_studio_subject_mask(&node, &inputs).unwrap();
+        let out = run(&node, &inputs);
         let report = out.get("matte_report").unwrap();
         assert_eq!(
             report.get("provider").and_then(Value::as_str),
@@ -1182,7 +1222,7 @@ mod tests {
             }),
         );
 
-        let out = execute_studio_subject_mask(&node, &inputs).unwrap();
+        let out = run(&node, &inputs);
         assert!(root.join("scene_mask.png").is_file());
         assert!(root.join("scene_mask_alpha.png").is_file());
         assert!(root.join("scene_mask_cutout.png").is_file());
@@ -1203,6 +1243,76 @@ mod tests {
         assert_eq!(triplet.get("mask").and_then(Value::as_bool), Some(true));
         // The whole image is one flat colour, so the wand selects everything.
         assert!(report.get("mask_coverage").and_then(Value::as_f64).unwrap() > 0.9);
+
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn compute_only_outputs_skip_the_png_write_but_stay_available() {
+        // The same flat scene, but with the mask / alpha / cutout ports marked
+        // skippable (as when they feed only compute cards). No PNG is written,
+        // yet every output resolves from the in-process buffer and the report
+        // reports each as available rather than a bare `is_file` false.
+        let nanos = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_nanos();
+        let root =
+            std::env::temp_dir().join(format!("hgripe_subject_skip_{}_{nanos}", std::process::id()));
+        std::fs::create_dir_all(&root).unwrap();
+        let image_path = root.join("scene.png");
+        RgbaImage::from_pixel(6, 6, Rgba([100, 100, 100, 255]))
+            .save(&image_path)
+            .unwrap();
+
+        let mut params = BTreeMap::new();
+        params.insert(
+            "output_dir".to_string(),
+            json!(root.to_string_lossy().to_string()),
+        );
+        params.insert("output_name".to_string(), json!("scene_mask"));
+        let node = StudioGraphNode {
+            id: "n1".to_string(),
+            kind: "subjectMask".to_string(),
+            params,
+        };
+        let mut inputs = BTreeMap::new();
+        inputs.insert(
+            "image".to_string(),
+            json!(image_path.to_string_lossy().to_string()),
+        );
+
+        let skip: HashSet<String> = ["mask", "alpha_image", "cutout_image"]
+            .into_iter()
+            .map(String::from)
+            .collect();
+        let out = execute_studio_subject_mask(&node, &inputs, &skip).unwrap();
+
+        // No PNG on disk for the three skipped outputs, yet each emitted path
+        // resolves from the buffer and the report calls it available.
+        for (port, file) in [
+            ("mask", "scene_mask.png"),
+            ("alpha_image", "scene_mask_alpha.png"),
+            ("cutout_image", "scene_mask_cutout.png"),
+        ] {
+            assert!(
+                !root.join(file).exists(),
+                "{port} PNG must not be written when the port is skippable"
+            );
+            let emitted = out.get(port).and_then(Value::as_str).unwrap();
+            assert!(
+                image_buffer::is_available(Path::new(emitted)),
+                "{port} must resolve from the buffer after a write-skip"
+            );
+        }
+        let triplet = out.get("matte_report").unwrap().get("triplet").unwrap();
+        for port in ["mask", "alpha_image", "cutout_image"] {
+            assert_eq!(
+                triplet.get(port).and_then(Value::as_bool),
+                Some(true),
+                "{port} must report available"
+            );
+        }
 
         let _ = std::fs::remove_dir_all(&root);
     }
@@ -1246,7 +1356,7 @@ mod tests {
                 "image".to_string(),
                 json!(image_path.to_string_lossy().to_string()),
             );
-            execute_studio_subject_mask(&node, &inputs).unwrap()
+            run(&node, &inputs)
         };
 
         let off = make(false);

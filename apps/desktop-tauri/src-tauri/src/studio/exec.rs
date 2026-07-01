@@ -802,15 +802,40 @@ pub(crate) fn studio_executor_for_kind(kind: &str) -> Option<StudioExecutor> {
     })
 }
 
-/// The set of a compute node's output ports whose PNG write may be skipped: an
-/// output is skippable when it has at least one consumer and *every* consumer
-/// is another `Compute` card (which loads it in-process through the shared
-/// [`image_buffer`], so the file is never read). An output that feeds any
-/// other lane — a `Local` python-bridge card, an `Api` upload, a `preview` /
-/// `save` / export sink, or the frontend as a returned result — always keeps
-/// its file. Only compute nodes can skip; every other kind returns empty.
+/// Whether a consumer of a compute output can be served *without a file on
+/// disk*, so the producer may skip that output's PNG write:
+///
+/// * another `Compute` card — it loads the surface in-process through the
+///   shared [`image_buffer`], so the file is never read; or
+/// * a *leaf* `preview` — a pure display sink whose thumbnail / large-view both
+///   resolve through `image_buffer::lookup_dynamic` (see `generate_thumbnail`).
+///   The leaf requirement (no edge leaves the preview) is what keeps this safe:
+///   `preview` echoes its `image` through, so a *chained* preview could forward
+///   the path to a file-reading `save` / export and must keep the file.
+///
+/// Every other consumer — a `Local` python-bridge card, an `Api` upload, a
+/// `save` / export sink, or a non-leaf `preview` — reads the file and forces a
+/// materialised output.
 ///
 /// [`image_buffer`]: super::image_buffer
+fn studio_consumer_permits_write_skip(
+    consumer: &StudioGraphNode,
+    graph: &StudioWorkflowGraph,
+) -> bool {
+    match studio_executor_for_kind(consumer.kind.as_str()) {
+        Some(StudioExecutor::Compute) => true,
+        _ => {
+            consumer.kind == "preview"
+                && !graph.edges.iter().any(|edge| edge.source == consumer.id)
+        }
+    }
+}
+
+/// The set of a compute node's output ports whose PNG write may be skipped: an
+/// output is skippable when it has at least one consumer and *every* consumer
+/// [permits a write-skip](studio_consumer_permits_write_skip) (all in-process
+/// compute cards and/or leaf previews, never a file reader). Only compute nodes
+/// can skip; every other kind returns empty.
 fn studio_skippable_output_ports(
     node: &StudioGraphNode,
     graph: &StudioWorkflowGraph,
@@ -828,25 +853,23 @@ fn studio_skippable_output_ports(
         .collect();
     for port in ports {
         let mut has_consumer = false;
-        let mut all_compute = true;
+        let mut all_skippable = true;
         for edge in graph
             .edges
             .iter()
             .filter(|edge| edge.source == node.id && edge.source_port == port)
         {
             has_consumer = true;
-            let consumer_is_compute = nodes_by_id
+            let consumer_ok = nodes_by_id
                 .get(&edge.target)
-                .map(|target| {
-                    studio_executor_for_kind(target.kind.as_str()) == Some(StudioExecutor::Compute)
-                })
+                .map(|target| studio_consumer_permits_write_skip(target, graph))
                 .unwrap_or(false);
-            if !consumer_is_compute {
-                all_compute = false;
+            if !consumer_ok {
+                all_skippable = false;
                 break;
             }
         }
-        if has_consumer && all_compute {
+        if has_consumer && all_skippable {
             skippable.insert(port.to_string());
         }
     }
@@ -1025,7 +1048,7 @@ fn execute_studio_compute_node(
     skip_write_ports: &HashSet<String>,
 ) -> Result<BTreeMap<String, Value>, String> {
     match node.kind.as_str() {
-        "subjectMask" => execute_studio_subject_mask(node, inputs),
+        "subjectMask" => execute_studio_subject_mask(node, inputs, skip_write_ports),
         "crop" => execute_studio_crop(node, inputs, skip_write_ports),
         other => Err(format!("node kind is not a compute node: {other}")),
     }
@@ -1378,11 +1401,13 @@ mod tests {
     }
 
     #[test]
-    fn skippable_ports_are_the_ones_feeding_only_compute() {
-        // crop.image -> a second crop (Compute): skippable.
-        // crop.crop_report -> a preview (Graph): not skippable.
-        // A second port that fans out to one compute + one preview: not
-        // skippable (any non-compute consumer keeps the file).
+    fn skippable_ports_feed_only_compute_or_leaf_previews() {
+        // crop1.image -> a second crop (Compute): skippable.
+        // crop1.crop_report -> a leaf preview (display sink, no outgoing edge):
+        //   skippable too — the preview resolves it from the buffer and forwards
+        //   it nowhere.
+        // crop2.image fans out to a compute card *and* a Local imageEnhance: the
+        //   Local card reads the file, so nothing on crop2 is skippable.
         let graph = StudioWorkflowGraph {
             version: 1,
             nodes: vec![
@@ -1402,11 +1427,10 @@ mod tests {
             graph.nodes.iter().map(|n| (n.id.clone(), n)).collect();
 
         let crop1 = nodes_by_id.get("crop1").unwrap();
-        let skippable = studio_skippable_output_ports(crop1, &graph, &nodes_by_id);
         assert_eq!(
-            skippable,
-            HashSet::from(["image".to_string()]),
-            "crop1.image feeds only a compute card; crop_report feeds a preview"
+            studio_skippable_output_ports(crop1, &graph, &nodes_by_id),
+            HashSet::from(["image".to_string(), "crop_report".to_string()]),
+            "an output feeding only a compute card or a leaf preview is skippable"
         );
 
         // crop2.image fans out to a compute card *and* a Local imageEnhance, so
@@ -1420,6 +1444,32 @@ mod tests {
         // A non-compute node never skips, even when its consumer is compute.
         let prev = nodes_by_id.get("prev").unwrap();
         assert!(studio_skippable_output_ports(prev, &graph, &nodes_by_id).is_empty());
+    }
+
+    #[test]
+    fn a_forwarding_preview_keeps_the_file() {
+        // A preview that forwards its echoed `image` onward (here to a Local
+        // imageEnhance that reads the file) is not a leaf, so an output feeding
+        // it must keep its PNG — the buffer can't serve the downstream reader.
+        let graph = StudioWorkflowGraph {
+            version: 1,
+            nodes: vec![
+                node("crop1", "crop"),
+                node("prev", "preview"),
+                node("enh", "imageEnhance"),
+            ],
+            edges: vec![
+                edge("e1", "crop1", "image", "prev"),
+                edge("e2", "prev", "image", "enh"),
+            ],
+        };
+        let nodes_by_id: HashMap<String, &StudioGraphNode> =
+            graph.nodes.iter().map(|n| (n.id.clone(), n)).collect();
+        let crop1 = nodes_by_id.get("crop1").unwrap();
+        assert!(
+            studio_skippable_output_ports(crop1, &graph, &nodes_by_id).is_empty(),
+            "an output feeding a forwarding (non-leaf) preview keeps its file"
+        );
     }
 
     #[test]

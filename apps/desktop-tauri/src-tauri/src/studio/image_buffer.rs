@@ -118,6 +118,13 @@ impl Lru {
         }
     }
 
+    /// Whether `key` is currently resident. A read-only probe that does not
+    /// touch the LRU order (used by [`is_available`] to answer "does this
+    /// output resolve?" without cloning the surface or promoting it).
+    fn contains(&self, key: &str) -> bool {
+        self.entries.contains_key(key)
+    }
+
     /// Insert `value`, returning any entries dropped to stay within capacity so
     /// the caller can materialise deferred surfaces *after* releasing the lock
     /// (an overwrite of the same key is not an eviction and is not returned —
@@ -235,6 +242,36 @@ pub(crate) fn publish_gray(path: &Path, image: &GrayImage) {
             },
         );
     }
+}
+
+/// Publish a single-channel surface whose PNG was **not** written (the mask /
+/// trimap analogue of [`publish_rgba_deferred`]). Keyed by the raw output path
+/// and materialised to it on eviction; callers must only use this when the file
+/// does not already exist.
+pub(crate) fn publish_gray_deferred(path: &Path, image: &GrayImage) {
+    let id = crate::resource::id_for(&path.to_string_lossy());
+    store(
+        id,
+        Entry {
+            image: DecodedImage::Gray(Arc::new(image.clone())),
+            freshness: Freshness::Deferred {
+                path: path.to_path_buf(),
+            },
+        },
+    );
+}
+
+/// Whether an output is resolvable by any reader — a file exists on disk, or a
+/// surface is published for it (including a *deferred*, file-less entry). Lets a
+/// producer's report state "this output is available" truthfully after a
+/// write-skip, where a bare `path.is_file()` would wrongly read `false`. Cheap:
+/// no surface is cloned and the LRU order is untouched.
+pub(crate) fn is_available(path: &Path) -> bool {
+    if path.is_file() {
+        return true;
+    }
+    let (id, _) = key_for_lookup(path);
+    cache().lock().map(|lru| lru.contains(&id)).unwrap_or(false)
 }
 
 fn store(id: String, entry: Entry) {

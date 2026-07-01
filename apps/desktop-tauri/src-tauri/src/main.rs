@@ -25,6 +25,7 @@ use serde::Serialize;
 mod contracts;
 mod psd;
 mod studio;
+mod thumb_cache;
 
 use studio::{StudioRunCancels, StudioScheduler};
 
@@ -293,6 +294,54 @@ fn read_image_data_url(path: String) -> Result<String, String> {
     Ok(format!("data:{mime};base64,{}", base64_encode(&bytes)))
 }
 
+/// Image pixel dimensions, read from the file header only (no full decode).
+#[derive(Serialize)]
+struct ImageDims {
+    width: u32,
+    height: u32,
+}
+
+/// Read an image's `width` x `height` from its header without decoding the
+/// pixels. This is the fast first phase of media-card ingestion: the info row
+/// can render `W×H` near-instantly while the (much heavier) thumbnail decode
+/// runs separately. Even a 4K/8K source resolves in microseconds because only
+/// the header is parsed.
+#[tauri::command]
+fn probe_image_dims(path: String) -> Result<ImageDims, String> {
+    let trimmed = path.trim();
+    if trimmed.is_empty() {
+        return Err("path is empty".to_string());
+    }
+    let src = Path::new(trimmed);
+    if !src.is_file() {
+        return Err(format!("file does not exist: {trimmed}"));
+    }
+    let (width, height) = image::ImageReader::open(src)
+        .map_err(|err| format!("failed to open {}: {err}", src.display()))?
+        .with_guessed_format()
+        .map_err(|err| format!("failed to read {}: {err}", src.display()))?
+        .into_dimensions()
+        .map_err(|err| format!("failed to read image dimensions: {err}"))?;
+    Ok(ImageDims { width, height })
+}
+
+/// In-memory thumbnail cache key: canonical path + target size + the source's
+/// mtime and length, so editing or replacing the file invalidates its entry.
+/// Returns `None` if the file's metadata cannot be read (the caller then just
+/// skips the memory cache and takes the normal disk/decode path).
+fn thumb_mem_key(src: &Path, target: u32) -> Option<String> {
+    let meta = fs::metadata(src).ok()?;
+    let len = meta.len();
+    let mtime = meta
+        .modified()
+        .ok()
+        .and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok())
+        .map(|d| d.as_nanos())
+        .unwrap_or(0);
+    let canon = fs::canonicalize(src).unwrap_or_else(|_| src.to_path_buf());
+    Some(format!("{}|{target}|{mtime}|{len}", canon.to_string_lossy()))
+}
+
 /// FNV-1a 64-bit hash, used to key the thumbnail cache by source content.
 fn fnv1a_hex(bytes: &[u8]) -> String {
     let mut hash: u64 = 0xcbf2_9ce4_8422_2325;
@@ -349,6 +398,23 @@ fn generate_thumbnail(
     let target = ((size as f64) * dpr).round() as u32;
     let target = target.clamp(16, 4096);
 
+    // Fast path: an in-memory hit returns the finished thumbnail without reading
+    // (let alone decoding) the source at all. Keyed by path + size + mtime/len,
+    // so an edited source misses and regenerates.
+    let mem_key = thumb_mem_key(src, target);
+    if let Some(key) = &mem_key {
+        if let Some(hit) = thumb_cache::get(key) {
+            return Ok(ThumbnailResult {
+                data_url: hit.data_url,
+                cache_path: hit.cache_path,
+                width: hit.width,
+                height: hit.height,
+                source_hash: hit.source_hash,
+                mime: hit.mime,
+            });
+        }
+    }
+
     let bytes = fs::read(src).map_err(|err| format!("failed to read {}: {err}", src.display()))?;
     let source_hash = fnv1a_hex(&bytes);
 
@@ -357,39 +423,54 @@ fn generate_thumbnail(
         .map_err(|err| format!("failed to create {}: {err}", cache_dir.display()))?;
     let cache_path = cache_dir.join(format!("{source_hash}_{target}.png"));
 
-    // Cache hit: reuse the previously generated thumbnail.
-    if let Ok(cached) = fs::read(&cache_path) {
-        if let Ok(decoded) = image::load_from_memory(&cached) {
-            return Ok(ThumbnailResult {
-                data_url: format!("data:image/png;base64,{}", base64_encode(&cached)),
-                cache_path: cache_path.to_string_lossy().to_string(),
-                width: decoded.width(),
-                height: decoded.height(),
-                source_hash,
-                mime: "image/png".to_string(),
-            });
-        }
+    // Disk cache hit: reuse the previously generated thumbnail PNG.
+    let (data_url, width, height) = if let Some((cached, decoded)) = fs::read(&cache_path)
+        .ok()
+        .and_then(|c| image::load_from_memory(&c).ok().map(|d| (c, d)))
+    {
+        let data_url = format!("data:image/png;base64,{}", base64_encode(&cached));
+        (data_url, decoded.width(), decoded.height())
+    } else {
+        let source = image::load_from_memory(&bytes)
+            .map_err(|err| format!("failed to decode image: {err}"))?;
+        // `resize` preserves aspect ratio, fitting within target x target.
+        let thumb = source.resize(target, target, image::imageops::FilterType::Lanczos3);
+
+        let mut png: Vec<u8> = Vec::new();
+        thumb
+            .write_to(&mut std::io::Cursor::new(&mut png), image::ImageFormat::Png)
+            .map_err(|err| format!("failed to encode thumbnail: {err}"))?;
+        // Best-effort cache write; a failure here should not fail the request.
+        let _ = fs::write(&cache_path, &png);
+
+        let data_url = format!("data:image/png;base64,{}", base64_encode(&png));
+        (data_url, thumb.width(), thumb.height())
+    };
+
+    let cache_path = cache_path.to_string_lossy().to_string();
+    let mime = "image/png".to_string();
+
+    if let Some(key) = mem_key {
+        thumb_cache::put(
+            key,
+            thumb_cache::CachedThumb {
+                data_url: data_url.clone(),
+                cache_path: cache_path.clone(),
+                width,
+                height,
+                source_hash: source_hash.clone(),
+                mime: mime.clone(),
+            },
+        );
     }
 
-    let source =
-        image::load_from_memory(&bytes).map_err(|err| format!("failed to decode image: {err}"))?;
-    // `resize` preserves aspect ratio, fitting within target x target.
-    let thumb = source.resize(target, target, image::imageops::FilterType::Lanczos3);
-
-    let mut png: Vec<u8> = Vec::new();
-    thumb
-        .write_to(&mut std::io::Cursor::new(&mut png), image::ImageFormat::Png)
-        .map_err(|err| format!("failed to encode thumbnail: {err}"))?;
-    // Best-effort cache write; a failure here should not fail the request.
-    let _ = fs::write(&cache_path, &png);
-
     Ok(ThumbnailResult {
-        data_url: format!("data:image/png;base64,{}", base64_encode(&png)),
-        cache_path: cache_path.to_string_lossy().to_string(),
-        width: thumb.width(),
-        height: thumb.height(),
+        data_url,
+        cache_path,
+        width,
+        height,
         source_hash,
-        mime: "image/png".to_string(),
+        mime,
     })
 }
 
@@ -526,6 +607,7 @@ fn main() {
             psd::list_psd_outputs,
             read_image_data_url,
             generate_thumbnail,
+            probe_image_dims,
             read_text_file,
             open_path,
             psd::compose_psd,

@@ -65,6 +65,29 @@ export async function videoProbe(path: string, timestamp = 0): Promise<VideoProb
   return (await invoke("video_probe", { path, timestamp })) as VideoProbeResult;
 }
 
+// Fields are snake_case to match the Rust `ImageDims` serialization.
+export interface ImageDims {
+  width: number;
+  height: number;
+}
+
+/**
+ * Read an image's pixel dimensions from its header only (no full decode). This
+ * is the fast first phase of media-card ingestion: the info row can show `W×H`
+ * near-instantly while the heavier {@link generateThumbnail} decode runs
+ * separately. Outside Tauri there is no backend, so this returns `null` and the
+ * caller falls back to the dimensions the thumbnail reports.
+ */
+export async function probeImageDims(path: string): Promise<ImageDims | null> {
+  const invoke = tauriInvoke();
+  if (!invoke) return null;
+  try {
+    return (await invoke("probe_image_dims", { path })) as ImageDims;
+  } catch {
+    return null;
+  }
+}
+
 export interface PickFileOptions {
   title?: string;
   /** Display name for the extension filter (e.g. "Images"). */

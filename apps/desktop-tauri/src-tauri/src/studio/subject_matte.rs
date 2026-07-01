@@ -98,20 +98,25 @@ pub(super) fn trimap_from_mask(mask: &GrayImage, band: u32) -> GrayImage {
     let (width, height) = mask.dimensions();
     let inner = super::subject_mask::erode(mask, band);
     let outer = super::subject_mask::dilate(mask, band);
-    let mut trimap = GrayImage::from_pixel(width, height, Luma([TRIMAP_BG]));
-    for y in 0..height {
-        for x in 0..width {
-            let level = if inner.get_pixel(x, y).0[0] >= SELECTED_THRESHOLD {
+    let w = width as usize;
+    let inner_buf = inner.as_raw();
+    let outer_buf = outer.as_raw();
+    // Each pixel's level is a pure function of the matching inner/outer pixels,
+    // so classify the (full-resolution) plane row-parallel across CPU workers.
+    let mut out_buf = vec![0u8; w * height as usize];
+    out_buf.par_chunks_mut(w).enumerate().for_each(|(y, row)| {
+        let base = y * w;
+        for (x, slot) in row.iter_mut().enumerate() {
+            *slot = if inner_buf[base + x] >= SELECTED_THRESHOLD {
                 TRIMAP_FG
-            } else if outer.get_pixel(x, y).0[0] >= SELECTED_THRESHOLD {
+            } else if outer_buf[base + x] >= SELECTED_THRESHOLD {
                 TRIMAP_UNKNOWN
             } else {
                 TRIMAP_BG
             };
-            trimap.put_pixel(x, y, Luma([level]));
         }
-    }
-    trimap
+    });
+    GrayImage::from_raw(width, height, out_buf).expect("trimap buffer matches dimensions")
 }
 
 /// ViTMatte matting transformer run in-process via `ort`. The session is a warm

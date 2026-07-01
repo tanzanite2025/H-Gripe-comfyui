@@ -29,6 +29,7 @@ mod image_enhance;
 mod persist;
 mod psd_analyze;
 mod psd_export;
+mod schedule;
 mod studio_image;
 mod subject_mask;
 mod subject_matte;
@@ -42,5 +43,6 @@ mod subject_segment;
 // command macro generates beside it; the glob carries both.
 pub(crate) use exec::*;
 pub(crate) use history::*;
+pub(crate) use schedule::StudioScheduler;
 pub(crate) use persist::*;
 pub(crate) use subject_model::set_resource_dir as set_subject_model_resource_dir;

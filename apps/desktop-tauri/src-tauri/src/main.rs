@@ -26,7 +26,7 @@ mod contracts;
 mod psd;
 mod studio;
 
-use studio::StudioRunCancels;
+use studio::{StudioRunCancels, StudioScheduler};
 
 pub(crate) fn broker() -> ApiBroker {
     let mut broker = ApiBroker::new();
@@ -470,6 +470,7 @@ fn main() {
     tauri::Builder::default()
         .plugin(tauri_plugin_dialog::init())
         .manage(StudioRunCancels::default())
+        .manage(StudioScheduler::default())
         .setup(|app| {
             // Capture the bundled resource directory so the PSD nodes can fall
             // back to the `h-gripe.project.json` + `python/bridge` subtree

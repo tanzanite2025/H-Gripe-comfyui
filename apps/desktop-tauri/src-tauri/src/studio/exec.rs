@@ -25,6 +25,7 @@ use super::graph::{
 use super::image_enhance::execute_studio_image_enhance;
 use super::psd_analyze::execute_studio_psd_context_analyze;
 use super::psd_export::execute_studio_psd_export;
+use super::schedule::{category_for_kind, JobCategory, StudioScheduler};
 use super::subject_mask::execute_studio_subject_mask;
 use crate::broker;
 use crate::psd::{composite_repaint, prepare_repaint_regions};
@@ -993,6 +994,7 @@ async fn execute_studio_api_node(
 pub(crate) async fn run_studio_graph(
     app: tauri::AppHandle,
     cancels: tauri::State<'_, StudioRunCancels>,
+    scheduler: tauri::State<'_, StudioScheduler>,
     graph_json: String,
     run_id: Option<String>,
 ) -> Result<StudioGraphRunResult, String> {
@@ -1071,6 +1073,14 @@ pub(crate) async fn run_studio_graph(
         );
         let started_at = Instant::now();
         let inputs = studio_node_inputs(&node.id, &graph, &outputs);
+        // Hold the lane permit for the node's resource category across its
+        // execution: `Gpu` work is serialised by the `Semaphore(1)`, `CpuBound`
+        // work by the bounded CPU pool; `CpuLight`/`Network` are ungated. The
+        // run loop is still sequential, so this can't change results — it makes
+        // the (previously accidental) GPU serialisation explicit policy and is
+        // the shared gate a parallel scheduler will contend on.
+        let category = category_for_kind(node.kind.as_str()).unwrap_or(JobCategory::CpuLight);
+        let _lane_permit = scheduler.acquire(category).await;
         match execute_studio_node(node, inputs, &cancels, &run_id).await {
             Ok(node_outputs) => {
                 let duration_ms = started_at.elapsed().as_millis();

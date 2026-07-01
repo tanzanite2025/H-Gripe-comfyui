@@ -786,20 +786,11 @@ pub(crate) enum StudioExecutor {
 }
 
 /// Classify a node kind. Returns `None` for an unknown kind (the single
-/// gate for unsupported kinds). Keep in sync with `nodeSpecs.ts`.
+/// gate for unsupported kinds). Delegates to the shared
+/// [`node_registry`](super::node_registry), the single source of truth pairing
+/// each kind with its executor + resource lane.
 pub(crate) fn studio_executor_for_kind(kind: &str) -> Option<StudioExecutor> {
-    use StudioExecutor::*;
-    Some(match kind {
-        "prompt" | "batch" | "imageSource" | "videoSource" | "psdTemplate" | "number"
-        | "reroute" | "group" | "compare" | "logic" | "if" | "switch" | "preview"
-        | "save" => Graph,
-        "psdContextAnalyze" | "matchLightColor" | "refineMaskEdge" | "imageEnhance"
-        | "detailWatchdog" | "psdExport" => Local,
-        "subjectMask" | "crop" => Compute,
-        "generate" | "detailRepaint" => Api,
-        "promptOptimize" => Hybrid,
-        _ => return None,
-    })
+    super::node_registry::node_class(kind).map(|class| class.executor)
 }
 
 /// Whether a consumer of a compute output can be served *without a file on

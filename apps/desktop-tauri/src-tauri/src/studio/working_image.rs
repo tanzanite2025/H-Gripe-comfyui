@@ -327,6 +327,41 @@ mod tests {
     }
 
     #[test]
+    fn prophoto16_egress_is_golden_per_stage() {
+        // Stage-isolated golden for the ProPhoto -> sRGB egress alone: fixed
+        // ProPhoto 16-bit inputs pinned to their sRGB bytes, with no ICC profile
+        // and no upstream CMYK/transform involved. When the end-to-end profiled
+        // CMYK test goes red this pins whether the *egress* is at fault, so a
+        // regression is localised to a stage instead of being read off a single
+        // end-to-end threshold. Runs on every platform (moxcms built-in profiles,
+        // no OS profile needed). Tolerance is ±2 to absorb moxcms patch-level
+        // rounding while still catching any structural drift.
+        let cases: [([u16; 3], [u8; 3]); 8] = [
+            ([0, 0, 0], [0, 0, 0]),
+            ([65535, 65535, 65535], [255, 255, 255]),
+            ([32768, 32768, 32768], [146, 146, 146]),
+            // ProPhoto primaries sit outside sRGB, so they clip to the sRGB corner.
+            ([65535, 0, 0], [255, 0, 0]),
+            ([0, 65535, 0], [0, 255, 0]),
+            ([0, 0, 65535], [0, 0, 255]),
+            ([45000, 30000, 12000], [236, 119, 30]),
+            ([12000, 40000, 60000], [0, 186, 247]),
+        ];
+        let flat: Vec<u16> = cases.iter().flat_map(|(i, _)| *i).collect();
+        let got = prophoto16_rgb_to_srgb8(&flat, cases.len()).expect("prophoto->srgb");
+        assert_eq!(got.len(), cases.len() * 3);
+        for (i, (input, want)) in cases.iter().enumerate() {
+            let px = &got[i * 3..i * 3 + 3];
+            for c in 0..3 {
+                assert!(
+                    (i32::from(px[c]) - i32::from(want[c])).abs() <= 2,
+                    "egress {input:?} -> {px:?} differs from golden {want:?} at channel {c}",
+                );
+            }
+        }
+    }
+
+    #[test]
     fn srgb_space_egress_is_exact_bit_narrow() {
         // An Srgb-tagged surface must reach the cards byte-for-byte (identical to
         // the plain narrow) - no ProPhoto round-trip for plain images / naive CMYK.

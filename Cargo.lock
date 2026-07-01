@@ -1512,7 +1512,10 @@ dependencies = [
  "tauri",
  "tauri-build",
  "tauri-plugin-dialog",
+ "tiff",
  "tokio",
+ "zune-core",
+ "zune-jpeg",
 ]
 
 [[package]]

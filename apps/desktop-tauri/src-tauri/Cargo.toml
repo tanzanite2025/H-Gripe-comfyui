@@ -50,4 +50,14 @@ ort = { version = "2.0.0-rc.10", default-features = false, features = ["download
 # the vendored 8.1 libs) so no libclang/bindgen is needed on CI. `ffmpeg8_1`
 # aligns the version cfgs with those libs.
 rusty_ffmpeg = { version = "0.17", default-features = false, features = ["ffmpeg8_1", "use_prebuilt_binding"], optional = true }
+# Raw CMYK sample access for the in-process enhance path. The `image` crate
+# converts CMYK -> RGB and drops the ICC at decode, so a faithful ICC
+# CMYK -> sRGB transform needs the raw 4-channel samples straight from the JPEG
+# (`zune-jpeg`, out colourspace pinned to CMYK) / TIFF (`tiff`, CMYK photometric)
+# decoder. Both are already in the tree transitively via `image`; pinned here to
+# use their APIs directly. `zune-core` provides the shared `ColorSpace` /
+# `ZCursor` types. See `studio/cmyk_decode.rs`.
+zune-jpeg = "0.5"
+zune-core = "0.5"
+tiff = "0.11"
 hgripe-api = { path = "../../../crates/hgripe-api" }

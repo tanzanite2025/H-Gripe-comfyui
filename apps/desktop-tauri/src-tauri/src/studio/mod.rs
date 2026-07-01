@@ -27,6 +27,7 @@
 //! The Tauri commands keep their original `crate::studio::*` paths via the
 //! re-exports below, so `main.rs`'s `invoke_handler` registration is unchanged.
 
+mod cmyk_decode;
 mod color_match;
 mod crop;
 mod detail_watchdog;

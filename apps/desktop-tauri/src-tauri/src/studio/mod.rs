@@ -28,6 +28,7 @@
 //! re-exports below, so `main.rs`'s `invoke_handler` registration is unchanged.
 
 mod cmyk_decode;
+mod cmyk_transform;
 mod color_match;
 mod crop;
 mod detail_watchdog;

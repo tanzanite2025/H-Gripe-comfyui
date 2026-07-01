@@ -599,16 +599,22 @@ fn mask_coverage(mask: &GrayImage) -> f64 {
 }
 
 fn compose_alpha(image: &RgbaImage, mask: &GrayImage) -> RgbaImage {
-    let (width, height) = image.dimensions();
+    let (width, _height) = image.dimensions();
+    let w = width as usize;
+    let mask_buf = mask.as_raw();
+    // Full-resolution op (the cutout is the original size): copy the RGB and
+    // overwrite the alpha channel from the mask, one independent row per worker.
     let mut out = image.clone();
-    for y in 0..height {
-        for x in 0..width {
-            let a = mask.get_pixel(x, y).0[0];
-            let mut px = out.get_pixel(x, y).0;
-            px[3] = a;
-            out.put_pixel(x, y, Rgba(px));
-        }
-    }
+    // `ImageBuffer` derefs to its packed `[u8]` sample buffer (RGBA, 4 bytes/px).
+    let buf: &mut [u8] = &mut out;
+    buf.par_chunks_mut(w * 4)
+        .enumerate()
+        .for_each(|(y, row)| {
+            let base = y * w;
+            for x in 0..w {
+                row[x * 4 + 3] = mask_buf[base + x];
+            }
+        });
     out
 }
 
@@ -867,6 +873,34 @@ mod tests {
             }
         }
         out
+    }
+
+    #[test]
+    fn parallel_compose_alpha_matches_serial_reference() {
+        // Deterministic LCG fills so the check needs no RNG dependency.
+        let mut state: u32 = 0x0bad_c0de;
+        let mut next = || {
+            state = state.wrapping_mul(1_664_525).wrapping_add(1_013_904_223);
+            (state >> 24) as u8
+        };
+        let (w, h) = (13u32, 11u32);
+        let mut image = RgbaImage::new(w, h);
+        for p in image.pixels_mut() {
+            p.0 = [next(), next(), next(), next()];
+        }
+        let mut mask = GrayImage::new(w, h);
+        for p in mask.pixels_mut() {
+            p.0[0] = next();
+        }
+        let got = compose_alpha(&image, &mask);
+        // Serial reference: RGB preserved, alpha taken from the mask.
+        for y in 0..h {
+            for x in 0..w {
+                let src = image.get_pixel(x, y).0;
+                let a = mask.get_pixel(x, y).0[0];
+                assert_eq!(got.get_pixel(x, y).0, [src[0], src[1], src[2], a]);
+            }
+        }
     }
 
     #[test]

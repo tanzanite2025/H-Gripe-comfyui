@@ -6,35 +6,42 @@ features. It does not redefine individual edit backends; it defines *where each
 kind of work runs, on which thread, and under what concurrency limit*, so new
 tools can be added without blocking the UI or fighting over the GPU.
 
-This is a **planning document** — it records the agreed model and a staged
-rollout. Nothing here is implemented yet beyond what is noted under "Current
-state".
+This started as a **planning document**; the staged rollout below is now
+**fully landed** (steps 1-5 + the native ffmpeg backend). The model itself is
+still the forward-looking contract for adding new editor tools — see the
+per-step ✅ notes for what shipped and the PRs that shipped it.
 
-## Current state (the constraints that shape this plan)
+## Origin state (the constraints that shaped this plan)
+
+> Snapshot of the codebase *before* this rollout, kept for context. Every
+> numbered constraint here has since been addressed by the [staged
+> rollout](#staged-rollout); the live status lives there and in
+> [`../implementation-status.md`](../implementation-status.md).
 
 1. **The webview has a single UI thread.** Editor canvases (mask brush, magic
-   wand, crop box, the planned rotate / colour tools) run on it. Today mask /
-   crop edits are recorded as **vector ops in params** and rasterised by the
-   backend on confirm, so the front-end does almost no heavy compute yet.
-2. **Exactly one run is allowed at a time.** `useStudioRunController` holds an
-   `inFlight` ref shared by `run()` and `runUpToNode()`. A confirm-to-result and
-   a full-graph Run therefore **block each other**.
-3. **The Rust backend runs nodes strictly serially.** `studio/exec.rs` walks the
-   topological order with a sequential `.await` per node — no parallelism, no
-   thread pool, no semaphore. The GPU is thus serialised by accident, not by
-   policy.
-4. **Compute is split between native Rust and Python subprocesses.**
-   - ONNX already has a **native-Rust path**: `Cargo.toml` depends on `ort`
-     (ONNX Runtime, 2.0 rc) and `subject_matte.rs` / `subject_model.rs` /
-     `subject_sam2.rs` run inference through it.
-   - Several cards still **shell out to a Python CLI per call** (`subject_mask`,
-     `color_match`, `image_enhance`, `edge_refine`, `detail_watchdog`), and the
-     **torch** engines (realesrgan, sd_inpaint) are Python-only.
-   - **Each subprocess call reloads its model** — the dominant latency cost, and
-     the thing that gets worse as features and edit chains grow.
-5. **Video is poster-frame only.** `python/bridge/video_probe_cli.py` (PyAV)
-   extracts a single frame. There is **no playback / scrubbing / seek / export**
-   — PyAV poster extraction is a stop-gap, not a clip-editor engine.
+   wand, crop box, the planned rotate / colour tools) run on it. Mask / crop
+   edits are recorded as **vector ops in params** and rasterised by the backend
+   on confirm, so the front-end does almost no heavy compute. *(Still true, by
+   design.)*
+2. **~~Exactly one run is allowed at a time.~~** `useStudioRunController` held an
+   `inFlight` ref shared by `run()` and `runUpToNode()`, so a confirm-to-result
+   and a full-graph Run blocked each other. **Fixed in step 1**: preview runs on
+   its own single-slot, latest-wins lane, decoupled from the run lock.
+3. **~~The Rust backend runs nodes strictly serially.~~** `studio/exec.rs` walked
+   the topological order with a sequential `.await` per node, serialising the
+   GPU by accident. **Fixed in step 2**: an explicit lane scheduler with a GPU
+   `Semaphore(1)` + CPU pool makes the serialisation policy, not accident.
+4. **~~Each subprocess call reloads its model.~~** ONNX already had a native-Rust
+   `ort` path; several cards shelled out to a Python CLI per call and reloaded
+   the model each time (the dominant latency cost). **Fixed in steps 3-4**: an
+   in-process ONNX warm pool (`onnx_pool.rs`) and a long-lived torch worker
+   (`torch_worker.rs`) keep models resident across calls.
+5. **~~Video is poster-frame only.~~** `video_probe_cli.py` (PyAV) extracted a
+   single frame; there was no playback / scrubbing / seek. **Fixed in step 5**:
+   a media engine (decoder seam + LRU frame cache + dedicated playback thread)
+   with two `FrameSource` backends — the long-lived PyAV worker and an
+   in-process **native ffmpeg** decoder (vendored libav, `native-ffmpeg`
+   feature). Export/encode is still future work.
 
 ## The host is Rust (not Python)
 
@@ -103,21 +110,34 @@ queue** so playback never stalls on an inference job (and vice-versa).
 | video trim / cut | interactive (timeline) + playback (decode) + render (encode on export) | heavy, media |
 | video frame scrub | preview (single-frame, latest-wins) | medium, decode |
 
-## Staged rollout
+## Staged rollout — ✅ complete
 
-1. **Front-end foundation (cheap, no cargo needed, verifiable now):** decouple
-   preview from the global `inFlight` lock (own single-slot, latest-wins +
-   cancel lane); add a `lane` discriminator to the op model so every tool
-   declares its cost up front.
-2. **Rust orchestration skeleton:** replace the purely-serial `.await` loop in
-   `exec.rs` with a job queue carrying *(category, concurrency limit)* and a GPU
-   `Semaphore(1)`; keep deterministic results.
-3. **ONNX warm pool (Rust / `ort`):** cache `ort::Session` in managed state;
-   migrate the still-Python ONNX cards onto it, killing per-call model reload.
-4. **torch long-lived Python worker:** Rust spawns and keeps it alive; replaces
-   per-call subprocess + model reload for realesrgan / sd_inpaint.
-5. **Video media engine (Rust + ffmpeg):** decode / playback threads + frame
-   cache; foundation for the manual clip editor (playback, scrub, trim, export).
+All five stages have landed; the native ffmpeg backend (a follow-up to step 5)
+too. This section is now a changelog of the rollout.
+
+1. ✅ **Front-end foundation** (PR #145) — preview decoupled from the global
+   `inFlight` lock onto its own single-slot, latest-wins + cancel lane; a `lane`
+   discriminator on the op model so every tool declares its cost up front. First
+   consumer: live mask-morphology (grow/shrink/feather/smooth) proxy preview.
+2. ✅ **Rust orchestration skeleton** (PR #146) — the purely-serial `.await`
+   loop in `exec.rs` is replaced by a lane scheduler carrying *(category,
+   concurrency limit)* + a GPU `Semaphore(1)`; results stay deterministic.
+3. ✅ **ONNX warm pool** (PR #147) — `studio/onnx_pool.rs` caches `ort::Session`
+   in process-global managed state; `subject_model` / `subject_sam2` /
+   `subject_matte` reuse it, killing per-call model reload.
+4. ✅ **torch long-lived Python worker** (PR #148) — `studio/torch_worker.rs`
+   spawns and keeps a torch worker alive; `image_enhance` (realesrgan) and
+   `detail_repaint` (sd_inpaint) reuse it, falling back to the one-shot
+   subprocess on worker failure.
+5. ✅ **Video media engine** (PR #149) — `studio/video_engine.rs`: decoder seam
+   (`FrameSource`) + LRU `frame_cache.rs` + a dedicated latest-wins playback
+   thread; `video_scrub` command for timeline dragging. Decode is off the UI
+   thread and the GPU compute queue.
+6. ✅ **Native ffmpeg backend** (PR #150) — a second `FrameSource`
+   (`studio/ffmpeg_native.rs`) decoding in-process with **vendored** LGPL-shared
+   libav (`third_party/ffmpeg`, git-lfs; `native-ffmpeg` cargo feature, off by
+   default). `make_frame_source()` wraps it with a PyAV fallback so a per-clip
+   decode failure never regresses. Still future: trim / **export / encode**.
 
 ## Non-goals (for now)
 

@@ -8,7 +8,7 @@ use std::path::Path;
 
 use serde::Serialize;
 
-use crate::{resource, runtime_paths, studio, thumb_cache};
+use crate::{resource, studio, thumb_cache};
 
 fn base64_encode(bytes: &[u8]) -> String {
     const TABLE: &[u8; 64] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
@@ -248,9 +248,7 @@ fn generate_thumbnail_inner(
         std::fs::read(src).map_err(|err| format!("failed to read {}: {err}", src.display()))?;
     let source_hash = fnv1a_hex(&bytes);
 
-    let cache_dir = runtime_paths()?.output_dir.join(".thumbnails");
-    std::fs::create_dir_all(&cache_dir)
-        .map_err(|err| format!("failed to create {}: {err}", cache_dir.display()))?;
+    let cache_dir = crate::cache_subdir(".thumbnails")?;
     let cache_path = cache_dir.join(format!("{source_hash}_{target}.png"));
 
     // Disk cache hit: reuse the previously generated thumbnail PNG.
@@ -322,9 +320,7 @@ fn finish_thumbnail_from_decoded(
         .map_err(|err| format!("failed to encode thumbnail: {err}"))?;
     let source_hash = fnv1a_hex(&png);
 
-    let cache_dir = runtime_paths()?.output_dir.join(".thumbnails");
-    std::fs::create_dir_all(&cache_dir)
-        .map_err(|err| format!("failed to create {}: {err}", cache_dir.display()))?;
+    let cache_dir = crate::cache_subdir(".thumbnails")?;
     let cache_path = cache_dir.join(format!("{source_hash}_{target}.png"));
     // Best-effort cache write; a failure here should not fail the request.
     let _ = std::fs::write(&cache_path, &png);

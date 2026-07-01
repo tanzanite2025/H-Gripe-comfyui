@@ -20,7 +20,7 @@ use serde::Serialize;
 use serde_json::{json, Value};
 
 use super::graph::{
-    studio_output_map, studio_value_to_number, studio_value_to_string, StudioGraphNode,
+    bool_param, number_param, optional, studio_output_map, studio_value_to_string, StudioGraphNode,
 };
 use super::image_buffer;
 use super::persist::studio_reject_unsafe_basename;
@@ -59,29 +59,6 @@ struct Triplet {
     mask: bool,
     alpha_image: bool,
     cutout_image: bool,
-}
-
-fn number_param(node: &StudioGraphNode, key: &str, default: f64) -> f64 {
-    match node.params.get(key) {
-        Some(value) => studio_value_to_number(Some(value)),
-        None => default,
-    }
-}
-
-fn bool_param(node: &StudioGraphNode, key: &str, default: bool) -> bool {
-    node.params
-        .get(key)
-        .map(super::graph::studio_truthy)
-        .unwrap_or(default)
-}
-
-fn optional(value: String) -> Option<String> {
-    let trimmed = value.trim();
-    if trimmed.is_empty() {
-        None
-    } else {
-        Some(trimmed.to_string())
-    }
 }
 
 pub(super) fn execute_studio_subject_mask(

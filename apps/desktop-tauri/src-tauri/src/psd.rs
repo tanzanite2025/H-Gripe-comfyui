@@ -1483,9 +1483,7 @@ pub(crate) fn video_probe(
 /// output dir's `.posters` cache (created on demand). Keyed by `path + ts` so
 /// re-probing the same frame reuses the file.
 fn poster_cache_path(video_path: &str, ts: f64) -> Result<PathBuf, String> {
-    let poster_dir = crate::runtime_paths()?.output_dir.join(".posters");
-    fs::create_dir_all(&poster_dir)
-        .map_err(|err| format!("failed to create {}: {err}", poster_dir.display()))?;
+    let poster_dir = crate::cache_subdir(".posters")?;
     let key = format!("{video_path}|{}", (ts * 1000.0).round() as i64);
     let mut hasher = std::collections::hash_map::DefaultHasher::new();
     std::hash::Hash::hash(&key, &mut hasher);
@@ -1585,9 +1583,7 @@ pub(crate) fn video_scrub(
     let dir = resolve_project_dir(&dir)?;
     let python = project_python(&dir);
     let ts = timestamp.max(0.0);
-    let poster_dir = crate::runtime_paths()?.output_dir.join(".posters");
-    fs::create_dir_all(&poster_dir)
-        .map_err(|err| format!("failed to create {}: {err}", poster_dir.display()))?;
+    let poster_dir = crate::cache_subdir(".posters")?;
 
     match crate::studio::video_engine::scrub_frame(&python, &dir, &poster_dir, video, ts) {
         Ok(frame) => Ok(frame.to_string_lossy().to_string()),

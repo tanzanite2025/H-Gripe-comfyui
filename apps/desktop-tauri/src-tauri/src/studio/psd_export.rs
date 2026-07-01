@@ -6,9 +6,10 @@ use std::collections::BTreeMap;
 
 use serde_json::{json, Value};
 
-use super::graph::{studio_output_map, studio_value_to_string, StudioGraphNode};
+use super::graph::{
+    resolve_output_dir, studio_output_map, studio_value_to_string, StudioGraphNode,
+};
 use crate::psd::compose_psd;
-use crate::runtime_paths;
 
 pub(super) fn execute_studio_psd_export(
     node: &StudioGraphNode,
@@ -23,14 +24,7 @@ pub(super) fn execute_studio_psd_export(
         return Err("PSD Export needs a connected PSD template input".to_string());
     }
 
-    let output_dir = {
-        let configured = studio_value_to_string(node.params.get("output_dir"));
-        if configured.trim().is_empty() {
-            runtime_paths()?.output_dir.to_string_lossy().to_string()
-        } else {
-            configured
-        }
-    };
+    let output_dir = resolve_output_dir(node)?;
     let filename = {
         let configured = studio_value_to_string(node.params.get("filename"));
         if configured.trim().is_empty() {

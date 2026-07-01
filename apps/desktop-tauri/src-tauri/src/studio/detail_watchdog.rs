@@ -8,18 +8,10 @@ use std::collections::BTreeMap;
 
 use serde_json::{json, Value};
 
-use super::graph::{studio_output_map, studio_value_to_string, StudioGraphNode};
+use super::graph::{
+    optional, resolve_output_dir, studio_output_map, studio_value_to_string, StudioGraphNode,
+};
 use crate::psd::detect_quality_issues;
-use crate::runtime_paths;
-
-fn optional(value: String) -> Option<String> {
-    let trimmed = value.trim();
-    if trimmed.is_empty() {
-        None
-    } else {
-        Some(trimmed.to_string())
-    }
-}
 
 /// Encode an optional connected JSON input ({...}) as a string for the CLI.
 fn encode_input(inputs: &BTreeMap<String, Value>, key: &str) -> Result<Option<String>, String> {
@@ -47,14 +39,7 @@ pub(super) fn execute_studio_detail_watchdog(
     let visual_context = encode_input(inputs, "visual_context")?;
     let target_bounds = encode_input(inputs, "target_bounds")?;
 
-    let output_dir = {
-        let configured = studio_value_to_string(node.params.get("output_dir"));
-        if configured.trim().is_empty() {
-            runtime_paths()?.output_dir.to_string_lossy().to_string()
-        } else {
-            configured
-        }
-    };
+    let output_dir = resolve_output_dir(node)?;
 
     let result = detect_quality_issues(
         None,

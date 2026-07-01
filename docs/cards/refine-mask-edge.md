@@ -77,9 +77,14 @@ alpha (hair / fur / glass) intact rather than eroding/feathering it as fringe.
 
 ## Colour space & bit depth
 
-Inputs are normalised to an 8-bit RGB working space so decontamination and
-background blend sample honest colour; the subject's original mode is recorded as
-`source_mode`:
+> Working space / bit depth / ICC handling is defined once in
+> [`docs/design/colour-pipeline.md`](../design/colour-pipeline.md) (the source
+> of truth). Below is the **current** 8-bit sRGB behaviour; the decided target
+> (16-bit wide-gamut canonical + sRGB model egress) is not yet implemented.
+
+Inputs are *currently* normalised to an 8-bit RGB working space so
+decontamination and background blend sample honest colour; the subject's
+original mode is recorded as `source_mode`:
 
 | Source mode | Handling |
 | --- | --- |

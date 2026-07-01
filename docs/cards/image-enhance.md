@@ -69,8 +69,14 @@ denoise/sharpen never bleed a halo across a matte edge.
 
 ## Colour space & bit depth
 
-The input is normalised to an 8-bit RGB working space and the original
-`source_mode` is recorded:
+> **Source of truth:** the working space, bit depth, ICC handling, and the
+> manual/model split are defined in
+> [`docs/design/colour-pipeline.md`](../design/colour-pipeline.md). The table
+> below is the **current** behaviour (8-bit sRGB); the decided target (16-bit
+> wide-gamut canonical + sRGB model egress) is not yet implemented.
+
+The input is *currently* normalised to an 8-bit RGB working space and the
+original `source_mode` is recorded:
 
 | Source mode | Handling |
 | --- | --- |

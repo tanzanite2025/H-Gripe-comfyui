@@ -68,6 +68,7 @@ concept), with the CPU path remaining the default and fallback.
 | --- | --- | --- |
 | Executor lanes (Graph / Local / Compute / Api / Hybrid) | ✅ Landed | `StudioExecutor` + `studio_executor_for_kind` + `executor` field on node specs. |
 | Input hardening (CMYK/ICC normalise, EXIF, `--max-decode-pixels`) | ✅ Landed | Across the PSD cards. |
+| Colour pipeline: wide-gamut 16-bit working space + manual/model split — [`design/colour-pipeline.md`](design/colour-pipeline.md) | 🟡 Partial | **Decided (option W), design-only.** CMYK decode coverage ✅ (raw inks + ICC for TIFF/Adobe/YCCK/unmarked JPEG, #180–#186). The working-space change (8-bit sRGB → 16-bit wide-gamut canonical + ICC, sRGB only at model egress) is **not yet implemented** — phased plan P1–P5 in the design doc. |
 | **Local model management surface** | ⛔ Planned | `engine` + future `weights_path` / `device` / `precision` as the only surface a "local model manager" UI would need. |
 | **"API manager" UI** | ⛔ Planned | Enumerate `api` cards + profiles/credentials. |
 | Per-card `engine` seams (matcher) | 🟡 Partial | Image Enhance, Detail Watchdog, Detail Repaint, Match Light & Color and Refine Mask Edge expose real opt-in `engine` seams (`realesrgan` / `onnx_defect` / `sd_inpaint` / `onnx_harmonize` / `onnx_matting`); every PSD production card with an ML upside now has a seam. Only the trained weights remain ⛔. |

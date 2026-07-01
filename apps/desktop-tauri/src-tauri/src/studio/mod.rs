@@ -10,6 +10,9 @@
 //! - [`studio_image`]: decode-guard + colour-space loaders shared by native
 //!   (`Compute`) Rust cards.
 //! - [`pixel_ops`]: unified crop/resize buffer seam shared by native Rust cards.
+//! - [`image_buffer`]: process-global decoded-buffer cache (keyed by
+//!   `ResourceId`) so a compute card's output feeds the next one from memory
+//!   instead of a PNG re-decode.
 //! - [`subject_mask`]: the `subjectMask` node executor (native-Rust matte).
 //! - [`subject_matte`]: continuous alpha matting (ViTMatte / trimap, Compute lane).
 //! - [`subject_sam2`]: SAM 2 interactive point-prompt segmenter (Compute lane).
@@ -29,6 +32,7 @@ mod ffmpeg_native;
 mod frame_cache;
 mod graph;
 mod history;
+mod image_buffer;
 mod image_enhance;
 mod onnx_pool;
 mod persist;

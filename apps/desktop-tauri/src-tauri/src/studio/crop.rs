@@ -24,6 +24,7 @@ use serde_json::{json, Value};
 use super::graph::{
     studio_output_map, studio_value_to_number, studio_value_to_string, StudioGraphNode,
 };
+use super::image_buffer;
 use super::persist::studio_reject_unsafe_basename;
 use super::pixel_ops;
 use super::studio_image;
@@ -181,6 +182,10 @@ pub(super) fn execute_studio_crop(
     cropped
         .save(&out_path)
         .map_err(|err| format!("failed to write {}: {err}", out_path.display()))?;
+    // Hand the decoded crop to the next compute card in memory so it skips the
+    // PNG re-decode; the file on disk stays the source of truth for everyone
+    // else (preview, Python-bridge cards, export).
+    image_buffer::publish_rgba(&out_path, &cropped, studio_image::png_output_meta());
 
     let report = CropReport {
         mode,

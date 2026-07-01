@@ -22,6 +22,7 @@ use serde_json::{json, Value};
 use super::graph::{
     studio_output_map, studio_value_to_number, studio_value_to_string, StudioGraphNode,
 };
+use super::image_buffer;
 use super::persist::studio_reject_unsafe_basename;
 use super::pixel_ops;
 use super::studio_image;
@@ -253,6 +254,7 @@ pub(super) fn execute_studio_subject_mask(
         Some(trimap) => {
             let trimap_path = dir.join(format!("{base}_trimap.png"));
             save_png(&DynamicGray(trimap), &trimap_path)?;
+            image_buffer::publish_gray(&trimap_path, trimap);
             trimap_path.to_string_lossy().to_string()
         }
         None => String::new(),
@@ -265,6 +267,12 @@ pub(super) fn execute_studio_subject_mask(
     cutout
         .save(&cutout_path)
         .map_err(|err| format!("failed to write {}: {err}", cutout_path.display()))?;
+    // Publish the decoded outputs so a downstream compute card (a chained
+    // Subject Mask reading `previous_mask`, or a crop consuming the cutout)
+    // reuses them from memory instead of re-decoding the freshly-written PNGs.
+    image_buffer::publish_gray(&mask_path, &mask);
+    image_buffer::publish_rgba(&alpha_path, &alpha_image, studio_image::png_output_meta());
+    image_buffer::publish_rgba(&cutout_path, &cutout, studio_image::png_output_meta());
 
     let edit_paths_value = normalise_edit_paths(inputs.get("edit_paths"));
     std::fs::write(

@@ -5,7 +5,7 @@ import { localizeSpec } from "../graph/nodeSpecsI18n";
 import { LangContext, useT } from "../i18n";
 import { isLodActive } from "./lod";
 import type { NodeStatus } from "../runtime/dag";
-import { generateThumbnail, videoProbe } from "../bridge/tauri";
+import { generateThumbnail, probeImageDims, videoProbe } from "../bridge/tauri";
 import { ParamField } from "./ParamField";
 import { useNodeEditing } from "./editingContext";
 import { psdTemplatePathWarning } from "./psdcheck";
@@ -95,8 +95,10 @@ function LazyThumb({ path }: { path: string }) {
 
 // Generic image media card body: a thumbnail + `name · W×H` info row + an
 // action row whose buttons spawn a *bound* edit node (the source card is never
-// mutated). Fetches the thumbnail once and reuses its reported dimensions for
-// the info row. See docs/cards/generic-media-card.md.
+// mutated). Ingestion is two-phase: a header-only dimension probe fills the
+// info row near-instantly (even for a 4K/8K source), while the heavier
+// thumbnail decode stays lazy (IntersectionObserver-gated) so off-screen cards
+// cost nothing. See docs/cards/generic-media-card.md.
 function ImageSourceCard({ id, path }: { id: string; path: string }) {
   const t = useT();
   const editing = useNodeEditing();
@@ -104,9 +106,27 @@ function ImageSourceCard({ id, path }: { id: string; path: string }) {
   const [src, setSrc] = useState<string | null>(null);
   const [dims, setDims] = useState<{ w: number; h: number } | null>(null);
 
+  // Phase 1: fetch dimensions from the file header right away so the info row
+  // renders before (and independently of) the thumbnail decode.
+  useEffect(() => {
+    setDims(null);
+    if (!path) return;
+    let cancelled = false;
+    probeImageDims(path)
+      .then((d) => {
+        if (!cancelled && d && d.width && d.height) setDims({ w: d.width, h: d.height });
+      })
+      .catch(() => {
+        /* fall back to the dimensions the thumbnail reports */
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [path]);
+
+  // Phase 2: decode the thumbnail once the card scrolls into view.
   useEffect(() => {
     setSrc(null);
-    setDims(null);
     const el = ref.current;
     if (!el) return;
     let cancelled = false;
@@ -118,8 +138,9 @@ function ImageSourceCard({ id, path }: { id: string; path: string }) {
           .then((thumb) => {
             if (cancelled) return;
             setSrc(thumb.data_url || null);
-            if (thumb.data_url && thumb.width && thumb.height) {
-              setDims({ w: thumb.width, h: thumb.height });
+            // Fallback only: keep phase-1 dims if the probe already set them.
+            if (thumb.width && thumb.height) {
+              setDims((cur) => cur ?? { w: thumb.width, h: thumb.height });
             }
           })
           .catch(() => {

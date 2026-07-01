@@ -23,6 +23,7 @@ use super::graph::{
     studio_output_map, studio_value_to_number, studio_value_to_string, StudioGraphNode,
 };
 use super::persist::studio_reject_unsafe_basename;
+use super::pixel_ops;
 use super::studio_image;
 use super::subject_matte;
 use super::subject_segment::{segmenter_for_mode, AutoMode, PointPrompt, SegmentRequest};
@@ -324,16 +325,12 @@ fn load_mask_sized(
     max_pixels: u64,
 ) -> Result<GrayImage, String> {
     let mask = studio_image::load_mask(Path::new(path.trim()), max_pixels)?;
-    if mask.dimensions() == (width, height) {
-        Ok(mask)
-    } else {
-        Ok(imageops::resize(
-            &mask,
-            width,
-            height,
-            imageops::FilterType::Nearest,
-        ))
-    }
+    Ok(pixel_ops::resize_gray(
+        &mask,
+        width,
+        height,
+        imageops::FilterType::Nearest,
+    ))
 }
 
 // --- pure mask operations (unit-tested without disk) -----------------------
@@ -621,7 +618,7 @@ fn compose_alpha(image: &RgbaImage, mask: &GrayImage) -> RgbaImage {
 fn cutout_to_bbox(alpha_image: &RgbaImage, mask: &GrayImage) -> RgbaImage {
     match selection_bbox(mask) {
         Some((x0, y0, x1, y1)) => {
-            imageops::crop_imm(alpha_image, x0, y0, x1 - x0 + 1, y1 - y0 + 1).to_image()
+            pixel_ops::crop_rgba(alpha_image, x0, y0, x1 - x0 + 1, y1 - y0 + 1)
         }
         // Empty selection: a valid 1x1 transparent cutout (never panic).
         None => RgbaImage::from_pixel(1, 1, Rgba([0, 0, 0, 0])),

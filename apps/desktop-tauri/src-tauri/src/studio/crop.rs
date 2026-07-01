@@ -17,7 +17,7 @@ use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 use std::time::Instant;
 
-use image::{imageops, GrayImage, RgbaImage};
+use image::{GrayImage, RgbaImage};
 use serde::Serialize;
 use serde_json::{json, Value};
 
@@ -25,6 +25,7 @@ use super::graph::{
     studio_output_map, studio_value_to_number, studio_value_to_string, StudioGraphNode,
 };
 use super::persist::studio_reject_unsafe_basename;
+use super::pixel_ops;
 use super::studio_image;
 use super::subject_segment::{segmenter_for_mode, AutoMode, SegmentRequest};
 
@@ -150,7 +151,7 @@ pub(super) fn execute_studio_crop(
     }
     operations.push(json!({ "type": "crop", "box": [x, y, w, h] }));
 
-    let cropped: RgbaImage = imageops::crop_imm(&image, x, y, w, h).to_image();
+    let cropped: RgbaImage = pixel_ops::crop_rgba(&image, x, y, w, h);
 
     let output_dir = {
         let configured = studio_value_to_string(node.params.get("output_dir"));

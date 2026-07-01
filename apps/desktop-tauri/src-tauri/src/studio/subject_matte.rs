@@ -35,6 +35,7 @@ use rayon::prelude::*;
 use std::path::Path;
 
 use super::onnx_pool::{cached_session, SharedSession};
+use super::pixel_ops;
 use super::subject_model::resolve_model_file;
 
 /// Trimap level for *definite foreground* (kept fully opaque).
@@ -222,7 +223,7 @@ impl AlphaMatter for BuiltinCpuMatter {
         // trimap, run the guided filter there, then upsample only the soft alpha
         // back. FG/BG stay hard from the full-res trimap below.
         let (sw, sh) = bounded_size(width, height, BUILTIN_MAX_EDGE);
-        let small_rgb = resize_rgba(image, sw, sh);
+        let small_rgb = pixel_ops::resize_rgba(image, sw, sh);
         let small_tri = if (sw, sh) == (width, height) {
             trimap.clone()
         } else {
@@ -264,11 +265,7 @@ impl AlphaMatter for BuiltinCpuMatter {
         for (pixel, value) in soft.pixels_mut().zip(q) {
             pixel.0[0] = (value.clamp(0.0, 1.0) * 255.0).round() as u8;
         }
-        let soft = if (sw, sh) == (width, height) {
-            soft
-        } else {
-            image::imageops::resize(&soft, width, height, FilterType::Triangle)
-        };
+        let soft = pixel_ops::resize_gray(&soft, width, height, FilterType::Triangle);
 
         // Composite at full res: hard FG/BG from the trimap, guided alpha in the
         // unknown band. Rows are independent, so fill the raw buffer in parallel.
@@ -302,14 +299,6 @@ fn bounded_size(width: u32, height: u32, max_edge: u32) -> (u32, u32) {
     let w = ((width as f32 * scale).round() as u32).max(1);
     let h = ((height as f32 * scale).round() as u32).max(1);
     (w, h)
-}
-
-fn resize_rgba(image: &RgbaImage, width: u32, height: u32) -> RgbaImage {
-    if image.dimensions() == (width, height) {
-        image.clone()
-    } else {
-        image::imageops::resize(image, width, height, FilterType::Triangle)
-    }
 }
 
 /// Map a trimap straight to a hard alpha (FG → 255, otherwise 0).

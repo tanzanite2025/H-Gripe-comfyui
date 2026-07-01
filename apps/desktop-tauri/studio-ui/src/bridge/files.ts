@@ -141,6 +141,71 @@ export async function listenIngestProgress(
   });
 }
 
+// Fields are snake_case to match the Rust `ResourceRef` serialization.
+export interface ResourceRef {
+  /** Stable `res-…` handle for this media file (hash of its canonical path). */
+  id: string;
+  /** Canonical absolute path the id resolves to. */
+  path: string;
+  width?: number;
+  height?: number;
+}
+
+/**
+ * Register a media `path` with the backend resource registry and get back a
+ * lightweight {@link ResourceRef}. Cards hold the returned `id` (not the pixels)
+ * and pass it to {@link resourceThumbnail} / {@link resourceInfo}, keeping heavy
+ * data in Rust. The id is stable across sessions (a hash of the canonical path),
+ * so re-registering on project load yields the same handle. Returns `null`
+ * outside Tauri (browser preview), where callers fall back to path-based calls.
+ */
+export async function registerResource(path: string): Promise<ResourceRef | null> {
+  const invoke = tauriInvoke();
+  if (!invoke || !path) return null;
+  try {
+    return (await invoke("register_resource", { path })) as ResourceRef;
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * Resolve a registered {@link ResourceRef} by id. Returns `null` outside Tauri
+ * or when the id was never registered this session.
+ */
+export async function resourceInfo(id: string): Promise<ResourceRef | null> {
+  const invoke = tauriInvoke();
+  if (!invoke || !id) return null;
+  try {
+    return (await invoke("resource_info", { id })) as ResourceRef;
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * Generate (or fetch from cache) a thumbnail for a registered resource id. The
+ * backend resolves the id to its path and shares the same caches as
+ * {@link generateThumbnail}. Returns `null` outside Tauri or for an unknown id.
+ */
+export async function resourceThumbnail(
+  id: string,
+  size = 256,
+  dpr?: number,
+): Promise<ThumbnailResult | null> {
+  const invoke = tauriInvoke();
+  if (!invoke || !id) return null;
+  try {
+    return (await invoke("resource_thumbnail", {
+      id,
+      size,
+      dpr: dpr ?? window.devicePixelRatio ?? 1,
+    })) as ThumbnailResult;
+  } catch {
+    return null;
+  }
+}
+
 export interface PickFileOptions {
   title?: string;
   /** Display name for the extension filter (e.g. "Images"). */

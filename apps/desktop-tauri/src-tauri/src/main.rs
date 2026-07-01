@@ -24,6 +24,7 @@ use serde::Serialize;
 
 mod contracts;
 mod psd;
+mod resource;
 mod studio;
 mod thumb_cache;
 
@@ -490,6 +491,81 @@ fn generate_thumbnail_inner(
     })
 }
 
+/// A registered media resource handed to the webview: a stable [`resource`] id
+/// plus the canonical path and header dims. Cards hold the `id` and pass it back
+/// to [`resource_info`] / [`resource_thumbnail`] instead of shuttling the path
+/// (and never the pixels) around — the heavy data stays in Rust.
+#[derive(Clone, Serialize)]
+struct ResourceRef {
+    id: String,
+    path: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    width: Option<u32>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    height: Option<u32>,
+}
+
+/// Shared core behind [`register_resource`]: canonicalize `path`, derive its
+/// stable id, probe header dims (best effort), and record it in the registry.
+fn register_resource_inner(path: &str) -> Result<ResourceRef, String> {
+    let trimmed = path.trim();
+    if trimmed.is_empty() {
+        return Err("path is empty".to_string());
+    }
+    let src = Path::new(trimmed);
+    if !src.is_file() {
+        return Err(format!("file does not exist: {trimmed}"));
+    }
+    let canonical = fs::canonicalize(src)
+        .map(|p| p.to_string_lossy().to_string())
+        .unwrap_or_else(|_| trimmed.to_string());
+    let id = resource::id_for(&canonical);
+    // Header-only dims; a non-image (or unreadable) source just registers
+    // without dimensions and the card falls back to its own probe.
+    let (width, height) = match probe_image_dims_inner(trimmed) {
+        Ok(d) => (Some(d.width), Some(d.height)),
+        Err(_) => (None, None),
+    };
+    resource::put(
+        &id,
+        resource::ResourceEntry { path: canonical.clone(), width, height },
+    );
+    Ok(ResourceRef { id, path: canonical, width, height })
+}
+
+/// Register a dropped/selected media `path` and return its lightweight
+/// [`ResourceRef`]. The id is stable across sessions (a hash of the canonical
+/// path), so a card can re-register on project load and get the same handle
+/// without any persisted mapping.
+#[tauri::command]
+fn register_resource(path: String) -> Result<ResourceRef, String> {
+    register_resource_inner(&path)
+}
+
+/// Resolve a previously [`register_resource`]-ed id back to its
+/// [`ResourceRef`], or error if the id was never registered this session.
+#[tauri::command]
+fn resource_info(id: String) -> Result<ResourceRef, String> {
+    match resource::get(&id) {
+        Some(entry) => Ok(ResourceRef {
+            id,
+            path: entry.path,
+            width: entry.width,
+            height: entry.height,
+        }),
+        None => Err(format!("unknown resource id: {id}")),
+    }
+}
+
+/// Generate (or fetch from cache) a thumbnail for a registered resource id,
+/// resolving the id to its path and reusing [`generate_thumbnail_inner`] so the
+/// same disk + in-memory caches back both the id and path entry points.
+#[tauri::command]
+fn resource_thumbnail(id: String, size: u32, dpr: Option<f64>) -> Result<ThumbnailResult, String> {
+    let entry = resource::get(&id).ok_or_else(|| format!("unknown resource id: {id}"))?;
+    generate_thumbnail_inner(&entry.path, size, dpr)
+}
+
 /// Tauri event name for ingestion progress pushed by [`prime_ingest`].
 const INGEST_EVENT: &str = "ingest://progress";
 
@@ -742,6 +818,9 @@ fn main() {
             generate_thumbnail,
             probe_image_dims,
             prime_ingest,
+            register_resource,
+            resource_info,
+            resource_thumbnail,
             read_text_file,
             open_path,
             psd::compose_psd,

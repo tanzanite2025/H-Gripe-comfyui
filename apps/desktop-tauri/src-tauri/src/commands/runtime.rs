@@ -11,7 +11,7 @@ use serde::Serialize;
 use crate::{broker, runtime_paths};
 
 #[derive(Serialize)]
-struct PathInfo {
+pub(crate) struct PathInfo {
     path: String,
     exists: bool,
 }
@@ -26,7 +26,7 @@ impl PathInfo {
 }
 
 #[derive(Serialize)]
-struct RuntimeInfo {
+pub(crate) struct RuntimeInfo {
     providers: Vec<String>,
     credentials_file: PathInfo,
     profiles_file: PathInfo,

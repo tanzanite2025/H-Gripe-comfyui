@@ -28,6 +28,7 @@ use super::pixel_ops;
 use super::studio_image;
 use super::subject_matte;
 use super::subject_segment::{segmenter_for_mode, AutoMode, PointPrompt, SegmentRequest};
+use super::working_image::WorkingImage;
 
 const MASK_ON: u8 = 255;
 const MASK_OFF: u8 = 0;
@@ -82,9 +83,17 @@ pub(super) fn execute_studio_subject_mask(
         }
     };
 
-    let loaded = studio_image::load_rgba(Path::new(image_path.trim()), max_decode_pixels)?;
-    let image = loaded.image;
-    let (width, height) = image.dimensions();
+    // Load the 16-bit canonical surface so the RGBA cutout / alpha products
+    // carry through at full precision (a wide-gamut ProPhoto input, or an
+    // upstream manual card's published surface, stays wide-gamut end-to-end).
+    // Every model / analysis ingress — the auto segmenter, the matter, the
+    // wand-select and the grayscale morphology — runs on the 8-bit sRGB egress
+    // (`to_srgb_rgba8`), consistent with P3; only the cutout / alpha RGBA
+    // outputs walk the 16-bit `working` surface.
+    let loaded = studio_image::load_working(Path::new(image_path.trim()), max_decode_pixels)?;
+    let working = loaded.image;
+    let (width, height) = (working.width, working.height);
+    let image = working.to_srgb_rgba8();
 
     let mode = param_or(node, "mode", "hybrid");
     let auto_mode = AutoMode::from_mode(&mode);
@@ -194,7 +203,7 @@ pub(super) fn execute_studio_subject_mask(
     }
 
     let coverage = mask_coverage(&mask);
-    let alpha_image = compose_alpha(&image, &mask);
+    let alpha_image = compose_alpha(&working, &mask);
     let cutout = cutout_to_bbox(&alpha_image, &mask);
 
     let output_dir = {
@@ -255,29 +264,33 @@ pub(super) fn execute_studio_subject_mask(
         save_png(&DynamicGray(&mask), &mask_path)?;
         image_buffer::publish_gray(&mask_path, &mask);
     }
+    // The RGBA cutout / alpha products walk the 16-bit canonical surface: an
+    // `Srgb` surface lands as the exact 8-bit PNG written before (byte-
+    // identical), a `ProPhoto` surface as 16-bit RGBA PNG with the ProPhoto
+    // profile embedded (`icc_preserved: true`), which the loader rebuilds at
+    // full precision on reload. `write_working_output` picks PNG (the fixed
+    // `.png` extension here) and publishes the native surface so a downstream
+    // compute card skips the re-decode; the deferred variant is materialised
+    // only if evicted, exactly as the 8-bit path did.
     if skip_write_ports.contains("alpha_image") && !alpha_path.exists() {
-        image_buffer::publish_rgba_deferred(
+        image_buffer::publish_working_deferred(
             &alpha_path,
             &alpha_image,
             studio_image::png_output_meta(),
         );
     } else {
-        alpha_image
-            .save(&alpha_path)
-            .map_err(|err| format!("failed to write {}: {err}", alpha_path.display()))?;
-        image_buffer::publish_rgba(&alpha_path, &alpha_image, studio_image::png_output_meta());
+        studio_image::write_working_output(&alpha_path, &alpha_image)?;
+        image_buffer::publish_working(&alpha_path, &alpha_image, studio_image::png_output_meta());
     }
     if skip_write_ports.contains("cutout_image") && !cutout_path.exists() {
-        image_buffer::publish_rgba_deferred(
+        image_buffer::publish_working_deferred(
             &cutout_path,
             &cutout,
             studio_image::png_output_meta(),
         );
     } else {
-        cutout
-            .save(&cutout_path)
-            .map_err(|err| format!("failed to write {}: {err}", cutout_path.display()))?;
-        image_buffer::publish_rgba(&cutout_path, &cutout, studio_image::png_output_meta());
+        studio_image::write_working_output(&cutout_path, &cutout)?;
+        image_buffer::publish_working(&cutout_path, &cutout, studio_image::png_output_meta());
     }
 
     let edit_paths_value = normalise_edit_paths(inputs.get("edit_paths"));
@@ -612,19 +625,28 @@ fn mask_coverage(mask: &GrayImage) -> f64 {
     on as f64 / total as f64
 }
 
-fn compose_alpha(image: &RgbaImage, mask: &GrayImage) -> RgbaImage {
-    // Full-resolution "cutout": keep the RGB, take alpha from the mask. Shared
+fn compose_alpha(image: &WorkingImage, mask: &GrayImage) -> WorkingImage {
+    // Full-resolution "cutout" on the 16-bit canonical surface: keep the RGB at
+    // full precision, take alpha from the mask (widened to 16-bit). The space /
+    // ICC tag carries through so a ProPhoto surface stays wide-gamut. Shared
     // (rayon-parallel) with the rest of the compute lane via `pixel_ops`.
-    pixel_ops::apply_alpha_mask(image, mask)
+    pixel_ops::apply_alpha_mask_working(image, mask)
 }
 
-fn cutout_to_bbox(alpha_image: &RgbaImage, mask: &GrayImage) -> RgbaImage {
+fn cutout_to_bbox(alpha_image: &WorkingImage, mask: &GrayImage) -> WorkingImage {
     match selection_bbox(mask) {
         Some((x0, y0, x1, y1)) => {
-            pixel_ops::crop_rgba(alpha_image, x0, y0, x1 - x0 + 1, y1 - y0 + 1)
+            pixel_ops::crop_working(alpha_image, x0, y0, x1 - x0 + 1, y1 - y0 + 1)
         }
-        // Empty selection: a valid 1x1 transparent cutout (never panic).
-        None => RgbaImage::from_pixel(1, 1, Rgba([0, 0, 0, 0])),
+        // Empty selection: a valid 1x1 transparent cutout (never panic). Keep
+        // the source space / ICC so it egresses like every other output.
+        None => WorkingImage {
+            width: 1,
+            height: 1,
+            pixels: vec![0u16; 4],
+            space: alpha_image.space,
+            icc: alpha_image.icc.clone(),
+        },
     }
 }
 
@@ -900,7 +922,11 @@ mod tests {
         for p in mask.pixels_mut() {
             p.0[0] = next();
         }
-        let got = compose_alpha(&image, &mask);
+        // compose_alpha now walks the 16-bit surface; widen/narrow round-trips
+        // 8-bit values exactly, so narrowing back reproduces the 8-bit contract.
+        use super::super::working_image::WorkingSpace;
+        let working = WorkingImage::from_rgba8(&image, WorkingSpace::Srgb, None);
+        let got = compose_alpha(&working, &mask).to_rgba8();
         // Serial reference: RGB preserved, alpha taken from the mask.
         for y in 0..h {
             for x in 0..w {
@@ -962,13 +988,16 @@ mod tests {
 
     #[test]
     fn empty_selection_yields_transparent_cutout() {
+        use super::super::working_image::WorkingSpace;
         let image = RgbaImage::from_pixel(4, 4, Rgba([10, 20, 30, 255]));
         let mask = solid(4, 4, MASK_OFF);
-        let alpha = compose_alpha(&image, &mask);
-        assert_eq!(alpha.get_pixel(0, 0).0[3], 0);
+        let working = WorkingImage::from_rgba8(&image, WorkingSpace::Srgb, None);
+        let alpha = compose_alpha(&working, &mask);
+        // Alpha is the (16-bit) mask sample: MASK_OFF -> fully transparent.
+        assert_eq!(alpha.pixels[3], 0);
         let cutout = cutout_to_bbox(&alpha, &mask);
-        assert_eq!(cutout.dimensions(), (1, 1));
-        assert_eq!(cutout.get_pixel(0, 0).0[3], 0);
+        assert_eq!((cutout.width, cutout.height), (1, 1));
+        assert_eq!(cutout.pixels[3], 0);
         assert_eq!(mask_coverage(&mask), 0.0);
     }
 

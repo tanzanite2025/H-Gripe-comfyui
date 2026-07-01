@@ -171,8 +171,18 @@ Design-first; each phase is an independently reviewable, CI-gated PR.
     narrow, a `ProPhoto` surface writes 16-bit RGBA with the ProPhoto profile
     embedded in the TIFF `IccProfile` (34675) tag, which the loader recognises
     on reload). crop gains a `format` param (`png` default / `tiff`).
-  - **P4d:** subject-mask / matte / edge-refine chain (16-bit cutouts; masks
-    stay 8-bit gray; model ingress keeps the sRGB egress).
+  - **P4d (landed):** subject-mask walks the 16-bit canonical surface for its
+    RGBA products. `subject_mask` loads via `load_working` (buffer-aware) and
+    composites the mask into the 16-bit surface as alpha
+    (`pixel_ops::apply_alpha_mask_working`), so the `alpha_image` / `cutout`
+    outputs egress through `write_working_output` — an `Srgb` surface lands as
+    the exact 8-bit PNG written before (byte-identical), a `ProPhoto` surface
+    as 16-bit RGBA PNG with the profile embedded (`icc_preserved: true`) — and
+    the native surface is published to the buffer for the next compute card.
+    The `mask` output stays 8-bit gray, and every model / analysis ingress
+    (auto segmenter, the matter, wand-select, morphology) keeps the 8-bit sRGB
+    egress (`to_srgb_rgba8`), consistent with P3. `refineMaskEdge` is a
+    Python-bridge card, so its pixel work is reconciled in P5, not here.
   - **P4e:** remaining manual cards + docs close-out.
 - **P5 — Python-bridge parity.** Reconcile / retire the Python path's 8-bit
   sRGB behaviour so the two engines agree on the new contract.

@@ -36,7 +36,7 @@ image = "0.25"
 # Direct PNG encoder for the in-process enhance output so it can embed a source
 # ICC profile (iCCP) + DPI (pHYs), matching the Python bridge's save. Already in
 # the tree transitively via `image`; pinned here to use its API directly.
-png = "0.18"
+png = "0.17"
 # Data-parallelism for CPU-bound image operators (e.g. mask morphology). Runs on
 # the Compute lane's worker threads, independent of the GPU serialization gate.
 rayon = "1"

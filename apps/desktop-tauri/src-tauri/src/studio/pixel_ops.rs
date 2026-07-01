@@ -19,6 +19,8 @@
 use image::{imageops, imageops::FilterType, GrayImage, RgbaImage};
 use rayon::prelude::*;
 
+use super::working_image::{self, WorkingImage};
+
 /// Resize an RGBA surface to `width`x`height`, cloning instead of resampling
 /// when it is already that size. Uses `Triangle` (bilinear) — the filter the
 /// matte/model backends up/downscale colour with.
@@ -105,6 +107,33 @@ pub(super) fn apply_alpha_mask(image: &RgbaImage, mask: &GrayImage) -> RgbaImage
     out
 }
 
+/// Composite a single-channel `mask` into a 16-bit [`WorkingImage`] as its
+/// alpha channel — the wide-gamut analogue of [`apply_alpha_mask`]. The 16-bit
+/// RGB samples are kept verbatim (no colour conversion) and the space / ICC tag
+/// carries through, so a `ProPhoto` cutout stays wide-gamut and only narrows on
+/// egress; each pixel's alpha becomes the matching mask sample widened to 16-bit
+/// ([`working_image::widen`], `0 → 0`, `255 → 65535`). `mask` must cover the
+/// image (same width, at least as tall); rows are independent, so the copy runs
+/// in parallel.
+pub(super) fn apply_alpha_mask_working(image: &WorkingImage, mask: &GrayImage) -> WorkingImage {
+    let w = image.width as usize;
+    let mask_buf = mask.as_raw();
+    let mut pixels = image.pixels.clone();
+    pixels.par_chunks_mut(w * 4).enumerate().for_each(|(y, row)| {
+        let base = y * w;
+        for x in 0..w {
+            row[x * 4 + 3] = working_image::widen(mask_buf[base + x]);
+        }
+    });
+    WorkingImage {
+        width: image.width,
+        height: image.height,
+        pixels,
+        space: image.space,
+        icc: image.icc.clone(),
+    }
+}
+
 /// Flatten a `trimap` + a resolved `soft` alpha into a single hard/soft alpha
 /// buffer: pixels at `fg_level` become fully opaque (255), pixels at `bg_level`
 /// fully transparent (0), and everything in the unknown band takes its value
@@ -181,6 +210,39 @@ mod tests {
         assert_eq!(out.get_pixel(1, 0).0, [10, 20, 30, 128]);
         assert_eq!(out.get_pixel(0, 1).0, [10, 20, 30, 200]);
         assert_eq!(out.get_pixel(1, 1).0, [10, 20, 30, 255]);
+    }
+
+    #[test]
+    fn apply_alpha_mask_working_replaces_alpha_keeps_rgb() {
+        use super::super::working_image::{widen, WorkingImage, WorkingSpace};
+
+        // A 2x2 ProPhoto surface with distinct 16-bit RGB per pixel; the mask
+        // becomes alpha (widened), RGB and the space/ICC tag survive verbatim.
+        let icc = vec![1u8, 2, 3];
+        let image = WorkingImage {
+            width: 2,
+            height: 2,
+            pixels: (0..2 * 2 * 4).map(|i| (i as u16) * 1000 + 7).collect(),
+            space: WorkingSpace::ProPhoto,
+            icc: Some(icc.clone()),
+        };
+        let mut mask = GrayImage::new(2, 2);
+        mask.put_pixel(0, 0, Luma([0]));
+        mask.put_pixel(1, 0, Luma([128]));
+        mask.put_pixel(0, 1, Luma([200]));
+        mask.put_pixel(1, 1, Luma([255]));
+
+        let out = apply_alpha_mask_working(&image, &mask);
+        assert_eq!(out.space, WorkingSpace::ProPhoto);
+        assert_eq!(out.icc, Some(icc));
+        for (i, chunk) in out.pixels.chunks_exact(4).enumerate() {
+            // RGB is the original sample, alpha is the widened mask value.
+            assert_eq!(&chunk[..3], &image.pixels[i * 4..i * 4 + 3]);
+        }
+        assert_eq!(out.pixels[3], widen(0));
+        assert_eq!(out.pixels[7], widen(128));
+        assert_eq!(out.pixels[11], widen(200));
+        assert_eq!(out.pixels[15], widen(255));
     }
 
     #[test]

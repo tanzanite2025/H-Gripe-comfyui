@@ -431,7 +431,7 @@ pub(crate) fn lookup_gray(path: &Path, max_pixels: u64) -> Option<GrayImage> {
             }
             Some((*image).clone())
         }
-        DecodedImage::Rgba { .. } => None,
+        DecodedImage::Rgba { .. } | DecodedImage::Working { .. } => None,
     }
 }
 

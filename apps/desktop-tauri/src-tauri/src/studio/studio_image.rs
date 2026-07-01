@@ -75,7 +75,11 @@ pub(crate) fn probe_source(path: &Path) -> Result<SourceProbe, String> {
         .into_decoder()
         .map_err(|err| format!("failed to decode {}: {err}", path.display()))?;
     let mut color = decoder.original_color_type();
-    let icc = decoder.icc_profile().ok().flatten();
+    let icc = decoder
+        .icc_profile()
+        .ok()
+        .flatten()
+        .or_else(|| tiff_icc_fallback(path, format));
 
     // The `image` crate reports Adobe CMYK and YCCK JPEGs as `Rgb8` — it
     // converts them to RGB on decode and drops the embedded ICC. Sniff the JPEG
@@ -242,10 +246,15 @@ pub(crate) fn decode_display_from_memory(bytes: &[u8]) -> Result<DynamicImage, S
     let reader = ImageReader::new(std::io::Cursor::new(bytes))
         .with_guessed_format()
         .map_err(|err| format!("failed to read image: {err}"))?;
+    let format = reader.format();
     let mut decoder = reader
         .into_decoder()
         .map_err(|err| format!("failed to decode image: {err}"))?;
-    let icc = decoder.icc_profile().ok().flatten();
+    let icc = decoder.icc_profile().ok().flatten().or_else(|| {
+        (format == Some(ImageFormat::Tiff))
+            .then(|| tiff_icc_from_reader(std::io::Cursor::new(bytes)))
+            .flatten()
+    });
     let image = DynamicImage::from_decoder(decoder)
         .map_err(|err| format!("failed to decode image: {err}"))?;
     if icc.as_deref().is_some_and(working_image::is_prophoto_icc) {
@@ -274,13 +283,17 @@ pub(crate) fn write_working_png(path: &Path, image: &WorkingImage) -> Result<(),
             let file = std::fs::File::create(path)
                 .map_err(|err| format!("failed to create {}: {err}", path.display()))?;
             let writer = std::io::BufWriter::new(file);
-            let mut encoder = png::Encoder::new(writer, image.width, image.height);
-            encoder.set_color(png::ColorType::Rgba);
-            encoder.set_depth(png::BitDepth::Sixteen);
+            // png has no `Encoder::set_icc_profile`; the ICC profile is carried
+            // on the `Info` and embedded (`iCCP`) by `Encoder::with_info`.
             let icc = working_image::prophoto_icc();
+            let mut info = png::Info::with_size(image.width, image.height);
+            info.color_type = png::ColorType::Rgba;
+            info.bit_depth = png::BitDepth::Sixteen;
             if !icc.is_empty() {
-                encoder.set_icc_profile(std::borrow::Cow::Borrowed(icc));
+                info.icc_profile = Some(std::borrow::Cow::Borrowed(icc));
             }
+            let encoder = png::Encoder::with_info(writer, info)
+                .map_err(|err| format!("failed to init PNG encoder {}: {err}", path.display()))?;
             let mut writer = encoder
                 .write_header()
                 .map_err(|err| format!("failed to write PNG header {}: {err}", path.display()))?;
@@ -410,6 +423,31 @@ pub(crate) fn load_mask(path: &Path, max_pixels: u64) -> Result<GrayImage, Strin
     Ok(image.into_luma8())
 }
 
+/// Read the `IccProfile` tag off a TIFF container with the `tiff` crate's own
+/// default limits.
+///
+/// `image` 0.25's TIFF decoder derives its `decoding_buffer_size` from the
+/// pixel-buffer size, so a small TIFF makes even a few-hundred-byte embedded
+/// profile trip `LimitsExceeded`; `TiffDecoder::icc_profile` swallows that error
+/// and hands back `None`. Re-reading the tag directly recovers the profile so
+/// wide-gamut TIFF round-trips survive regardless of image dimensions.
+fn tiff_icc_from_reader<R: std::io::BufRead + std::io::Seek>(reader: R) -> Option<Vec<u8>> {
+    let mut decoder = tiff::decoder::Decoder::new(reader).ok()?;
+    decoder
+        .get_tag_u8_vec(tiff::tags::Tag::IccProfile)
+        .ok()
+        .filter(|bytes| !bytes.is_empty())
+}
+
+/// [`tiff_icc_from_reader`] for a file path, guarded to TIFF sources.
+fn tiff_icc_fallback(path: &Path, format: Option<ImageFormat>) -> Option<Vec<u8>> {
+    if format != Some(ImageFormat::Tiff) {
+        return None;
+    }
+    let file = std::fs::File::open(path).ok()?;
+    tiff_icc_from_reader(std::io::BufReader::new(file))
+}
+
 /// Shared decode path: guard dimensions, read EXIF orientation + source mode,
 /// decode, then apply the orientation so downstream pixels are upright.
 ///
@@ -424,6 +462,7 @@ pub(crate) fn load_dynamic(
         .map_err(|err| format!("failed to open {}: {err}", path.display()))?
         .with_guessed_format()
         .map_err(|err| format!("failed to read {}: {err}", path.display()))?;
+    let format = reader.format();
     let mut decoder = reader
         .into_decoder()
         .map_err(|err| format!("failed to decode {}: {err}", path.display()))?;
@@ -437,7 +476,11 @@ pub(crate) fn load_dynamic(
     // Read the embedded ICC off the header before `from_decoder` consumes the
     // decoder, so the working-surface carrier can hold it (the generic 8-bit
     // return still drops it, matching current behaviour).
-    let icc = decoder.icc_profile().ok().flatten();
+    let icc = decoder
+        .icc_profile()
+        .ok()
+        .flatten()
+        .or_else(|| tiff_icc_fallback(path, format));
 
     let mut image = DynamicImage::from_decoder(decoder)
         .map_err(|err| format!("failed to decode {}: {err}", path.display()))?;
@@ -612,13 +655,14 @@ mod tests {
         };
         write_working_output(&path, &image).unwrap();
 
-        // The extension dispatch produced a TIFF, and its decoder reports the
-        // embedded ProPhoto profile.
-        let mut decoder = image::ImageReader::open(&path)
-            .unwrap()
-            .into_decoder()
-            .unwrap();
-        assert_eq!(decoder.icc_profile().unwrap().as_deref(), Some(working_image::prophoto_icc()));
+        // The extension dispatch produced a TIFF carrying the embedded ProPhoto
+        // profile. Read the tag off the container directly: `image` 0.25's TIFF
+        // decoder under-reads the ICC on a small image (its `decoding_buffer_size`
+        // is sized from the pixel buffer), which is exactly what `tiff_icc_fallback`
+        // exists to paper over on the load path.
+        let embedded =
+            tiff_icc_from_reader(std::io::BufReader::new(std::fs::File::open(&path).unwrap()));
+        assert_eq!(embedded.as_deref(), Some(working_image::prophoto_icc()));
 
         // Reloading rebuilds the identical wide-gamut surface at full precision.
         let loaded = load_working(&path, DEFAULT_MAX_DECODE_PIXELS).unwrap();

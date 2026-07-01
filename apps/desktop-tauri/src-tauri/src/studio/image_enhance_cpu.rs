@@ -314,12 +314,16 @@ fn write_output_png(
         .map_err(|err| format!("failed to create {}: {err}", path.display()))?;
     let writer = BufWriter::new(file);
     let (width, height) = img.dimensions();
-    let mut encoder = png::Encoder::new(writer, width, height);
-    encoder.set_color(png::ColorType::Rgba);
-    encoder.set_depth(png::BitDepth::Eight);
+    // png has no `Encoder::set_icc_profile`; the ICC profile is carried on the
+    // `Info` and embedded (`iCCP`) by `Encoder::with_info`.
+    let mut info = png::Info::with_size(width, height);
+    info.color_type = png::ColorType::Rgba;
+    info.bit_depth = png::BitDepth::Eight;
     if let Some(icc) = icc {
-        encoder.set_icc_profile(Cow::Owned(icc.to_vec()));
+        info.icc_profile = Some(Cow::Owned(icc.to_vec()));
     }
+    let mut encoder = png::Encoder::with_info(writer, info)
+        .map_err(|err| format!("failed to init PNG encoder {}: {err}", path.display()))?;
     // PNG stores physical resolution in pixels-per-metre; 1 inch = 0.0254 m.
     let ppu = (f64::from(dpi.max(1)) / 0.0254).round().max(1.0) as u32;
     encoder.set_pixel_dims(Some(png::PixelDimensions {

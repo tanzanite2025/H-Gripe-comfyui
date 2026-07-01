@@ -46,6 +46,33 @@ pub(super) fn resize_gray(
     }
 }
 
+/// Crop the `(x, y, width, height)` window out of a 16-bit working surface
+/// into an owned [`WorkingImage`], carrying the space tag and ICC through — a
+/// pure geometry operation, so no colour conversion happens. The window must
+/// lie inside the image (callers clamp first).
+pub(super) fn crop_working(
+    image: &super::working_image::WorkingImage,
+    x: u32,
+    y: u32,
+    width: u32,
+    height: u32,
+) -> super::working_image::WorkingImage {
+    let src_row = image.width as usize * 4;
+    let out_row = width as usize * 4;
+    let mut pixels = Vec::with_capacity(out_row * height as usize);
+    for row in y..y + height {
+        let start = row as usize * src_row + x as usize * 4;
+        pixels.extend_from_slice(&image.pixels[start..start + out_row]);
+    }
+    super::working_image::WorkingImage {
+        width,
+        height,
+        pixels,
+        space: image.space,
+        icc: image.icc.clone(),
+    }
+}
+
 /// Crop the `(x, y, width, height)` window out of an RGBA surface into an owned
 /// image (an immutable view, so the source is untouched).
 pub(super) fn crop_rgba(

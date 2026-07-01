@@ -259,8 +259,9 @@ fn generate_thumbnail_inner(
         let data_url = format!("data:image/png;base64,{}", base64_encode(&cached));
         (data_url, decoded.width(), decoded.height())
     } else {
-        let source = image::load_from_memory(&bytes)
-            .map_err(|err| format!("failed to decode image: {err}"))?;
+        // Display decode: identical to a plain decode except that a 16-bit
+        // ProPhoto manual output is colour-managed to sRGB for the thumbnail.
+        let source = studio::studio_image::decode_display_from_memory(&bytes)?;
         // `resize` preserves aspect ratio, fitting within target x target.
         let thumb = source.resize(target, target, image::imageops::FilterType::Lanczos3);
 

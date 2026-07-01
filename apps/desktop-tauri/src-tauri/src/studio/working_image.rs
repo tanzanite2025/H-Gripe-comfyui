@@ -19,8 +19,31 @@
 //! read in production, hence the retained module-level `dead_code` allowance.
 #![allow(dead_code)]
 
+use std::sync::OnceLock;
+
 use image::{Rgba, RgbaImage};
 use moxcms::{ColorProfile, Layout, TransformExecutor, TransformOptions};
+
+/// The encoded ProPhoto (ROMM RGB) profile that travels with wide-gamut manual
+/// outputs: embedded on a 16-bit ProPhoto file write and matched byte-for-byte
+/// on reload to rebuild the `ProPhoto` working surface (PNG `iCCP` is lossless,
+/// so the round-trip is exact). Empty when moxcms fails to encode the profile,
+/// in which case callers behave as if there were no profile.
+pub(crate) fn prophoto_icc() -> &'static [u8] {
+    static ICC: OnceLock<Vec<u8>> = OnceLock::new();
+    ICC.get_or_init(|| {
+        ColorProfile::new_pro_photo_rgb()
+            .encode()
+            .unwrap_or_default()
+    })
+}
+
+/// Whether `icc` is exactly the ProPhoto profile our own manual outputs embed
+/// (the reload half of the file round-trip).
+pub(crate) fn is_prophoto_icc(icc: &[u8]) -> bool {
+    let marker = prophoto_icc();
+    !marker.is_empty() && icc == marker
+}
 
 /// The colour space a [`WorkingImage`]'s samples are encoded in. The loader
 /// tags each surface with its actual space: profiled (wide-gamut) CMYK becomes

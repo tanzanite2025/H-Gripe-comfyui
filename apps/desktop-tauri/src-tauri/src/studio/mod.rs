@@ -49,7 +49,7 @@ mod pixel_ops;
 mod psd_analyze;
 mod psd_export;
 mod schedule;
-mod studio_image;
+pub(crate) mod studio_image;
 mod subject_mask;
 mod subject_matte;
 mod subject_model;

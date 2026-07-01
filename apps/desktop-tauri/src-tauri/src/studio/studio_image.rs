@@ -17,7 +17,7 @@ use image::{
 };
 
 use super::image_buffer;
-use super::working_image::{WorkingImage, WorkingSpace};
+use super::working_image::{self, WorkingImage, WorkingSpace};
 
 /// Default decode budget, aligned with the Python PSD chain
 /// (`--max-decode-pixels`). A source whose declared `width * height` exceeds
@@ -190,10 +190,109 @@ pub(crate) fn load_working(path: &Path, max_pixels: u64) -> Result<LoadedWorking
         }
     }
     let (image, meta, icc) = load_dynamic(path, max_pixels)?;
+    // A 16-bit surface tagged with the exact ProPhoto profile our own manual
+    // outputs embed ([`write_working_png`]) is one of those outputs coming back
+    // off disk: rebuild the wide-gamut canonical at full precision instead of
+    // quantising it to 8-bit sRGB-tagged pixels (which would both truncate and
+    // mis-label the values).
+    if icc.as_deref().is_some_and(working_image::is_prophoto_icc) {
+        if let Some(image) = prophoto_working_from_dynamic(&image) {
+            return Ok(LoadedWorking { image, meta });
+        }
+    }
     Ok(LoadedWorking {
         image: WorkingImage::from_rgba8(&image.into_rgba8(), WorkingSpace::Srgb, icc),
         meta,
     })
+}
+
+/// Rebuild a `ProPhoto` [`WorkingImage`] from a decoded 16-bit surface (the
+/// reload half of the manual-output round-trip). `None` for any other decoded
+/// shape, falling back to the generic 8-bit path.
+fn prophoto_working_from_dynamic(image: &DynamicImage) -> Option<WorkingImage> {
+    let pixels = match image {
+        DynamicImage::ImageRgba16(img) => img.as_raw().clone(),
+        DynamicImage::ImageRgb16(img) => {
+            let mut pixels = Vec::with_capacity(img.as_raw().len() / 3 * 4);
+            for chunk in img.as_raw().chunks_exact(3) {
+                pixels.extend_from_slice(chunk);
+                pixels.push(u16::MAX);
+            }
+            pixels
+        }
+        _ => return None,
+    };
+    Some(WorkingImage {
+        width: image.width(),
+        height: image.height(),
+        pixels,
+        space: WorkingSpace::ProPhoto,
+        icc: Some(working_image::prophoto_icc().to_vec()),
+    })
+}
+
+/// Decode in-memory bytes for **display** (the thumbnail fallback): a plain
+/// decode, except that a 16-bit surface carrying our ProPhoto output profile is
+/// colour-managed down to sRGB — without this the thumbnail would read the
+/// wide-gamut samples as sRGB and render desaturated. Every other source
+/// decodes exactly as before (no orientation handling, mirroring the previous
+/// `image::load_from_memory`).
+pub(crate) fn decode_display_from_memory(bytes: &[u8]) -> Result<DynamicImage, String> {
+    let reader = ImageReader::new(std::io::Cursor::new(bytes))
+        .with_guessed_format()
+        .map_err(|err| format!("failed to read image: {err}"))?;
+    let mut decoder = reader
+        .into_decoder()
+        .map_err(|err| format!("failed to decode image: {err}"))?;
+    let icc = decoder.icc_profile().ok().flatten();
+    let image = DynamicImage::from_decoder(decoder)
+        .map_err(|err| format!("failed to decode image: {err}"))?;
+    if icc.as_deref().is_some_and(working_image::is_prophoto_icc) {
+        if let Some(work) = prophoto_working_from_dynamic(&image) {
+            return Ok(DynamicImage::ImageRgba8(work.to_srgb_rgba8()));
+        }
+    }
+    Ok(image)
+}
+
+/// Write a manual-path output PNG for a working surface.
+///
+/// - `Srgb`: the exact 8-bit narrow, encoded like the plain `save` the cards
+///   used before — byte-identical output for everything without wide-gamut
+///   information.
+/// - `ProPhoto`: 16-bit RGBA with the ProPhoto profile embedded
+///   (`icc_preserved: true`), so the wide-gamut pixels survive on disk and
+///   [`load_working`] rebuilds the same surface on reload.
+pub(crate) fn write_working_png(path: &Path, image: &WorkingImage) -> Result<(), String> {
+    match image.space {
+        WorkingSpace::Srgb => image
+            .to_rgba8()
+            .save(path)
+            .map_err(|err| format!("failed to write {}: {err}", path.display())),
+        WorkingSpace::ProPhoto => {
+            let file = std::fs::File::create(path)
+                .map_err(|err| format!("failed to create {}: {err}", path.display()))?;
+            let writer = std::io::BufWriter::new(file);
+            let mut encoder = png::Encoder::new(writer, image.width, image.height);
+            encoder.set_color(png::ColorType::Rgba);
+            encoder.set_depth(png::BitDepth::Sixteen);
+            let icc = working_image::prophoto_icc();
+            if !icc.is_empty() {
+                encoder.set_icc_profile(std::borrow::Cow::Borrowed(icc));
+            }
+            let mut writer = encoder
+                .write_header()
+                .map_err(|err| format!("failed to write PNG header {}: {err}", path.display()))?;
+            // PNG 16-bit samples are big-endian on the wire.
+            let mut bytes = Vec::with_capacity(image.pixels.len() * 2);
+            for &sample in &image.pixels {
+                bytes.extend_from_slice(&sample.to_be_bytes());
+            }
+            writer
+                .write_image_data(&bytes)
+                .map_err(|err| format!("failed to write {}: {err}", path.display()))
+        }
+    }
 }
 
 /// Build an opaque 16-bit [`WorkingImage`] from raw CMYK samples (CMYK carries
@@ -394,6 +493,80 @@ mod tests {
 
         let mask = load_mask(&path, DEFAULT_MAX_DECODE_PIXELS).unwrap();
         assert_eq!(mask.get_pixel(0, 0).0[0], 200);
+        let _ = std::fs::remove_file(&path);
+    }
+
+    #[test]
+    fn a_prophoto_working_png_round_trips_at_full_precision() {
+        let path = unique_tmp("prophoto_roundtrip.png");
+        // Deliberately non-byte-replicated 16-bit samples: a lossy 8-bit
+        // round-trip could not reproduce them.
+        let image = WorkingImage {
+            width: 3,
+            height: 2,
+            pixels: (0..3 * 2 * 4)
+                .map(|i| (i as u16).wrapping_mul(9_991).wrapping_add(3))
+                .collect(),
+            space: WorkingSpace::ProPhoto,
+            icc: Some(working_image::prophoto_icc().to_vec()),
+        };
+        write_working_png(&path, &image).unwrap();
+
+        // On disk: a genuine 16-bit RGBA PNG carrying the ProPhoto profile.
+        let decoder = png::Decoder::new(std::fs::File::open(&path).unwrap());
+        let reader = decoder.read_info().unwrap();
+        let info = reader.info();
+        assert_eq!(info.bit_depth, png::BitDepth::Sixteen);
+        assert_eq!(info.color_type, png::ColorType::Rgba);
+        assert_eq!(
+            info.icc_profile.as_deref(),
+            Some(working_image::prophoto_icc())
+        );
+
+        // Reloading rebuilds the identical wide-gamut surface (cold path: the
+        // buffer never saw this file).
+        let loaded = load_working(&path, DEFAULT_MAX_DECODE_PIXELS).unwrap();
+        assert_eq!(loaded.image.space, WorkingSpace::ProPhoto);
+        assert_eq!(loaded.image.pixels, image.pixels);
+        assert_eq!((loaded.image.width, loaded.image.height), (3, 2));
+
+        // And the 8-bit consumers of the same file get the sRGB egress, not the
+        // raw ProPhoto values reinterpreted as sRGB.
+        let rgba = load_rgba(&path, DEFAULT_MAX_DECODE_PIXELS).unwrap();
+        assert_eq!(rgba.image, image.to_srgb_rgba8());
+        let _ = std::fs::remove_file(&path);
+    }
+
+    #[test]
+    fn an_srgb_working_png_writes_the_exact_8bit_narrow() {
+        let path = unique_tmp("srgb_working.png");
+        let rgba = RgbaImage::from_pixel(2, 2, image::Rgba([12, 200, 77, 255]));
+        let image = WorkingImage::from_rgba8(&rgba, WorkingSpace::Srgb, None);
+        write_working_png(&path, &image).unwrap();
+
+        let decoder = png::Decoder::new(std::fs::File::open(&path).unwrap());
+        let reader = decoder.read_info().unwrap();
+        let info = reader.info();
+        assert_eq!(info.bit_depth, png::BitDepth::Eight);
+        assert!(info.icc_profile.is_none());
+        let decoded = image::open(&path).unwrap().into_rgba8();
+        assert_eq!(decoded, rgba);
+        let _ = std::fs::remove_file(&path);
+    }
+
+    #[test]
+    fn display_decode_egresses_a_prophoto_output() {
+        let path = unique_tmp("prophoto_display.png");
+        // A saturated sRGB colour taken into ProPhoto: raw samples differ
+        // wildly from sRGB, but the display decode must come back near it.
+        let rgb8 = [200u8, 40, 90, 30, 220, 60];
+        let rgb16 = working_image::srgb8_rgb_to_prophoto16(&rgb8, 2).expect("srgb -> prophoto");
+        let image = WorkingImage::from_prophoto_rgb16(2, 1, &rgb16, None);
+        write_working_png(&path, &image).unwrap();
+
+        let bytes = std::fs::read(&path).unwrap();
+        let displayed = decode_display_from_memory(&bytes).unwrap().into_rgba8();
+        assert_eq!(displayed, image.to_srgb_rgba8());
         let _ = std::fs::remove_file(&path);
     }
 

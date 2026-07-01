@@ -155,8 +155,15 @@ Design-first; each phase is an independently reviewable, CI-gated PR.
     `lookup_dynamic` / eviction-materialisation egress it to 8-bit sRGB so every
     existing consumer is unchanged. Purely additive; nothing publishes a
     16-bit surface yet.
-  - **P4b:** crop operates on / publishes the 16-bit surface and writes 16-bit
-    PNG with embedded ICC.
+  - **P4b (landed):** crop walks the 16-bit canonical surface end-to-end: it
+    loads via `load_working` (buffer-aware), crops the `WorkingImage`
+    geometrically, publishes the 16-bit surface, and writes the manual output
+    through `write_working_png` — an `Srgb` surface lands as the exact 8-bit
+    PNG written before (byte-identical), a `ProPhoto` surface as **16-bit RGBA
+    PNG with the ProPhoto profile embedded** (`icc_preserved: true`), which the
+    loader recognises on reload and rebuilds at full precision. The
+    auto-subject segmenter (model ingress) and the thumbnail fallback keep the
+    sRGB egress.
   - **P4c:** 16-bit TIFF (with ICC) encoder.
   - **P4d:** subject-mask / matte / edge-refine chain (16-bit cutouts; masks
     stay 8-bit gray; model ingress keeps the sRGB egress).

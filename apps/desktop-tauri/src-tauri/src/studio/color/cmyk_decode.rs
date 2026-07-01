@@ -484,18 +484,18 @@ mod tests {
     // flat ink tiles: top-left no-ink, top-right full-cyan, bottom-left full-K,
     // bottom-right mixed (128, 64, 32, 16). q100 + no chroma subsampling keeps
     // the tiles near-lossless. See `scripts/gen_cmyk_jpeg_fixture.py`.
-    const ADOBE_CMYK_JPEG: &[u8] = include_bytes!("../../tests/fixtures/cmyk_adobe_app14.jpg");
+    const ADOBE_CMYK_JPEG: &[u8] = include_bytes!("../../../tests/fixtures/cmyk_adobe_app14.jpg");
 
     // The YCCK sibling of the fixture above (Adobe APP14 transform 2), same 2x2
     // ink tiles, written by `scripts/gen_ycck_jpeg_fixture.py`.
-    const YCCK_CMYK_JPEG: &[u8] = include_bytes!("../../tests/fixtures/cmyk_ycck_app14.jpg");
+    const YCCK_CMYK_JPEG: &[u8] = include_bytes!("../../../tests/fixtures/cmyk_ycck_app14.jpg");
 
     // The same 2x2 ink tiles as the Adobe CMYK fixture but with the APP14 Adobe
     // marker stripped, so nothing declares the ink direction. zune defaults a
     // 4-component JPEG to CMYK and Pillow inverts it to the device direction
     // just like the marked file. Written by
     // `scripts/gen_unmarked_cmyk_jpeg_fixture.py`.
-    const UNMARKED_CMYK_JPEG: &[u8] = include_bytes!("../../tests/fixtures/cmyk_unmarked.jpg");
+    const UNMARKED_CMYK_JPEG: &[u8] = include_bytes!("../../../tests/fixtures/cmyk_unmarked.jpg");
 
     // Tile-centre (x, y) samples, well inside each 16x16 tile so JPEG block
     // edges don't bleed in, paired with the device inks PIL round-trips them to.

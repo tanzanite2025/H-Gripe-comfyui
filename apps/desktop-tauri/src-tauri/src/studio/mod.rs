@@ -1,4 +1,8 @@
 //! Studio graph editor backend, split into focused submodules:
+//! - [`color`]: colour management along the pixel's journey — CMYK ingress
+//!   (`cmyk_decode`), colour-managed transforms (`cmyk_transform`), and the
+//!   16-bit working surface / sRGB egress (`working_image`). All moxcms
+//!   transforms are constructed inside this submodule.
 //! - [`graph`]: the workflow graph schema + shared value-coercion helpers.
 //! - [`exec`]: the topological execution engine, run events, and cancellation.
 //! - [`node_registry`]: single source of truth mapping a node `kind` to its
@@ -27,8 +31,7 @@
 //! The Tauri commands keep their original `crate::studio::*` paths via the
 //! re-exports below, so `main.rs`'s `invoke_handler` registration is unchanged.
 
-mod cmyk_decode;
-mod cmyk_transform;
+mod color;
 mod color_match;
 mod crop;
 mod detail_watchdog;
@@ -58,7 +61,11 @@ mod subject_segment;
 pub(crate) mod torch_worker;
 pub(crate) mod video_engine;
 pub(crate) mod video_worker;
-mod working_image;
+
+// The colour layers keep their original `crate::studio::<layer>` paths so the
+// many call sites (and their docs) stay stable while the files live together
+// under `color/`.
+pub(crate) use color::{cmyk_decode, cmyk_transform, working_image};
 
 // Glob re-exports so the original `crate::studio::*` command paths keep
 // resolving from `main.rs`'s `generate_handler!`. A plain `use exec::cmd` only

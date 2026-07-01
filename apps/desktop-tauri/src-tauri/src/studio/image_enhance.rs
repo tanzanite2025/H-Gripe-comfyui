@@ -1,8 +1,8 @@
 //! The `imageEnhance` node executor. The default `cpu` engine runs the
 //! in-process native-Rust pipeline ([`super::image_enhance_cpu`]); a learned
-//! engine (`realesrgan`, …) — or any input the fast path cannot reproduce
-//! faithfully (CMYK / high-bit / ICC) — is served by the colour-managed Python
-//! bridge (`crate::psd::enhance_image`). Both paths upscale/sharpen a
+//! engine (`realesrgan`, …) — or an input the fast path cannot reproduce
+//! faithfully (a CMYK JPEG or float source) — is served by the colour-managed
+//! Python bridge (`crate::psd::enhance_image`). Both paths upscale/sharpen a
 //! low-resolution subject to a PSD placeholder's pixel target and expose the
 //! enhanced image, the applied scale factor, and an enhance report as flat
 //! output ports with identical shape.

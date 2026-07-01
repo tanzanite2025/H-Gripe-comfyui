@@ -3,8 +3,8 @@
 > **Purpose:** a single, long-lived cross-reference of which documented
 > capabilities are actually implemented today versus still in the design/roadmap
 > stage. The per-card docs under [`docs/cards/`](cards/) remain the frozen
-> contracts; the [Phase 2 roadmap](phase2-algorithm-roadmap.md) and the
-> [executor-split design](card-executor-split-and-psd-chain-hardening.md) hold
+> contracts; the [Phase 2 roadmap](design/phase2-algorithm-roadmap.md) and the
+> [executor-split design](design/executor-split-and-psd-chain-hardening.md) hold
 > the forward-looking plans. This file just consolidates the *gaps* so they
 > don't get lost across documents.
 >
@@ -31,7 +31,7 @@
 | Detail Watchdog (`detail_watchdog_cli.py`) | 🟡 Partial | Always-on CPU rule layer, plus an opt-in **`engine` seam** (`python/bridge/detector_backends/`) with an **`onnx_defect`** detector + capability probe + rule-only fallback. The trained models behind it are not bundled; semantic targets stay `skipped` until a detector covers them. See §2. |
 | Detail Repaint (`detail_repaint_cli.py`) | 🟡 Partial | `prepare`/`composite` around a provider `image.edit` call, plus an opt-in **`engine` seam** (`python/bridge/inpaint_backends/`) with a **`sd_inpaint`** local backend (`repaint` subcommand) + capability probe + provider fallback. Real GPU inference is opt-in (deps/weight not bundled). See §2. |
 
-## 2. Phase 2 algorithm backends — [`phase2-algorithm-roadmap.md`](phase2-algorithm-roadmap.md)
+## 2. Phase 2 algorithm backends — [`design/phase2-algorithm-roadmap.md`](design/phase2-algorithm-roadmap.md)
 
 The roadmap is **partly landed**: the per-card `engine` seams now ship across
 all five PSD cards (only their trained weights are pending). The
@@ -62,7 +62,7 @@ concept), with the CPU path remaining the default and fallback.
 | **Pen / Lasso (bezier paths)** | ⛔ Planned (Phase 3) | UI greyed; `paths` are stored but **not rasterised** (field versioned for forward-compat). |
 | **SAM 2 multi-variant XY compare (T/S/B/L)** | ⛔ Planned | Only `sam2 tiny` is fetched today; multi-weight comparison not wired. |
 
-## 4. Executor-split / management surfaces — [`card-executor-split-and-psd-chain-hardening.md`](card-executor-split-and-psd-chain-hardening.md)
+## 4. Executor-split / management surfaces — [`design/executor-split-and-psd-chain-hardening.md`](design/executor-split-and-psd-chain-hardening.md)
 
 | Item | Status | Notes |
 | --- | --- | --- |
@@ -86,7 +86,7 @@ concept), with the CPU path remaining the default and fallback.
 | --- | --- | --- |
 | Node-card / Inspector / Palette / search / Mask-Edit i18n (中/英) | ✅ Landed | English `NODE_SPECS` source + `nodeSpecsI18n` / `maskToolsI18n` zh overlays + `localizeSpec` resolver. A coverage test fails CI if any node/param/port/tool ships without a zh entry. |
 
-## 7. Editor resource & threading model — [`editor-resource-model.md`](cards/editor-resource-model.md)
+## 7. Editor resource & threading model — [`design/editor-resource-model.md`](design/editor-resource-model.md)
 
 The full staged rollout of the editor compute/threading model has **landed**.
 

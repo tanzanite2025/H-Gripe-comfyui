@@ -29,6 +29,7 @@ H-Gripe Studio (Tauri desktop)
   crates/hgripe-api/  API broker: provider adapters, retry/cache, task state, history
   python/bridge/      CPU-only Pillow/numpy CLIs for image + PSD processing
   docs/cards/         per-card contracts (inputs, params, outputs, boundaries)
+  docs/design/        architecture & design notes (executor split, resource model, roadmap)
 ```
 
 - **API execution** runs through the `hgripe-api` broker (`run_task_json` /
@@ -61,7 +62,7 @@ These cards are **input-hardened**: candidate decodes normalise CMYK (via
 embedded ICC), 16-bit / float, palette and grayscale sources to an 8-bit working
 space, apply EXIF orientation, and refuse oversized inputs before decoding
 (`--max-decode-pixels`). See the per-card docs and
-[`docs/card-executor-split-and-psd-chain-hardening.md`](docs/card-executor-split-and-psd-chain-hardening.md).
+[`docs/design/executor-split-and-psd-chain-hardening.md`](docs/design/executor-split-and-psd-chain-hardening.md).
 For a consolidated view of what is implemented today versus still planned, see
 [`docs/implementation-status.md`](docs/implementation-status.md).
 

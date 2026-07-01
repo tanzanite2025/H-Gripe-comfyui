@@ -55,7 +55,7 @@ detail** while preserving identity and text:
 design it was built to; ⛔ items are CCSR/SupIR + real-inference CI + UI greying).
 The selector is the local card's **`engine` param** (`cpu` | `realesrgan` | …),
 not `--profile-ref` — `profile_ref` is the API-card credentials concept, and
-Image Enhance is a `local` card (see `card-executor-split-and-psd-chain-hardening.md`).
+Image Enhance is a `local` card (see `executor-split-and-psd-chain-hardening.md`).
 
 - ✅ Add an `--engine <id>` argument. When non-`cpu`, the CLI dispatches to a
   backend module under `python/bridge/sr_backends/` (`realesrgan.py` landed;

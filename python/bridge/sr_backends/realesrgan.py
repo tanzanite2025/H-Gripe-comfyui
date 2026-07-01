@@ -30,6 +30,57 @@ from . import BackendUnavailable, model_cache_dir, resolve_device, resolve_preci
 
 _DEFAULT_WEIGHT_NAME = "RealESRGAN_x4plus.pth"
 
+#: Process-global warm cache of constructed Real-ESRGAN upsamplers, keyed by
+#: ``(weight, device, precision)``. Building a ``RealESRGANer`` reads the ~64 MB
+#: weight and moves it onto the device; in a long-lived host (the torch worker,
+#: staged-rollout step 4 of ``docs/cards/editor-resource-model.md``) this cache
+#: means that happens once per ``(weight, device, precision)`` instead of on
+#: every run. In a one-shot CLI process it is simply built once and discarded.
+_WARM_UPSAMPLERS: dict[tuple[str, str, str], Any] = {}
+
+
+def _construct_upsampler(weight: str, native_scale: int, device: str, precision: str) -> Any:
+    """Build a ``RealESRGANer`` (imports the heavy torch deps lazily).
+
+    Split out from :func:`_warm_upsampler` so the warm cache can be exercised in
+    tests without ``torch`` / ``realesrgan`` installed (the test monkeypatches
+    this constructor and counts calls).
+    """
+    from basicsr.archs.rrdbnet_arch import RRDBNet
+    from realesrgan import RealESRGANer
+
+    model = RRDBNet(
+        num_in_ch=3,
+        num_out_ch=3,
+        num_feat=64,
+        num_block=23,
+        num_grow_ch=32,
+        scale=native_scale,
+    )
+    return RealESRGANer(
+        scale=native_scale,
+        model_path=weight,
+        model=model,
+        tile=512,
+        tile_pad=10,
+        pre_pad=0,
+        # fp16 only helps on CUDA; resolve_precision already degraded an
+        # explicit fp16 to fp32 on a CPU run, so this is safe.
+        half=(precision == "fp16"),
+        device=device,
+    )
+
+
+def _warm_upsampler(weight: str, native_scale: int, device: str, precision: str) -> Any:
+    """Return a cached ``RealESRGANer`` for the key, building it on first use."""
+    key = (weight, device, precision)
+    cached = _WARM_UPSAMPLERS.get(key)
+    if cached is not None:
+        return cached
+    built = _construct_upsampler(weight, native_scale, device, precision)
+    _WARM_UPSAMPLERS[key] = built
+    return built
+
 
 class RealEsrganBackend:
     id = "realesrgan"
@@ -83,31 +134,16 @@ class RealEsrganBackend:
 
         import numpy as np
         import torch
-        from basicsr.archs.rrdbnet_arch import RRDBNet
         from PIL import Image
-        from realesrgan import RealESRGANer
 
         device = resolve_device(device, torch.cuda.is_available())
         precision = resolve_precision(precision, device)
-        model = RRDBNet(
-            num_in_ch=3,
-            num_out_ch=3,
-            num_feat=64,
-            num_block=23,
-            num_grow_ch=32,
-            scale=self.native_scale,
-        )
-        upsampler = RealESRGANer(
-            scale=self.native_scale,
-            model_path=str(self.weight_path()),
-            model=model,
-            tile=512,
-            tile_pad=10,
-            pre_pad=0,
-            # fp16 only helps on CUDA; resolve_precision already degraded an
-            # explicit fp16 to fp32 on a CPU run, so this is safe.
-            half=(precision == "fp16"),
-            device=device,
+        # Reuse a warm upsampler when the host is long-lived (the torch worker);
+        # a one-shot CLI run just builds it once. The ~64 MB weight load / device
+        # move therefore happens once per (weight, device, precision) instead of
+        # on every call.
+        upsampler = _warm_upsampler(
+            str(self.weight_path()), self.native_scale, device, precision
         )
 
         src = np.asarray(rgb.convert("RGB"))

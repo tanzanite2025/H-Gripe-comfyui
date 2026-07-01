@@ -950,57 +950,52 @@ pub(crate) fn enhance_image(
     }
     reject_unsafe_output_name(output_name.as_deref().unwrap_or(""))?;
 
-    let mut cmd = std::process::Command::new(&python);
-    cmd.arg(&script)
-        .arg("--image")
-        .arg(&image)
-        .arg("--mode")
-        .arg(mode.as_deref().unwrap_or("conservative"))
-        .arg("--target-width")
-        .arg(target_width.unwrap_or(0).to_string())
-        .arg("--target-height")
-        .arg(target_height.unwrap_or(0).to_string())
-        .arg("--target-bounds-json")
-        .arg(target_bounds.as_deref().unwrap_or(""))
-        .arg("--target-dpi")
-        .arg(target_dpi.unwrap_or(300).to_string())
-        .arg("--max-pixels")
-        .arg(max_pixels.unwrap_or(48_000_000).to_string())
-        .arg("--scale")
-        .arg(scale.unwrap_or(2.0).to_string())
-        .arg("--denoise-strength")
-        .arg(denoise_strength.unwrap_or(0.3).to_string())
-        .arg("--texture-strength")
-        .arg(texture_strength.unwrap_or(0.25).to_string())
-        .arg("--engine")
-        .arg(engine.as_deref().unwrap_or("cpu"))
-        .arg("--device")
-        .arg(device.as_deref().unwrap_or("auto"))
-        .arg("--precision")
-        .arg(precision.as_deref().unwrap_or("auto"))
-        .arg("--output-dir")
-        .arg(output_dir.as_deref().unwrap_or(""))
-        .arg("--output-name")
-        .arg(output_name.as_deref().unwrap_or(""))
-        .current_dir(&dir);
+    let engine = engine.as_deref().unwrap_or("cpu");
+    let mut argv: Vec<String> = vec![
+        "--image".into(),
+        image,
+        "--mode".into(),
+        mode.as_deref().unwrap_or("conservative").into(),
+        "--target-width".into(),
+        target_width.unwrap_or(0).to_string(),
+        "--target-height".into(),
+        target_height.unwrap_or(0).to_string(),
+        "--target-bounds-json".into(),
+        target_bounds.as_deref().unwrap_or("").into(),
+        "--target-dpi".into(),
+        target_dpi.unwrap_or(300).to_string(),
+        "--max-pixels".into(),
+        max_pixels.unwrap_or(48_000_000).to_string(),
+        "--scale".into(),
+        scale.unwrap_or(2.0).to_string(),
+        "--denoise-strength".into(),
+        denoise_strength.unwrap_or(0.3).to_string(),
+        "--texture-strength".into(),
+        texture_strength.unwrap_or(0.25).to_string(),
+        "--engine".into(),
+        engine.into(),
+        "--device".into(),
+        device.as_deref().unwrap_or("auto").into(),
+        "--precision".into(),
+        precision.as_deref().unwrap_or("auto").into(),
+        "--output-dir".into(),
+        output_dir.as_deref().unwrap_or("").into(),
+        "--output-name".into(),
+        output_name.as_deref().unwrap_or("").into(),
+    ];
     if preserve_text_logo.unwrap_or(true) {
-        cmd.arg("--preserve-text-logo");
-    }
-    #[cfg(windows)]
-    {
-        use std::os::windows::process::CommandExt;
-        // CREATE_NO_WINDOW: don't pop a console window for the child.
-        cmd.creation_flags(0x0800_0000);
+        argv.push("--preserve-text-logo".into());
     }
 
-    let output = cmd
-        .output()
-        .map_err(|err| format!("failed to launch {}: {err}", python.display()))?;
-    if !output.status.success() {
-        let stderr = String::from_utf8_lossy(&output.stderr);
-        return Err(format!("enhance_image failed: {}", stderr.trim()));
+    // Only the torch engine (`realesrgan`) reloads a heavy model per call, so
+    // only it is routed through the warm worker; the always-available CPU path
+    // stays a one-shot and never spawns a worker.
+    let stdout = if engine == "realesrgan" {
+        run_torch_cli(&python, &dir, "image_enhance_cli.py", "image_enhance", &argv)
+    } else {
+        run_bridge_oneshot(&python, &dir, "image_enhance_cli.py", &argv)
     }
-    let stdout = String::from_utf8_lossy(&output.stdout);
+    .map_err(|err| format!("enhance_image failed: {err}"))?;
     serde_json::from_str::<EnhanceImageResult>(stdout.trim()).map_err(|err| {
         format!(
             "could not parse enhance_image output: {err} (raw: {})",
@@ -1602,6 +1597,60 @@ fn no_window(cmd: &mut std::process::Command) {
 #[cfg(not(windows))]
 fn no_window(_cmd: &mut std::process::Command) {}
 
+/// One-shot subprocess fallback for a bridge CLI: launch `script_name` with
+/// `argv`, returning its trimmed stdout (JSON) or, on a non-zero exit, its
+/// trimmed stderr. This mirrors the per-command `Command` launch the torch CLIs
+/// used before the warm worker and is what [`run_torch_cli`] falls back to.
+fn run_bridge_oneshot(
+    python: &Path,
+    dir: &Path,
+    script_name: &str,
+    argv: &[String],
+) -> Result<String, String> {
+    let script = dir.join("python").join("bridge").join(script_name);
+    if !script.is_file() {
+        return Err(format!("{script_name} not found at {}", script.display()));
+    }
+    let mut cmd = std::process::Command::new(python);
+    cmd.arg(&script);
+    for arg in argv {
+        cmd.arg(arg);
+    }
+    cmd.current_dir(dir);
+    no_window(&mut cmd);
+
+    let output = cmd
+        .output()
+        .map_err(|err| format!("failed to launch {}: {err}", python.display()))?;
+    if !output.status.success() {
+        return Err(String::from_utf8_lossy(&output.stderr).trim().to_string());
+    }
+    Ok(String::from_utf8_lossy(&output.stdout).trim().to_string())
+}
+
+/// Run a torch bridge CLI, preferring the long-lived warm worker (models stay
+/// resident across calls) and transparently falling back to a one-shot
+/// subprocess when the worker is unavailable. `cmd` is the worker command
+/// (`"image_enhance"` / `"detail_repaint"`); `script_name` the CLI used for the
+/// fallback; `argv` the argument vector both paths receive (for
+/// `detail_repaint` it starts with the `prepare`/`repaint`/`composite`
+/// subcommand). Returns the CLI's stdout JSON. Because the worker returns `Err`
+/// both when its infrastructure is unavailable *and* when the hosted CLI exits
+/// non-zero, the fallback re-runs authoritatively either way — so behaviour is
+/// identical to the pre-worker path and a genuine CLI error still surfaces.
+fn run_torch_cli(
+    python: &Path,
+    dir: &Path,
+    script_name: &str,
+    cmd: &str,
+    argv: &[String],
+) -> Result<String, String> {
+    match crate::studio::torch_worker::run_cli(python, dir, cmd, argv) {
+        Ok(stdout) => Ok(stdout),
+        Err(_) => run_bridge_oneshot(python, dir, script_name, argv),
+    }
+}
+
 /// Resolve the project's `python/bridge/detail_repaint_cli.py`, erroring if the
 /// helper is missing from the checkout / bundle.
 fn detail_repaint_script(dir: &Path) -> Result<PathBuf, String> {
@@ -1829,47 +1878,49 @@ pub(crate) fn local_repaint_regions(
 ) -> Result<LocalRepaintResult, String> {
     let dir = resolve_project_dir(&dir)?;
     let python = project_python(&dir);
-    let script = detail_repaint_script(&dir)?;
+    // Existence check (keeps the precise "not found" message); the launch path
+    // below re-resolves the script itself.
+    detail_repaint_script(&dir)?;
     reject_unsafe_output_name(output_name.as_deref().unwrap_or(""))?;
 
-    let mut cmd = std::process::Command::new(&python);
-    cmd.arg(&script)
-        .arg("repaint")
-        .arg("--manifest")
-        .arg(&manifest)
-        .arg("--engine")
-        .arg(engine.as_deref().unwrap_or("provider"))
-        .arg("--prompt")
-        .arg(prompt.as_deref().unwrap_or(""))
-        .arg("--prompt-map")
-        .arg(prompt_map.as_deref().unwrap_or(""))
-        .arg("--negative-prompt")
-        .arg(negative_prompt.as_deref().unwrap_or(""))
-        .arg("--strength")
-        .arg(strength.unwrap_or(0.75).to_string())
-        .arg("--guidance-scale")
-        .arg(guidance_scale.unwrap_or(7.5).to_string())
-        .arg("--steps")
-        .arg(steps.unwrap_or(30).to_string())
-        .arg("--seed")
-        .arg(seed.unwrap_or(-1).to_string())
-        .arg("--precision")
-        .arg(precision.as_deref().unwrap_or("auto"))
-        .arg("--output-dir")
-        .arg(output_dir.as_deref().unwrap_or(""))
-        .arg("--output-name")
-        .arg(output_name.as_deref().unwrap_or(""))
-        .current_dir(&dir);
-    no_window(&mut cmd);
+    let engine = engine.as_deref().unwrap_or("provider");
+    let argv: Vec<String> = vec![
+        "repaint".into(),
+        "--manifest".into(),
+        manifest,
+        "--engine".into(),
+        engine.into(),
+        "--prompt".into(),
+        prompt.as_deref().unwrap_or("").into(),
+        "--prompt-map".into(),
+        prompt_map.as_deref().unwrap_or("").into(),
+        "--negative-prompt".into(),
+        negative_prompt.as_deref().unwrap_or("").into(),
+        "--strength".into(),
+        strength.unwrap_or(0.75).to_string(),
+        "--guidance-scale".into(),
+        guidance_scale.unwrap_or(7.5).to_string(),
+        "--steps".into(),
+        steps.unwrap_or(30).to_string(),
+        "--seed".into(),
+        seed.unwrap_or(-1).to_string(),
+        "--precision".into(),
+        precision.as_deref().unwrap_or("auto").into(),
+        "--output-dir".into(),
+        output_dir.as_deref().unwrap_or("").into(),
+        "--output-name".into(),
+        output_name.as_deref().unwrap_or("").into(),
+    ];
 
-    let output = cmd
-        .output()
-        .map_err(|err| format!("failed to launch {}: {err}", python.display()))?;
-    if !output.status.success() {
-        let stderr = String::from_utf8_lossy(&output.stderr);
-        return Err(format!("local_repaint_regions failed: {}", stderr.trim()));
+    // Only the torch backend (`sd_inpaint`) loads a heavy pipeline per call, so
+    // only it is routed through the warm worker; the default `provider` (remote
+    // `image.edit`) and any other engine stay a one-shot.
+    let stdout = if engine == "sd_inpaint" {
+        run_torch_cli(&python, &dir, "detail_repaint_cli.py", "detail_repaint", &argv)
+    } else {
+        run_bridge_oneshot(&python, &dir, "detail_repaint_cli.py", &argv)
     }
-    let stdout = String::from_utf8_lossy(&output.stdout);
+    .map_err(|err| format!("local_repaint_regions failed: {err}"))?;
     serde_json::from_str::<LocalRepaintResult>(stdout.trim()).map_err(|err| {
         format!(
             "could not parse local_repaint_regions output: {err} (raw: {})",

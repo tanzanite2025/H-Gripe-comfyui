@@ -37,6 +37,7 @@ mod subject_matte;
 mod subject_model;
 mod subject_sam2;
 mod subject_segment;
+pub(crate) mod torch_worker;
 
 // Glob re-exports so the original `crate::studio::*` command paths keep
 // resolving from `main.rs`'s `generate_handler!`. A plain `use exec::cmd` only

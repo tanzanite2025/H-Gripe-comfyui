@@ -33,6 +33,44 @@ from . import InpaintUnavailable, model_cache_dir
 
 _DEFAULT_WEIGHT_DIR = "sd-inpaint"
 
+#: Process-global warm cache of constructed Stable Diffusion inpaint pipelines,
+#: keyed by ``(weight, device, precision)``. ``from_pretrained`` loads a multi-GB
+#: checkpoint and moves it onto the device; in a long-lived host (the torch
+#: worker, staged-rollout step 4 of ``docs/cards/editor-resource-model.md``) this
+#: cache means that happens once per ``(weight, device, precision)`` instead of
+#: on every run. In a one-shot CLI process it is simply built once and discarded.
+_WARM_PIPELINES: dict[tuple[str, str, str], Any] = {}
+
+
+def _construct_pipeline(weight: str, device: str, precision: str) -> Any:
+    """Build a Stable Diffusion inpaint pipeline (imports heavy deps lazily).
+
+    Split out from :func:`_warm_pipeline` so the warm cache can be exercised in
+    tests without ``torch`` / ``diffusers`` installed (the test monkeypatches
+    this constructor and counts calls).
+    """
+    import torch
+    from diffusers import StableDiffusionInpaintPipeline
+
+    dtype = torch.float16 if precision == "fp16" else torch.float32
+    pipe = StableDiffusionInpaintPipeline.from_pretrained(
+        weight,
+        torch_dtype=dtype,
+        safety_checker=None,
+    )
+    return pipe.to(device)
+
+
+def _warm_pipeline(weight: str, device: str, precision: str) -> Any:
+    """Return a cached inpaint pipeline for the key, building it on first use."""
+    key = (weight, device, precision)
+    cached = _WARM_PIPELINES.get(key)
+    if cached is not None:
+        return cached
+    built = _construct_pipeline(weight, device, precision)
+    _WARM_PIPELINES[key] = built
+    return built
+
 
 class StableDiffusionInpaintBackend:
     id = "sd_inpaint"
@@ -90,20 +128,17 @@ class StableDiffusionInpaintBackend:
             raise InpaintUnavailable(reason)
 
         import torch
-        from diffusers import StableDiffusionInpaintPipeline
         from PIL import Image
 
         from sr_backends import resolve_precision
 
         device = "cuda" if torch.cuda.is_available() else "cpu"
         precision = resolve_precision(precision, device)
-        dtype = torch.float16 if precision == "fp16" else torch.float32
-        pipe = StableDiffusionInpaintPipeline.from_pretrained(
-            str(self.weight_path()),
-            torch_dtype=dtype,
-            safety_checker=None,
-        )
-        pipe = pipe.to(device)
+        # Reuse a warm pipeline when the host is long-lived (the torch worker); a
+        # one-shot CLI run just builds it once. The multi-GB checkpoint load /
+        # device move therefore happens once per (weight, device, precision)
+        # instead of on every call.
+        pipe = _warm_pipeline(str(self.weight_path()), device, precision)
 
         rgb = crop.convert("RGB")
         msk = mask.convert("L")

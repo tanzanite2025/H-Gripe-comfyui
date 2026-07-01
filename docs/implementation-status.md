@@ -86,7 +86,21 @@ concept), with the CPU path remaining the default and fallback.
 | --- | --- | --- |
 | Node-card / Inspector / Palette / search / Mask-Edit i18n (中/英) | ✅ Landed | English `NODE_SPECS` source + `nodeSpecsI18n` / `maskToolsI18n` zh overlays + `localizeSpec` resolver. A coverage test fails CI if any node/param/port/tool ships without a zh entry. |
 
-## 7. Out of scope (explicit product-direction decisions)
+## 7. Editor resource & threading model — [`editor-resource-model.md`](cards/editor-resource-model.md)
+
+The full staged rollout of the editor compute/threading model has **landed**.
+
+| Item | Status | Notes |
+| --- | --- | --- |
+| Preview lane (single-slot, latest-wins, decoupled from run lock) | ✅ Landed | PR #145; first consumer is live mask-morphology proxy preview. |
+| Explicit exec-lane scheduler + GPU `Semaphore(1)` | ✅ Landed | PR #146; replaces the accidental serial `.await` loop in `exec.rs`. |
+| ONNX warm pool (`onnx_pool.rs`) | ✅ Landed | PR #147; process-global `ort::Session` reuse (see §1/§3). |
+| Long-lived torch worker (`torch_worker.rs`) | ✅ Landed | PR #148; realesrgan / sd_inpaint stay warm, one-shot fallback on failure. |
+| Video media engine (decoder seam + frame cache + playback thread) | ✅ Landed | PR #149; `video_engine.rs` + `frame_cache.rs`, `video_scrub` command. |
+| Native in-process ffmpeg `FrameSource` | ✅ Landed | PR #150; `ffmpeg_native.rs` links **vendored** libav (`third_party/ffmpeg`, git-lfs) behind the off-by-default `native-ffmpeg` feature, with PyAV fallback. |
+| Video trim / **export / encode** | ⛔ Planned | The media engine is decode/scrub only; there is no encode path yet. |
+
+## 8. Out of scope (explicit product-direction decisions)
 
 These appear in early vision/research notes
 ([`API_FIRST_DESKTOP_PLAN.md`](../API_FIRST_DESKTOP_PLAN.md),
@@ -96,5 +110,5 @@ CPU bridge.
 
 | Item | Status | Notes |
 | --- | --- | --- |
-| Video axis (temporal tracking / flicker smoothing / timeline scrubbing) | ⛔ Not planned | Would need a video predictor (SAM 2 memory bank) + a video timeline; the bundled SAM 2 ONNX is the **image** variant. Needs a separate product decision. |
+| Video **subject** axis (temporal mask tracking / flicker smoothing) | ⛔ Not planned | Would need a video predictor (SAM 2 memory bank); the bundled SAM 2 ONNX is the **image** variant. Distinct from the decode/scrub **media engine**, which *has* landed (§7) — this row is about propagating a *mask* across frames, not playback. Needs a separate product decision. |
 | Private local SD video content-aware fill | ⛔ Not planned | Video axis is out of scope; the *still-image* local SD inpaint `engine` (`sd_inpaint`) has landed as an opt-in alternative to provider `image.edit` (see §2). |

@@ -37,19 +37,21 @@ pub(crate) struct LoadedRgba {
     pub(crate) meta: LoadMeta,
 }
 
-/// The source colour type and whether an ICC profile is attached, read from the
-/// decoder header without decoding the pixels. A card can use this to decide
-/// whether it can faithfully process an input in-process or must defer to a
-/// colour-managed path (e.g. CMYK / high-bit / ICC-tagged inputs).
+/// The source colour type and its embedded ICC profile (if any), read from the
+/// decoder header without decoding the pixels. The enhance fast path uses this
+/// to pick a colour-space-aware decode strategy and to carry the profile onto
+/// the output (mirroring the Python path's "preserve ICC when the colour model
+/// is unchanged").
 #[derive(Debug, Clone)]
 pub(crate) struct SourceProbe {
     pub(crate) color: ExtendedColorType,
-    pub(crate) has_icc: bool,
+    pub(crate) icc: Option<Vec<u8>>,
 }
 
-/// Read the source colour type + ICC presence from the header only (no pixel
-/// decode). Used by the in-process enhance fast path to route inputs it cannot
-/// reproduce faithfully back to the colour-managed Python pipeline.
+/// Read the source colour type + ICC profile from the header only (no pixel
+/// decode). Used by the in-process enhance fast path to pick its decode /
+/// colour-management strategy and, for a CMYK / float input it still cannot
+/// reproduce faithfully, to route back to the Python pipeline.
 pub(crate) fn probe_source(path: &Path) -> Result<SourceProbe, String> {
     let reader = ImageReader::open(path)
         .map_err(|err| format!("failed to open {}: {err}", path.display()))?
@@ -59,13 +61,13 @@ pub(crate) fn probe_source(path: &Path) -> Result<SourceProbe, String> {
         .into_decoder()
         .map_err(|err| format!("failed to decode {}: {err}", path.display()))?;
     let color = decoder.original_color_type();
-    let has_icc = decoder.icc_profile().ok().flatten().is_some();
-    Ok(SourceProbe { color, has_icc })
+    let icc = decoder.icc_profile().ok().flatten();
+    Ok(SourceProbe { color, icc })
 }
 
 /// Human-readable label for the *source* colour type, so a report can say what
 /// was converted from (the decoded surface is always normalised to 8-bit).
-fn source_mode_label(color: ExtendedColorType) -> String {
+pub(crate) fn source_mode_label(color: ExtendedColorType) -> String {
     match color {
         ExtendedColorType::Rgb8 | ExtendedColorType::Rgb16 | ExtendedColorType::Rgb32F => "RGB",
         ExtendedColorType::Rgba8 | ExtendedColorType::Rgba16 | ExtendedColorType::Rgba32F => "RGBA",
@@ -147,7 +149,11 @@ pub(crate) fn load_mask(path: &Path, max_pixels: u64) -> Result<GrayImage, Strin
 
 /// Shared decode path: guard dimensions, read EXIF orientation + source mode,
 /// decode, then apply the orientation so downstream pixels are upright.
-fn load_dynamic(path: &Path, max_pixels: u64) -> Result<(DynamicImage, LoadMeta), String> {
+///
+/// Exposed to the enhance fast path, which needs the native (pre-`into_rgba8`)
+/// surface to range-scale a high-bit single-channel source itself rather than
+/// let the default 8-bit conversion truncate its tonal range.
+pub(crate) fn load_dynamic(path: &Path, max_pixels: u64) -> Result<(DynamicImage, LoadMeta), String> {
     let reader = ImageReader::open(path)
         .map_err(|err| format!("failed to open {}: {err}", path.display()))?
         .with_guessed_format()

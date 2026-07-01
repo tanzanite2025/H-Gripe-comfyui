@@ -6,23 +6,29 @@
 //! needs those raw 4-channel samples plus the profile, which we read straight
 //! from the container's own decoder here:
 //!
-//! - **JPEG** via `zune-jpeg`, pinning the *output* colourspace to `CMYK` so the
-//!   decoder hands back the stored ink samples unconverted (zune copies the four
-//!   channels through when input and output colourspace both equal CMYK). Only
-//!   **Adobe** CMYK JPEGs (an APP14 marker with transform code 0) are taken:
-//!   Adobe stores *inverted* ink (0 = full ink), which libjpeg/PIL normalise on
-//!   load, so we apply `255 - v` here to land in the device direction (0 = no
-//!   ink) that matches TIFF Separated and the `cmyk_transform` input contract.
-//!   YCCK JPEGs (transform 2; zune reports a non-CMYK input colourspace) and
-//!   CMYK JPEGs without an Adobe marker return `None` and stay on the Python
-//!   fallback — the former loses the embedded ICC through zune's YCCK->RGB, and
-//!   the latter is too rare to generate and validate a round-trip for.
+//! - **JPEG** via `zune-jpeg`. Two **Adobe** shapes are taken (both store
+//!   *inverted* ink, 0 = full ink, which we undo with `255 - v` to land in the
+//!   device direction 0 = no ink that matches TIFF Separated and the
+//!   `cmyk_transform` input contract):
+//!     - **Adobe CMYK** (APP14 transform 0): the output colourspace is pinned to
+//!       `CMYK` so the decoder copies the four stored ink channels through
+//!       unconverted (zune copies straight through when input and output
+//!       colourspace both equal CMYK).
+//!     - **Adobe YCCK** (APP14 transform 2): zune only offers YCCK->RGB, which
+//!       collapses to three channels and drops the embedded ICC. Instead the
+//!       output colourspace is pinned to `YCCK` so the same straight-through
+//!       copy hands back the raw Y/Cb/Cr/K planes, and we run the YCCK->CMYK
+//!       reconstruction ourselves (libjpeg's `ycck_cmyk_convert`: YCbCr->RGB
+//!       then C=255-R, M=255-G, Y=255-B, K passthrough), preserving the ICC.
+//!   CMYK JPEGs without an Adobe marker (transform code absent) and any other
+//!   JPEG return `None` and stay on the Python fallback — an unmarked CMYK JPEG
+//!   is too rare to generate and validate a round-trip for.
 //! - **TIFF** via the `tiff` crate when the photometric interpretation is CMYK
 //!   (8-bit, 4 samples/pixel). TIFF Separated is already 0 = no ink, so no
 //!   inversion is applied.
 //!
-//! Wired into `try_enhance` via `cmyk_transform::cmyk_to_rgb8` for both **TIFF**
-//! and **Adobe CMYK JPEG** sources (step c3). The samples this module returns
+//! Wired into `try_enhance` via `cmyk_transform::cmyk_to_rgb8` for **TIFF** and
+//! **Adobe CMYK / YCCK JPEG** sources (step c3). The samples this module returns
 //! are always in the device direction (0 = no ink); the CMS / naive transform
 //! lives in `cmyk_transform`.
 
@@ -41,8 +47,8 @@ use zune_jpeg::JpegDecoder;
 /// `samples` is tightly packed, 4 bytes per pixel in C, M, Y, K order, row-major
 /// (`width * height * 4` bytes). No colour conversion has been applied, but the
 /// samples are normalised to the device direction (0 = no ink): a TIFF is taken
-/// as-is and an Adobe CMYK JPEG has its stored inversion undone here, so the
-/// later CMS / naive transform always sees the same convention.
+/// as-is and an Adobe CMYK / YCCK JPEG has its stored inversion undone here, so
+/// the later CMS / naive transform always sees the same convention.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct RawCmyk {
     pub(crate) width: u32,
@@ -59,10 +65,10 @@ enum Container {
 /// Attempt to read raw CMYK samples from `path`, guarding the decode size first.
 ///
 /// Returns:
-/// - `Ok(Some(raw))` — the source is an Adobe CMYK JPEG or a CMYK TIFF we could
-///   decode, returned in the device direction (0 = no ink).
+/// - `Ok(Some(raw))` — the source is an Adobe CMYK/YCCK JPEG or a CMYK TIFF we
+///   could decode, returned in the device direction (0 = no ink).
 /// - `Ok(None)` — the source is not a container/colour we handle here (an RGB
-///   JPEG, a YCCK JPEG, a non-Adobe CMYK JPEG, a non-CMYK TIFF, or any other
+///   JPEG, a non-Adobe/unmarked CMYK JPEG, a non-CMYK TIFF, or any other
 ///   format). The caller should fall back to the existing path.
 /// - `Err(_)` — the source *is* a CMYK container we recognise but decoding it
 ///   failed (truncated file, oversize, unsupported bit depth, ...).
@@ -74,6 +80,30 @@ pub(crate) fn decode_cmyk(path: &Path, max_pixels: u64) -> Result<Option<RawCmyk
         Some(Container::Tiff) => decode_cmyk_tiff(&bytes, max_pixels),
         None => Ok(None),
     }
+}
+
+/// Whether `bytes` is a JPEG whose sample data is four-channel CMYK-family
+/// (Adobe CMYK or YCCK).
+///
+/// The `image` crate reports both as `Rgb8` — it converts to RGB on decode and
+/// drops the embedded ICC — so [`studio_image::probe_source`] cannot tell them
+/// apart from an ordinary RGB JPEG. The enhance probe uses this to route such
+/// JPEGs to the CMYK fast path ([`decode_cmyk`] + `cmyk_transform`) instead of
+/// the lossy generic decode. `decode_cmyk_jpeg` still has the final say and
+/// returns `None` for the CMYK shapes it won't take faithfully (e.g. an
+/// unmarked CMYK JPEG), which keeps those on the Python fallback.
+pub(crate) fn is_cmyk_family_jpeg(bytes: &[u8]) -> bool {
+    if !matches!(sniff(bytes), Some(Container::Jpeg)) {
+        return false;
+    }
+    let mut decoder = JpegDecoder::new_with_options(ZCursor::new(bytes), DecoderOptions::default());
+    if decoder.decode_headers().is_err() {
+        return false;
+    }
+    matches!(
+        decoder.input_colorspace(),
+        Some(ColorSpace::CMYK) | Some(ColorSpace::YCCK)
+    )
 }
 
 /// Identify the container by its magic bytes (extension-independent, matching
@@ -102,25 +132,39 @@ fn guard(width: u64, height: u64, max_pixels: u64) -> Result<(), String> {
     Ok(())
 }
 
+/// Which Adobe JPEG shape `decode_cmyk_jpeg` recognised, and hence how to turn
+/// the decoded planes into device-direction CMYK.
+enum JpegCmyk {
+    /// Adobe CMYK (transform 0): stored ink samples, only `255 - v` to undo.
+    Cmyk,
+    /// Adobe YCCK (transform 2): raw Y/Cb/Cr/K planes needing reconstruction.
+    Ycck,
+}
+
 fn decode_cmyk_jpeg(bytes: &[u8], max_pixels: u64) -> Result<Option<RawCmyk>, String> {
-    let options = DecoderOptions::default().jpeg_set_out_colorspace(ColorSpace::CMYK);
-    let mut decoder = JpegDecoder::new_with_options(ZCursor::new(bytes), options);
+    let mut decoder = JpegDecoder::new_with_options(ZCursor::new(bytes), DecoderOptions::default());
     decoder
         .decode_headers()
         .map_err(|err| format!("failed to read JPEG headers: {err:?}"))?;
 
-    // Only CMYK sources pass through as CMYK; YCCK / RGB defer to Python.
-    if decoder.input_colorspace() != Some(ColorSpace::CMYK) {
-        return Ok(None);
-    }
+    // Decide whether (and how) to take this JPEG from its input colourspace and
+    // the Adobe APP14 transform code. Only the two Adobe shapes are handled;
+    // an unmarked CMYK JPEG or anything else defers to the Python bridge.
+    let mode = match (decoder.input_colorspace(), adobe_transform(bytes)) {
+        (Some(ColorSpace::CMYK), Some(0)) => JpegCmyk::Cmyk,
+        (Some(ColorSpace::YCCK), Some(2)) => JpegCmyk::Ycck,
+        _ => return Ok(None),
+    };
 
-    // Only Adobe CMYK JPEGs (APP14 transform 0) are handled: their stored ink is
-    // inverted (0 = full ink) and we know how to normalise it. A CMYK JPEG with
-    // no Adobe marker is too rare to validate a faithful round-trip for, so it
-    // defers to the colour-managed Python bridge.
-    if adobe_transform(bytes) != Some(0) {
-        return Ok(None);
-    }
+    // Pin the output colourspace to the input so zune copies the samples through
+    // unconverted (four channels straight out): CMYK stays CMYK, and YCCK stays
+    // YCCK so we get the raw planes plus the intact ICC rather than zune's
+    // lossy YCCK->RGB.
+    let out_colorspace = match mode {
+        JpegCmyk::Cmyk => ColorSpace::CMYK,
+        JpegCmyk::Ycck => ColorSpace::YCCK,
+    };
+    decoder.set_options(decoder.options().jpeg_set_out_colorspace(out_colorspace));
 
     let info = decoder
         .info()
@@ -134,13 +178,38 @@ fn decode_cmyk_jpeg(bytes: &[u8], max_pixels: u64) -> Result<Option<RawCmyk>, St
         .decode()
         .map_err(|err| format!("failed to decode CMYK JPEG: {err:?}"))?;
 
-    // Undo the Adobe inversion so the samples match the device direction
-    // (0 = no ink) that TIFF Separated and `cmyk_transform` expect.
-    for v in &mut samples {
-        *v = 255 - *v;
+    match mode {
+        // Undo the Adobe inversion so the samples match the device direction
+        // (0 = no ink) that TIFF Separated and `cmyk_transform` expect.
+        JpegCmyk::Cmyk => {
+            for v in &mut samples {
+                *v = 255 - *v;
+            }
+        }
+        JpegCmyk::Ycck => ycck_planes_to_device_cmyk(&mut samples),
     }
 
     finish(width, height, samples, icc, "JPEG")
+}
+
+/// Convert raw Adobe YCCK planes (interleaved Y, Cb, Cr, K) in place to
+/// device-direction CMYK (0 = no ink).
+///
+/// libjpeg's `ycck_cmyk_convert` reconstructs the *stored* CMYK as YCbCr->RGB
+/// then C=255-R, M=255-G, Y=255-B (K passthrough); undoing the Adobe inversion
+/// (`255 - v`) collapses that to device C=R, M=G, Y=B and device K=255-K. Uses
+/// the full-range JFIF YCbCr->RGB coefficients.
+fn ycck_planes_to_device_cmyk(samples: &mut [u8]) {
+    for px in samples.chunks_exact_mut(4) {
+        let y = f32::from(px[0]);
+        let cb = f32::from(px[1]) - 128.0;
+        let cr = f32::from(px[2]) - 128.0;
+        let clamp = |v: f32| v.round().clamp(0.0, 255.0) as u8;
+        px[0] = clamp(y + 1.402 * cr);
+        px[1] = clamp(y - 0.344_136 * cb - 0.714_136 * cr);
+        px[2] = clamp(y + 1.772 * cb);
+        px[3] = 255 - px[3];
+    }
 }
 
 /// Scan a JPEG's marker segments for the Adobe APP14 marker and return its
@@ -340,6 +409,10 @@ mod tests {
     // the tiles near-lossless. See `scripts/gen_cmyk_jpeg_fixture.py`.
     const ADOBE_CMYK_JPEG: &[u8] = include_bytes!("../../tests/fixtures/cmyk_adobe_app14.jpg");
 
+    // The YCCK sibling of the fixture above (Adobe APP14 transform 2), same 2x2
+    // ink tiles, written by `scripts/gen_ycck_jpeg_fixture.py`.
+    const YCCK_CMYK_JPEG: &[u8] = include_bytes!("../../tests/fixtures/cmyk_ycck_app14.jpg");
+
     // Tile-centre (x, y) samples, well inside each 16x16 tile so JPEG block
     // edges don't bleed in, paired with the device inks PIL round-trips them to.
     const TILE_CENTRES: [((u32, u32), [u8; 4]); 4] = [
@@ -419,6 +492,83 @@ mod tests {
             ((24, 8), [0, 255, 255]),
             ((8, 24), [0, 0, 0]),
             ((24, 24), [119, 179, 209]),
+        ];
+        for ((x, y), want) in expected {
+            let idx = (y as usize * 32 + x as usize) * 3;
+            for ch in 0..3 {
+                let got = i32::from(rgb[idx + ch]);
+                assert!(
+                    (got - i32::from(want[ch])).abs() <= 6,
+                    "tile ({x},{y}) ch {ch}: rust {got} vs PIL {}",
+                    want[ch]
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn adobe_transform_reads_ycck_fixture_marker() {
+        assert_eq!(adobe_transform(YCCK_CMYK_JPEG), Some(2));
+    }
+
+    #[test]
+    fn cmyk_family_jpeg_detection() {
+        // Both Adobe shapes are CMYK-family (the `image` crate hides this by
+        // reporting them as RGB), so the probe reclassifies them to CMYK.
+        assert!(is_cmyk_family_jpeg(ADOBE_CMYK_JPEG));
+        assert!(is_cmyk_family_jpeg(YCCK_CMYK_JPEG));
+        // A plain baseline RGB (YCbCr) JPEG is not, and neither is a non-JPEG.
+        let mut rgb_jpeg = Vec::new();
+        image::codecs::jpeg::JpegEncoder::new(&mut rgb_jpeg)
+            .encode(&[10, 20, 30, 40, 50, 60], 2, 1, image::ExtendedColorType::Rgb8)
+            .unwrap();
+        assert!(!is_cmyk_family_jpeg(&rgb_jpeg));
+        assert!(!is_cmyk_family_jpeg(b"not a jpeg"));
+    }
+
+    #[test]
+    fn decodes_ycck_jpeg_to_device_direction() {
+        let raw = decode_cmyk_jpeg(YCCK_CMYK_JPEG, DEFAULT_MAX_DECODE_PIXELS)
+            .unwrap()
+            .expect("an Adobe YCCK JPEG should decode to raw CMYK samples");
+        assert_eq!((raw.width, raw.height), (32, 32));
+
+        // The YCCK->CMYK reconstruction plus the inversion undo lands the tile
+        // centres back on the device inks (0 = no ink). A wrong reconstruction
+        // or inversion direction blows past this tolerance. YCbCr chroma rounding
+        // is a touch looser than the pure-CMYK path, so allow +/-6.
+        for ((x, y), expected) in TILE_CENTRES {
+            let got = sample_at(&raw, x, y);
+            for ch in 0..4 {
+                assert!(
+                    (i32::from(got[ch]) - i32::from(expected[ch])).abs() <= 6,
+                    "tile ({x},{y}) ch {ch}: {} vs {} (device ink)",
+                    got[ch],
+                    expected[ch]
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn ycck_jpeg_transforms_to_pil_rgb() {
+        use crate::studio::cmyk_transform::cmyk_to_rgb8;
+
+        let raw = decode_cmyk_jpeg(YCCK_CMYK_JPEG, DEFAULT_MAX_DECODE_PIXELS)
+            .unwrap()
+            .expect("an Adobe YCCK JPEG should decode");
+        let rgb = cmyk_to_rgb8(&raw);
+        assert_eq!(rgb.len(), 32 * 32 * 3);
+
+        // sRGB that Pillow's `Image.open(fixture).convert("RGB")` produces at the
+        // same tile centres (naive path; the fixture carries no ICC). Compared
+        // within a small tolerance -- a YCCK reconstruction or inversion bug
+        // fails this by a wide margin.
+        let expected: [((u32, u32), [u8; 3]); 4] = [
+            ((8, 8), [255, 255, 255]),
+            ((24, 8), [1, 255, 255]),
+            ((8, 24), [0, 0, 0]),
+            ((24, 24), [119, 180, 210]),
         ];
         for ((x, y), want) in expected {
             let idx = (y as usize * 32 + x as usize) * 3;

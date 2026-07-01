@@ -12,7 +12,9 @@
 use std::path::Path;
 
 use image::metadata::Orientation;
-use image::{DynamicImage, ExtendedColorType, GrayImage, ImageDecoder, ImageReader, RgbaImage};
+use image::{
+    DynamicImage, ExtendedColorType, GrayImage, ImageDecoder, ImageFormat, ImageReader, RgbaImage,
+};
 
 use super::image_buffer;
 
@@ -57,11 +59,27 @@ pub(crate) fn probe_source(path: &Path) -> Result<SourceProbe, String> {
         .map_err(|err| format!("failed to open {}: {err}", path.display()))?
         .with_guessed_format()
         .map_err(|err| format!("failed to read {}: {err}", path.display()))?;
+    let format = reader.format();
     let mut decoder = reader
         .into_decoder()
         .map_err(|err| format!("failed to decode {}: {err}", path.display()))?;
-    let color = decoder.original_color_type();
+    let mut color = decoder.original_color_type();
     let icc = decoder.icc_profile().ok().flatten();
+
+    // The `image` crate reports Adobe CMYK and YCCK JPEGs as `Rgb8` — it
+    // converts them to RGB on decode and drops the embedded ICC. Sniff the JPEG
+    // ourselves and reclassify those as CMYK so the enhance path routes them to
+    // `cmyk_decode` (raw inks + ICC, colour-managed to sRGB) instead of the
+    // lossy generic RGB decode. `decode_cmyk` still returns `None` for the CMYK
+    // shapes it won't take faithfully, deferring those to Python.
+    if format == Some(ImageFormat::Jpeg) && color != ExtendedColorType::Cmyk8 {
+        if let Ok(bytes) = std::fs::read(path) {
+            if super::cmyk_decode::is_cmyk_family_jpeg(&bytes) {
+                color = ExtendedColorType::Cmyk8;
+            }
+        }
+    }
+
     Ok(SourceProbe { color, icc })
 }
 
@@ -283,6 +301,47 @@ mod tests {
 
         let mask = load_mask(&path, DEFAULT_MAX_DECODE_PIXELS).unwrap();
         assert_eq!(mask.get_pixel(0, 0).0[0], 200);
+        let _ = std::fs::remove_file(&path);
+    }
+
+    // The `image` crate decodes Adobe CMYK and YCCK JPEGs to RGB (dropping the
+    // ICC) and reports them as `Rgb8`; the probe must reclassify both as CMYK so
+    // the enhance path takes them through `cmyk_decode` instead. A regression
+    // here silently routes CMYK JPEGs back through the lossy generic decode.
+    #[test]
+    fn probes_adobe_cmyk_jpeg_as_cmyk() {
+        let path = unique_tmp("adobe_cmyk.jpg");
+        std::fs::write(
+            &path,
+            include_bytes!("../../tests/fixtures/cmyk_adobe_app14.jpg"),
+        )
+        .unwrap();
+        let probe = probe_source(&path).unwrap();
+        assert_eq!(probe.color, ExtendedColorType::Cmyk8);
+        let _ = std::fs::remove_file(&path);
+    }
+
+    #[test]
+    fn probes_ycck_jpeg_as_cmyk() {
+        let path = unique_tmp("ycck.jpg");
+        std::fs::write(
+            &path,
+            include_bytes!("../../tests/fixtures/cmyk_ycck_app14.jpg"),
+        )
+        .unwrap();
+        let probe = probe_source(&path).unwrap();
+        assert_eq!(probe.color, ExtendedColorType::Cmyk8);
+        let _ = std::fs::remove_file(&path);
+    }
+
+    #[test]
+    fn probes_plain_rgb_jpeg_as_rgb() {
+        let path = unique_tmp("rgb.jpg");
+        DynamicImage::ImageRgb8(image::RgbImage::from_pixel(4, 4, image::Rgb([200, 120, 60])))
+            .save_with_format(&path, ImageFormat::Jpeg)
+            .unwrap();
+        let probe = probe_source(&path).unwrap();
+        assert_eq!(probe.color, ExtendedColorType::Rgb8);
         let _ = std::fs::remove_file(&path);
     }
 }

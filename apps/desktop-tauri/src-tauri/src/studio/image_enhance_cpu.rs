@@ -14,14 +14,15 @@
 //! profile onto the output PNG for same-colour-model inputs (RGB/RGBA/L/LA),
 //! just like the Python bridge.
 //!
-//! CMYK is handled in-process for **TIFF** sources and **Adobe CMYK JPEGs** (an
-//! APP14 marker with transform 0): the raw ink samples and embedded profile are
-//! read via [`super::cmyk_decode`] (which undoes the Adobe inversion so JPEG and
-//! TIFF samples share the 0 = no ink convention) and colour-managed to sRGB via
+//! CMYK is handled in-process for **TIFF** sources and **Adobe CMYK / YCCK
+//! JPEGs** (an APP14 marker with transform 0 or 2): the raw ink samples and
+//! embedded profile are read via [`super::cmyk_decode`] (which undoes the Adobe
+//! inversion so JPEG and TIFF samples share the 0 = no ink convention, and for
+//! YCCK reconstructs CMYK from the raw planes rather than taking zune's lossy
+//! YCCK->RGB that drops the ICC) and colour-managed to sRGB via
 //! [`super::cmyk_transform`] (the CMYK profile's A2B LUT, or PIL's naive formula
-//! when untagged), matching `image_enhance_cli.py`'s `_cmyk_to_rgb`. YCCK JPEGs
-//! and CMYK JPEGs without an Adobe marker still defer to `psd::enhance_image`
-//! (zune's YCCK->RGB drops the embedded ICC; the unmarked case is too rare to
+//! when untagged), matching `image_enhance_cli.py`'s `_cmyk_to_rgb`. CMYK JPEGs
+//! without an Adobe marker still defer to `psd::enhance_image` (too rare to
 //! validate). Float inputs also still defer (no well-defined 8-bit mapping to
 //! reproduce here). For all of those, and on any decode failure, [`try_enhance`]
 //! returns `Ok(None)` and the caller falls back to Python.
@@ -61,8 +62,8 @@ pub(super) struct CpuEnhanceParams {
 
 /// Run the CPU enhance pipeline in-process. Returns `Ok(Some(result))` on the
 /// fast path, or `Ok(None)` when the input cannot be reproduced faithfully
-/// in-process (a YCCK / unmarked CMYK JPEG or float source, or any decode
-/// failure) and the caller should defer to the colour-managed Python bridge.
+/// in-process (an unmarked CMYK JPEG or float source, or any decode failure)
+/// and the caller should defer to the colour-managed Python bridge.
 pub(super) fn try_enhance(p: &CpuEnhanceParams) -> Result<Option<EnhanceImageResult>, String> {
     let path = Path::new(&p.image_path);
     if !path.is_file() {
@@ -71,8 +72,8 @@ pub(super) fn try_enhance(p: &CpuEnhanceParams) -> Result<Option<EnhanceImageRes
     }
 
     // Inspect the source colour space (header only). Float still defers, as do
-    // the CMYK JPEGs `prepare_source` won't take (YCCK / unmarked); everything
-    // else, including CMYK TIFF and Adobe CMYK JPEG, is processed in-process. An
+    // the CMYK JPEGs `prepare_source` won't take (unmarked); everything else,
+    // including CMYK TIFF and Adobe CMYK / YCCK JPEG, is processed in-process. An
     // embedded ICC profile is carried onto the output only when the colour model
     // is unchanged (RGB/RGBA/L/LA), mirroring the Python path -- a CMYK/high-bit
     // conversion produces sRGB the old profile no longer describes.
@@ -214,10 +215,10 @@ pub(super) fn try_enhance(p: &CpuEnhanceParams) -> Result<Option<EnhanceImageRes
 /// well-defined 8-bit mapping the Python `numpy` path reproduces here.
 fn can_handle_in_process(color: ExtendedColorType) -> bool {
     use ExtendedColorType::*;
-    // CMYK is admitted here, but only CMYK TIFF and Adobe CMYK JPEG actually
-    // take the Rust path (see `prepare_source`); other CMYK JPEGs fall back
-    // inside that step. Float sources have no faithful in-process mapping and
-    // still defer.
+    // CMYK is admitted here, but only CMYK TIFF and Adobe CMYK / YCCK JPEG
+    // actually take the Rust path (see `prepare_source`); other CMYK JPEGs fall
+    // back inside that step. Float sources have no faithful in-process mapping
+    // and still defer.
     !matches!(color, Rgb32F | Rgba32F)
 }
 
@@ -237,9 +238,9 @@ fn prepare_source(
     color: ExtendedColorType,
 ) -> Result<Option<(RgbImage, GrayImage)>, String> {
     if matches!(color, ExtendedColorType::Cmyk8) {
-        // CMYK TIFF and Adobe CMYK JPEG are reproduced in-process; `decode_cmyk`
-        // returns `Ok(None)` for the sources it won't take faithfully (a YCCK or
-        // unmarked CMYK JPEG), which defers to the colour-managed Python bridge.
+        // CMYK TIFF and Adobe CMYK / YCCK JPEG are reproduced in-process;
+        // `decode_cmyk` returns `Ok(None)` for the sources it won't take
+        // faithfully (an unmarked CMYK JPEG), deferring to the Python bridge.
         let raw = match super::cmyk_decode::decode_cmyk(path, DEFAULT_MAX_DECODE_PIXELS) {
             Ok(Some(raw)) => raw,
             _ => return Ok(None),
@@ -695,8 +696,8 @@ mod tests {
     #[test]
     fn colour_space_gating() {
         use ExtendedColorType::*;
-        // CMYK is admitted here now (CMYK TIFF and Adobe CMYK JPEG are processed
-        // in-process; YCCK / unmarked CMYK JPEGs defer inside `prepare_source`).
+        // CMYK is admitted here now (CMYK TIFF and Adobe CMYK / YCCK JPEG are
+        // processed in-process; unmarked CMYK JPEGs defer inside `prepare_source`).
         // Only float still defers at the gate.
         assert!(can_handle_in_process(Cmyk8));
         assert!(!can_handle_in_process(Rgb32F));
@@ -779,6 +780,46 @@ mod tests {
         assert!(
             px.iter().all(|&v| v >= 240),
             "no-ink corner must stay near-white, got {px:?}"
+        );
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn ycck_jpeg_enhances_in_process() {
+        // The Adobe YCCK JPEG fixture (APP14 transform 2). `image` decodes YCCK
+        // to RGB and reports it as `Rgb8`, so without the probe's CMYK
+        // reclassification this would silently take the generic path; here we
+        // prove it reaches the Rust CMYK path and reconstructs the ink correctly
+        // (no-ink corner near-white, full-cyan corner cyan). Reconstruction and
+        // ICC-preservation fidelity are asserted in `cmyk_decode`.
+        let jpeg: &[u8] = include_bytes!("../../tests/fixtures/cmyk_ycck_app14.jpg");
+
+        let dir = unique_tmp("ycck_jpeg");
+        std::fs::create_dir_all(&dir).unwrap();
+        let src = dir.join("in.jpg");
+        std::fs::write(&src, jpeg).unwrap();
+
+        let result = try_enhance(&params(src.to_str().unwrap(), dir.to_str().unwrap()))
+            .unwrap()
+            .expect("an Adobe YCCK JPEG should take the in-process path");
+        let report = &result.enhance_report;
+        assert_eq!(report.engine, "cpu");
+        assert_eq!(report.source_size, Some([32, 32]));
+        assert_eq!(report.output_size, Some([64, 64])); // conservative 2x
+
+        let out = image::open(&result.enhanced_image).unwrap().to_rgb8();
+        // No-ink top-left tile stays near-white after the 2x upscale.
+        let white = out.get_pixel(8, 8).0;
+        assert!(
+            white.iter().all(|&v| v >= 240),
+            "no-ink corner must stay near-white, got {white:?}"
+        );
+        // Full-cyan top-right tile: low red, high green/blue (a wrong YCCK
+        // reconstruction or inversion collapses this).
+        let cyan = out.get_pixel(48, 16).0;
+        assert!(
+            cyan[0] <= 40 && cyan[1] >= 200 && cyan[2] >= 200,
+            "full-cyan corner must read cyan, got {cyan:?}"
         );
         let _ = std::fs::remove_dir_all(&dir);
     }

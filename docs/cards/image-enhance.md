@@ -94,7 +94,8 @@ falls straight through to `image_enhance_cli.py`, so no input regresses.
 | 16-bit `Rgb16` / `Rgba16` / `La16` | ✅ | High byte kept (PIL / `into_rgba8` parity). |
 | single-channel 16-bit (`I;16`, `L16`) | ✅ | Range-scaled by the source's own peak to 8-bit (numpy parity), not a naive `>>8`. |
 | `CMYK` (TIFF) | ✅ | Raw ink samples + embedded ICC read via `cmyk_decode` (bypassing the `image` crate, which drops them at decode), then colour-managed to sRGB via `cmyk_transform` (the profile's A2B LUT through `moxcms`, else PIL's naive formula). Output is sRGB, so the source CMYK profile is dropped (`icc_preserved: false`), matching Python. See below. |
-| `CMYK` (JPEG) | ⛔ defers to Python | Adobe APP14 JPEGs store *inverted* ink that PIL/libjpeg normalise on load but `zune-jpeg` passes through raw, so they stay on the colour-managed Python path. |
+| `CMYK` (Adobe JPEG) | ✅ | APP14 transform-0 JPEGs store *inverted* ink (0 = full ink); `cmyk_decode` undoes it (`255 - v`) so the samples match TIFF Separated, then the same `cmyk_transform` path applies. |
+| `CMYK` (YCCK / unmarked JPEG) | ⛔ defers to Python | `zune-jpeg`'s YCCK→RGB drops the embedded ICC, and an unmarked CMYK JPEG is too rare to validate a round-trip for, so both stay on the colour-managed Python path. |
 | `Rgb32F` / `Rgba32F` (float) | ⛔ defers to Python | |
 
 Landed: [#172](https://github.com/tanzanite2025/H-Gripe-Studio/pull/172)
@@ -104,7 +105,7 @@ Landed: [#172](https://github.com/tanzanite2025/H-Gripe-Studio/pull/172)
 [#177](https://github.com/tanzanite2025/H-Gripe-Studio/pull/177) /
 [#178](https://github.com/tanzanite2025/H-Gripe-Studio/pull/178) (CMYK TIFF c1–c3).
 
-### CMYK → sRGB in-process (landed, TIFF only)
+### CMYK → sRGB in-process (landed: TIFF + Adobe JPEG)
 
 CMYK samples and the embedded profile are read straight from the container
 (bypassing the `image` crate, which converts CMYK→RGB and drops the profile at
@@ -124,13 +125,24 @@ independently reviewable, CI-verifiable steps:
   `try_enhance` routes **TIFF** CMYK through `cmyk_decode` + `cmyk_to_rgb8` →
   the normal pipeline → sRGB PNG (source profile dropped, `icc_preserved: false`,
   matching Python). CMYK **JPEGs** and any decode/transform miss return
-  `Ok(None)` → Python. CMYK JPEG is excluded because Adobe APP14 files store
-  inverted ink that `zune-jpeg` does not normalise.
+  `Ok(None)` → Python.
+- **c3b — Adobe CMYK JPEG in-process.**
+  `cmyk_decode` now also takes **Adobe** CMYK JPEGs (an APP14 marker with
+  transform 0): Adobe stores inverted ink (0 = full ink) that PIL/libjpeg
+  normalise on load, so we apply `255 - v` after `zune-jpeg` decode to land in
+  the device direction (0 = no ink) that TIFF Separated and `cmyk_transform`
+  expect. **YCCK** JPEGs (transform 2; `zune` reports a non-CMYK input
+  colourspace, and its YCCK→RGB drops the embedded ICC) and CMYK JPEGs **without**
+  an Adobe marker still return `Ok(None)` → Python. A committed PIL-generated
+  fixture (`tests/fixtures/cmyk_adobe_app14.jpg`, regenerable via
+  `scripts/gen_cmyk_jpeg_fixture.py`) is decoded + transformed in Rust and
+  compared to Pillow's RGB within tolerance, so an inversion-direction error
+  fails CI immediately.
 - **c4 — colour-accuracy regression + docs (this section).** The naive CMYK→sRGB
   table is asserted **byte-for-byte on both sides** — Rust
   (`cmyk_transform` test `naive_matches_pil_convert_rgb`) and Python
   (`test_cmyk_naive_transform_matches_rust_reference`, running live Pillow) — so
-  the TIFF-CMYK fast path is a zero-ΔE cross-language regression: a shift in
+  the CMYK fast path is a zero-ΔE cross-language regression: a shift in
   either engine breaks CI. The ICC (profiled) path is checked against a
   littleCMS reference locally (moxcms is not byte-identical to littleCMS; small
   ΔE), skipped on runners without a system CMYK profile.

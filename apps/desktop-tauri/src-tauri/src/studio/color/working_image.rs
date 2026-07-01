@@ -5,7 +5,7 @@
 //! deferred to the model-egress boundary. See
 //! [`docs/design/colour-pipeline.md`](../../../../../docs/design/colour-pipeline.md).
 //!
-//! **Phase 2b/3 (current):** the shared loader ([`super::studio_image::load_working`])
+//! **Phase 2b/3 (current):** the shared loader ([`crate::studio::studio_image::load_working`])
 //! tags each decoded surface with its *actual* space. Sources that genuinely
 //! carry wide-gamut information — CMYK with an embedded ICC profile — are
 //! colour-managed straight into 16-bit `ProPhoto`; everything else (plain sRGB

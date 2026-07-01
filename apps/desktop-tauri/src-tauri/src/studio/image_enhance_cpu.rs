@@ -8,20 +8,27 @@
 //! [`EnhanceReport`] (same field names / semantics), so the node's outputs and
 //! downstream consumers are unchanged.
 //!
-//! It deliberately handles only the common 8-bit RGB/RGBA/grey inputs. CMYK,
-//! high-bit / float, and ICC-tagged inputs need colour-managed conversion the
-//! Python path does faithfully; [`try_enhance`] detects those (and any decode
-//! failure) and returns `Ok(None)` so the caller defers to `psd::enhance_image`
-//! rather than degrading the result.
+//! Colour management (R3 Phase 2): the fast path now also handles high-bit
+//! single-channel inputs (`I;16`-style scans are range-scaled to 8-bit by peak,
+//! matching the Python `numpy` path) and preserves an embedded ICC profile onto
+//! the output PNG for same-colour-model inputs (RGB/RGBA/L/LA), just like the
+//! Python bridge. Only CMYK and float inputs still defer: faithfully colour-
+//! managing CMYK needs the raw (pre-RGB) samples the `image` crate drops at
+//! decode time, so [`try_enhance`] returns `Ok(None)` for those (and on any
+//! decode failure) and the caller falls back to `psd::enhance_image`.
 
-use std::fs;
+use std::borrow::Cow;
+use std::fs::{self, File};
+use std::io::BufWriter;
 use std::path::Path;
 use std::time::Instant;
 
 use image::imageops::{self, FilterType};
-use image::{ExtendedColorType, GrayImage, Luma, Rgb, RgbImage, Rgba, RgbaImage};
+use image::{
+    ExtendedColorType, GrayImage, ImageBuffer, Luma, Rgb, RgbImage, Rgba, RgbaImage,
+};
 
-use super::studio_image::{self, SourceProbe, DEFAULT_MAX_DECODE_PIXELS};
+use super::studio_image::{self, DEFAULT_MAX_DECODE_PIXELS};
 use crate::psd::{reject_unsafe_output_name, EnhanceImageResult, EnhanceReport};
 
 /// Resolved node parameters for one enhance run, mirroring the CLI arguments.
@@ -45,8 +52,8 @@ pub(super) struct CpuEnhanceParams {
 
 /// Run the CPU enhance pipeline in-process. Returns `Ok(Some(result))` on the
 /// fast path, or `Ok(None)` when the input cannot be reproduced faithfully
-/// in-process (CMYK / high-bit / ICC / decode failure) and the caller should
-/// defer to the colour-managed Python bridge.
+/// in-process (a CMYK / float source, or any decode failure) and the caller
+/// should defer to the colour-managed Python bridge.
 pub(super) fn try_enhance(p: &CpuEnhanceParams) -> Result<Option<EnhanceImageResult>, String> {
     let path = Path::new(&p.image_path);
     if !path.is_file() {
@@ -54,12 +61,21 @@ pub(super) fn try_enhance(p: &CpuEnhanceParams) -> Result<Option<EnhanceImageRes
         return Ok(None);
     }
 
-    // Only fast-path colour spaces we can reproduce without a colour-managed
-    // conversion; everything else defers to Python.
-    match studio_image::probe_source(path) {
-        Ok(probe) if can_handle_in_process(&probe) => {}
+    // Inspect the source colour space (header only). CMYK / float still defer;
+    // everything else is handled in-process. An embedded ICC profile is carried
+    // onto the output only when the colour model is unchanged (RGB/RGBA/L/LA),
+    // mirroring the Python path -- a CMYK/high-bit conversion produces sRGB the
+    // old profile no longer describes.
+    let probe = match studio_image::probe_source(path) {
+        Ok(probe) if can_handle_in_process(probe.color) => probe,
         _ => return Ok(None),
-    }
+    };
+    let source_mode = studio_image::source_mode_label(probe.color);
+    let icc_profile = if matches!(source_mode.as_str(), "RGB" | "RGBA" | "L" | "LA") {
+        probe.icc.clone()
+    } else {
+        None
+    };
 
     let mode_str = p
         .mode
@@ -100,19 +116,16 @@ pub(super) fn try_enhance(p: &CpuEnhanceParams) -> Result<Option<EnhanceImageRes
 
     let started = Instant::now();
 
-    let loaded = match studio_image::load_rgba(path, DEFAULT_MAX_DECODE_PIXELS) {
-        Ok(loaded) => loaded,
+    let (rgb, alpha) = match prepare_source(path, probe.color)? {
+        Some(pair) => pair,
         // A decode failure (or oversized guard) is authoritative on the Python
         // path too; defer so the user sees its canonical message.
-        Err(_) => return Ok(None),
+        None => return Ok(None),
     };
-    let rgba = loaded.image;
-    let (src_w, src_h) = rgba.dimensions();
+    let (src_w, src_h) = rgb.dimensions();
     if src_w == 0 || src_h == 0 {
         return Ok(None);
     }
-
-    let (rgb, alpha) = split_rgba(&rgba);
 
     let (scale, clamped) = resolve_scale(
         src_w,
@@ -144,13 +157,11 @@ pub(super) fn try_enhance(p: &CpuEnhanceParams) -> Result<Option<EnhanceImageRes
         .map_err(|err| format!("failed to create output dir {}: {err}", directory.display()))?;
     let stem = output_stem(p.output_name.as_deref(), &p.image_path);
     let out_path = directory.join(format!("{stem}.png"));
-    out_img
-        .save(&out_path)
-        .map_err(|err| format!("failed to write {}: {err}", out_path.display()))?;
+    let target_dpi = p.target_dpi.max(1) as u32;
+    write_output_png(&out_path, &out_img, icc_profile.as_deref(), target_dpi)?;
 
     let elapsed_ms = started.elapsed().as_millis() as i64;
     let scale_factor = round4(f64::from(out_w) / f64::from(src_w));
-    let target_dpi = p.target_dpi.max(1) as u32;
 
     let report = EnhanceReport {
         mode: mode_str.to_string(),
@@ -186,18 +197,107 @@ pub(super) fn try_enhance(p: &CpuEnhanceParams) -> Result<Option<EnhanceImageRes
     }))
 }
 
-/// Whether the CPU fast path can faithfully process an input without a
-/// colour-managed conversion. CMYK, high-bit / float, and ICC-tagged inputs
-/// defer to the Python pipeline.
-fn can_handle_in_process(probe: &SourceProbe) -> bool {
+/// Whether the CPU fast path can faithfully process an input in-process. 8-bit
+/// and 16-bit RGB/RGBA/L/LA (including ICC-tagged) are handled; only CMYK and
+/// float defer, because a faithful CMYK conversion needs the raw pre-RGB
+/// samples the `image` crate discards at decode and a float source has no
+/// well-defined 8-bit mapping the Python `numpy` path reproduces here.
+fn can_handle_in_process(color: ExtendedColorType) -> bool {
     use ExtendedColorType::*;
-    if probe.has_icc {
-        return false;
+    !matches!(color, Cmyk8 | Rgb32F | Rgba32F)
+}
+
+/// A single-channel high-bit source (`image`'s `L16`, i.e. PIL's `I;16`) is
+/// range-scaled to 8-bit by its own peak, matching Python's `_highbit_to_rgb`.
+/// Multi-channel 16-bit (`Rgb16`/`Rgba16`) instead takes the high byte, which
+/// is exactly what both PIL and `into_rgba8` do, so it rides the generic path.
+fn is_single_channel_highbit(color: ExtendedColorType) -> bool {
+    matches!(color, ExtendedColorType::L16)
+}
+
+/// Decode the source into an 8-bit working RGB image plus its alpha track,
+/// applying the colour-space-specific conversion. Returns `Ok(None)` when the
+/// decode fails (or the guard trips) so the caller defers to Python.
+fn prepare_source(
+    path: &Path,
+    color: ExtendedColorType,
+) -> Result<Option<(RgbImage, GrayImage)>, String> {
+    if is_single_channel_highbit(color) {
+        let (dynimg, _meta) = match studio_image::load_dynamic(path, DEFAULT_MAX_DECODE_PIXELS) {
+            Ok(loaded) => loaded,
+            Err(_) => return Ok(None),
+        };
+        let gray16 = dynimg.into_luma16();
+        let (w, h) = gray16.dimensions();
+        if w == 0 || h == 0 {
+            return Ok(None);
+        }
+        let rgb = highbit_gray_to_rgb(&gray16);
+        // No alpha channel in a high-bit grey source; ride a fully-opaque track.
+        let alpha = GrayImage::from_pixel(w, h, Luma([255]));
+        return Ok(Some((rgb, alpha)));
     }
-    !matches!(
-        probe.color,
-        Cmyk8 | L16 | La16 | Rgb16 | Rgba16 | Rgb32F | Rgba32F
-    )
+
+    let loaded = match studio_image::load_rgba(path, DEFAULT_MAX_DECODE_PIXELS) {
+        Ok(loaded) => loaded,
+        Err(_) => return Ok(None),
+    };
+    let rgba = loaded.image;
+    let (w, h) = rgba.dimensions();
+    if w == 0 || h == 0 {
+        return Ok(None);
+    }
+    Ok(Some(split_rgba(&rgba)))
+}
+
+/// Normalise a high-bit single-channel image down to 8-bit grey replicated to
+/// RGB. Mirrors Python's `_highbit_to_rgb`: scale by the actual peak (so a
+/// low-key 16-bit scan keeps its tonal range instead of being crushed by a
+/// naive `>> 8`), then truncate to 8-bit exactly as `numpy.astype(uint8)` does.
+fn highbit_gray_to_rgb(gray: &ImageBuffer<Luma<u16>, Vec<u16>>) -> RgbImage {
+    let (w, h) = gray.dimensions();
+    let peak = gray.pixels().map(|p| p.0[0]).max().unwrap_or(0) as f64;
+    let scale = if peak > 255.0 { 255.0 / peak } else { 1.0 };
+    let mut out = RgbImage::new(w, h);
+    for (x, y, px) in gray.enumerate_pixels() {
+        let v = (f64::from(px.0[0]) * scale).clamp(0.0, 255.0) as u8;
+        out.put_pixel(x, y, Rgb([v, v, v]));
+    }
+    out
+}
+
+/// Write the output PNG, embedding the preserved ICC profile (when present) and
+/// the target DPI as a `pHYs` chunk, matching the Python bridge's `save`.
+fn write_output_png(
+    path: &Path,
+    img: &RgbaImage,
+    icc: Option<&[u8]>,
+    dpi: u32,
+) -> Result<(), String> {
+    let file = File::create(path)
+        .map_err(|err| format!("failed to create {}: {err}", path.display()))?;
+    let writer = BufWriter::new(file);
+    let (width, height) = img.dimensions();
+    let mut encoder = png::Encoder::new(writer, width, height);
+    encoder.set_color(png::ColorType::Rgba);
+    encoder.set_depth(png::BitDepth::Eight);
+    if let Some(icc) = icc {
+        encoder.set_icc_profile(Cow::Owned(icc.to_vec()));
+    }
+    // PNG stores physical resolution in pixels-per-metre; 1 inch = 0.0254 m.
+    let ppu = (f64::from(dpi.max(1)) / 0.0254).round().max(1.0) as u32;
+    encoder.set_pixel_dims(Some(png::PixelDimensions {
+        xppu: ppu,
+        yppu: ppu,
+        unit: png::Unit::Meter,
+    }));
+    let mut png_writer = encoder
+        .write_header()
+        .map_err(|err| format!("failed to write PNG header {}: {err}", path.display()))?;
+    png_writer
+        .write_image_data(img.as_raw())
+        .map_err(|err| format!("failed to write {}: {err}", path.display()))?;
+    Ok(())
 }
 
 fn clip01(value: f64) -> f64 {
@@ -558,22 +658,92 @@ mod tests {
     }
 
     #[test]
-    fn cmyk_source_defers_to_python() {
-        // A CMYK JPEG carries colour the naive in-process path would shift.
-        let probe = SourceProbe {
-            color: ExtendedColorType::Cmyk8,
-            has_icc: false,
-        };
-        assert!(!can_handle_in_process(&probe));
-        let icc = SourceProbe {
-            color: ExtendedColorType::Rgb8,
-            has_icc: true,
-        };
-        assert!(!can_handle_in_process(&icc));
-        let plain = SourceProbe {
-            color: ExtendedColorType::Rgba8,
-            has_icc: false,
-        };
-        assert!(can_handle_in_process(&plain));
+    fn colour_space_gating() {
+        use ExtendedColorType::*;
+        // CMYK (raw samples dropped at decode) and float still defer.
+        assert!(!can_handle_in_process(Cmyk8));
+        assert!(!can_handle_in_process(Rgb32F));
+        assert!(!can_handle_in_process(Rgba32F));
+        // 8-bit and 16-bit RGB/RGBA/L/LA (ICC-tagged or not) are handled now.
+        assert!(can_handle_in_process(Rgb8));
+        assert!(can_handle_in_process(Rgba8));
+        assert!(can_handle_in_process(L16));
+        assert!(can_handle_in_process(Rgb16));
+        assert!(can_handle_in_process(Rgba16));
+        // Only the single-channel 16-bit source is range-scaled; multi-channel
+        // 16-bit rides the generic high-byte path.
+        assert!(is_single_channel_highbit(L16));
+        assert!(!is_single_channel_highbit(Rgb16));
+        assert!(!is_single_channel_highbit(La16));
+    }
+
+    #[test]
+    fn highbit_gray_scales_by_peak() {
+        // A low-key 16-bit scan (peak 60000) must keep its tonal range, not be
+        // crushed by a naive >> 8; matches Python's numpy peak scaling + trunc.
+        let mut gray = ImageBuffer::<Luma<u16>, Vec<u16>>::new(2, 2);
+        gray.put_pixel(0, 0, Luma([0]));
+        gray.put_pixel(1, 0, Luma([30_000]));
+        gray.put_pixel(0, 1, Luma([60_000]));
+        gray.put_pixel(1, 1, Luma([15_000]));
+        let rgb = highbit_gray_to_rgb(&gray);
+        // scale = 255/60000; values truncate toward zero like astype(uint8).
+        assert_eq!(rgb.get_pixel(0, 0).0, [0, 0, 0]);
+        assert_eq!(rgb.get_pixel(1, 0).0, [127, 127, 127]); // 30000*255/60000=127.5
+        assert_eq!(rgb.get_pixel(0, 1).0, [255, 255, 255]);
+        assert_eq!(rgb.get_pixel(1, 1).0, [63, 63, 63]); // 15000*255/60000=63.75
+    }
+
+    #[test]
+    fn highbit_gray_below_255_peak_is_unscaled() {
+        let mut gray = ImageBuffer::<Luma<u16>, Vec<u16>>::new(2, 1);
+        gray.put_pixel(0, 0, Luma([200]));
+        gray.put_pixel(1, 0, Luma([100]));
+        let rgb = highbit_gray_to_rgb(&gray);
+        assert_eq!(rgb.get_pixel(0, 0).0, [200, 200, 200]);
+        assert_eq!(rgb.get_pixel(1, 0).0, [100, 100, 100]);
+    }
+
+    #[test]
+    fn output_png_embeds_icc_and_dpi() {
+        let dir = unique_tmp("icc");
+        std::fs::create_dir_all(&dir).unwrap();
+        let out = dir.join("o.png");
+        let icc = vec![9u8, 8, 7, 6, 5, 4, 3, 2, 1];
+        let img = RgbaImage::from_pixel(3, 2, Rgba([10, 20, 30, 255]));
+        write_output_png(&out, &img, Some(&icc), 300).unwrap();
+
+        let decoder = png::Decoder::new(std::fs::File::open(&out).unwrap());
+        let reader = decoder.read_info().unwrap();
+        let info = reader.info();
+        assert_eq!(
+            info.icc_profile.as_deref().map(<[u8]>::to_vec),
+            Some(icc.clone())
+        );
+        let dims = info.pixel_dims.expect("pHYs written");
+        assert_eq!(dims.unit, png::Unit::Meter);
+        // 300 dpi / 0.0254 m ~= 11811 ppu.
+        assert!((11_810..=11_812).contains(&dims.xppu));
+        assert_eq!(dims.xppu, dims.yppu);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn highbit_source_takes_fast_path() {
+        let dir = unique_tmp("i16");
+        std::fs::create_dir_all(&dir).unwrap();
+        let src = dir.join("scan.png");
+        let mut gray = ImageBuffer::<Luma<u16>, Vec<u16>>::new(6, 4);
+        for (i, px) in gray.pixels_mut().enumerate() {
+            *px = Luma([(i as u16) * 2_000]);
+        }
+        image::DynamicImage::ImageLuma16(gray).save(&src).unwrap();
+
+        let p = params(src.to_str().unwrap(), dir.to_str().unwrap());
+        let result = try_enhance(&p).unwrap().expect("cpu fast path");
+        assert_eq!(result.enhance_report.source_size, Some([6, 4]));
+        assert_eq!(result.enhance_report.output_size, Some([12, 8]));
+        assert!(Path::new(&result.enhanced_image).is_file());
+        let _ = std::fs::remove_dir_all(&dir);
     }
 }

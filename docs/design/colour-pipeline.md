@@ -1,10 +1,12 @@
 # Colour pipeline: working space, bit depth, and the manual / model split
 
-**Status:** Decided (architecture). **Not yet implemented** — see *Current
-state* vs *Target state* below. This document is the **single source of truth**
-for colour space, bit depth, and ICC handling across every card. Where a
-per-card spec still describes colour behaviour, it describes the *current*
-8-bit sRGB reality and points here for the target.
+**Status:** Decided (architecture). **Core landed (P1–P3):** the canonical
+surface is 16-bit ProPhoto for wide-gamut sources with a colour-managed sRGB
+egress; P4 (manual 16-bit file output) and P5 (Python parity) remain. See
+*Current state* below. This document is the **single source of truth** for
+colour space, bit depth, and ICC handling across every card. Where a per-card
+spec still describes colour behaviour, it describes the 8-bit sRGB the cards
+still consume and points here for the canonical model.
 
 ## Goal
 
@@ -90,40 +92,61 @@ shared loaders return and the in-process cards operate on.
 
 ## Current state (implemented today)
 
-The pipeline is **8-bit sRGB throughout** and does *not* yet implement the
-above. Accurate as of this document:
+The **canonical working surface is now 16-bit ProPhoto for wide-gamut sources**;
+the cards still consume 8-bit sRGB via a colour-managed egress. Accurate as of
+this document:
 
-- `studio_image::load_rgba` returns an **8-bit `RgbaImage`**; `image_buffer`
-  caches 8-bit RGBA / gray surfaces.
+- `studio_image::load_working` decodes into the canonical 16-bit `WorkingImage`
+  (P1 #188, P2 #189), tagging each surface with its *actual* space:
+  - **Profiled CMYK** (embedded CMYK ICC) → colour-managed straight into **16-bit
+    ProPhoto** (`cmyk_transform::cmyk_to_prophoto16`), so inks outside sRGB
+    survive the load instead of being clipped.
+  - **Plain images and unprofiled/naive CMYK** → **`Srgb`** (pure 8→16-bit
+    widen); no wide-gamut information to preserve.
+- `studio_image::load_rgba` still returns an **8-bit `RgbaImage`** for the cards
+  via `WorkingImage::to_srgb_rgba8` (the model/output egress, P3): it
+  colour-manages **ProPhoto → sRGB** when needed, and is an **exact bit-narrow**
+  for `Srgb` — so plain images and naive CMYK reach the cards **byte-for-byte**
+  (the pinned cross-language naive contract is untouched), and only profiled
+  CMYK changes (a small ΔE vs the old direct CMYK→sRGB, now routed through
+  ProPhoto). `image_buffer` caches the 8-bit egress result as before.
 - CMYK (TIFF / Adobe JPEG / YCCK JPEG / unmarked JPEG) is decoded raw + ICC by
-  `cmyk_decode`, then `cmyk_transform` converts it **to sRGB**; the source CMYK
-  profile is dropped (`icc_preserved: false`), matching the Python bridge.
-  ICC interpolation is tetrahedral (PR #185).
-- High-bit and float sources are tone-scaled **down to 8-bit** on load.
+  `cmyk_decode`. ICC interpolation is tetrahedral (PR #185). ProPhoto↔sRGB uses
+  the same moxcms engine (gamma-1.8 `new_pro_photo_rgb`); the source CMYK
+  profile is not re-embedded on the sRGB egress (`icc_preserved: false`).
+- High-bit and float sources are still tone-scaled to 8-bit at the egress; the
+  16-bit ProPhoto surface + its ICC are what the manual-path file output (P4)
+  will consume directly.
 - Outputs are 8-bit sRGB PNG. Non-CMYK RGB/RGBA/L/LA re-embed their own ICC
   (`icc_preserved: true`); CMYK does not.
 
 CMYK **decode coverage** is complete (16-bit + alpha TIFF #183, shared-loader
-routing #184, tetrahedral ICC #185, unmarked CMYK JPEG #186); what remains is
-the *working-space* change described here.
+routing #184, tetrahedral ICC #185, unmarked CMYK JPEG #186). The **wide-gamut
+working space** (P1–P3) has now landed; what remains is P4 (manual-path 16-bit
+file output) and P5 (Python-bridge parity).
 
 ## Phased implementation plan
 
-Design-first; each phase is an independently reviewable, CI-gated PR. No code
-has landed for P1+ yet.
+Design-first; each phase is an independently reviewable, CI-gated PR.
 
 - **P0 — CMYK decode coverage.** ✅ Done (#180–#186). Raw inks + ICC for every
   CMYK container, routed through the shared loader.
-- **P1 — canonical surface type (plumbing, no gamut change).** Introduce the
-  16-bit RGBA + ICC surface behind `load_rgba` / `image_buffer`, still carrying
-  **sRGB** primaries. Pure widening (8→16-bit) + ICC-carrying; behaviour
-  otherwise unchanged so it can land safely.
-- **P2 — switch canonical to wide-gamut.** Point the CMYK/ICC transforms (and
-  RGB source ingest) at the wide-gamut working space instead of sRGB.
-- **P3 — model egress conversion.** Add the canonical → sRGB colour-managed
-  convert at the local-model and API-model boundaries (API also → 8-bit).
+- **P1 — canonical surface type (plumbing, no gamut change).** ✅ Done (#188).
+  16-bit RGBA + ICC + `WorkingSpace` surface type; pure widening, behaviour
+  unchanged.
+- **P2 — thread the carrier through the loader (behaviour-preserving).** ✅ Done
+  (#189). `load_working` decodes into the 16-bit carrier (still `Srgb`) and
+  `load_rgba` narrows back, byte-for-byte identical.
+- **P2b+P3 — switch canonical to wide-gamut + model egress.** ✅ Done (this PR).
+  Profiled CMYK is colour-managed into **16-bit ProPhoto**; the card/model/output
+  boundary converts **ProPhoto → sRGB** (`to_srgb_rgba8`). `Srgb`-tagged sources
+  (plain images, naive CMYK) egress as an exact bit-narrow, so only genuinely
+  wide-gamut sources pay the round-trip and the byte-exact naive contract holds.
+  Shipped together because switching the space without the egress would
+  mis-colour every card output. TRC stays gamma-encoded (linear-light deferred).
 - **P4 — manual-path file output.** 16-bit PNG / TIFF encoders that embed the
-  ICC for the manual outputs (`icc_preserved: true`).
+  ICC for the manual outputs (`icc_preserved: true`), consuming the ProPhoto
+  surface directly.
 - **P5 — Python-bridge parity.** Reconcile / retire the Python path's 8-bit
   sRGB behaviour so the two engines agree on the new contract.
 

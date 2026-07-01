@@ -36,6 +36,7 @@ use moxcms::{
 };
 
 use super::cmyk_decode::RawCmyk;
+use super::working_image::widen;
 
 /// Convert raw CMYK samples to packed 8-bit sRGB (`width * height * 3` bytes, RGB)
 /// at the default Perceptual intent (mirroring Pillow's `profileToProfile`).
@@ -89,6 +90,51 @@ fn icc_cmyk_to_rgb(raw: &RawCmyk, icc: &[u8], intent: RenderingIntent) -> Option
     }
     let mut out = vec![0u8; pixels * 3];
     transform.transform(&raw.samples, &mut out).ok()?;
+    Some(out)
+}
+
+/// Colour-manage **profiled** CMYK straight into packed ProPhoto **16-bit RGB**
+/// (`width * height * 3` samples) for the canonical wide-gamut working surface.
+///
+/// Returns `None` when there is no usable embedded CMYK ICC profile (or the
+/// transform fails), so the caller keeps the byte-exact naive sRGB path for
+/// unprofiled CMYK — only sources that actually carry wide-gamut information are
+/// promoted to ProPhoto, and the naive cross-language contract is untouched.
+///
+/// Unlike [`cmyk_to_rgb8`] this targets ProPhoto (not sRGB), so CMYK inks that
+/// fall outside the sRGB gamut survive into the working surface instead of being
+/// clipped at load. Walks the CMYK A2B LUT with the same tetrahedral /
+/// high-precision settings as the sRGB path, at Perceptual intent.
+pub(crate) fn cmyk_to_prophoto16(raw: &RawCmyk) -> Option<Vec<u16>> {
+    let icc = raw.icc.as_deref()?;
+    icc_cmyk_to_prophoto16(raw, icc, RenderingIntent::Perceptual)
+}
+
+fn icc_cmyk_to_prophoto16(raw: &RawCmyk, icc: &[u8], intent: RenderingIntent) -> Option<Vec<u16>> {
+    let src = ColorProfile::new_from_slice(icc).ok()?;
+    if src.color_space != DataColorSpace::Cmyk {
+        return None;
+    }
+    let dst = ColorProfile::new_pro_photo_rgb();
+    let options = TransformOptions {
+        rendering_intent: intent,
+        interpolation_method: InterpolationMethod::Tetrahedral,
+        barycentric_weight_scale: BarycentricWeightScale::High,
+        ..TransformOptions::default()
+    };
+    let transform = src
+        .create_transform_16bit(Layout::Rgba, &dst, Layout::Rgb, options)
+        .ok()?;
+
+    let pixels = raw.width as usize * raw.height as usize;
+    if raw.samples.len() != pixels * 4 {
+        return None;
+    }
+    // The 16-bit transform consumes 0..=65535 samples; widen the 8-bit inks with
+    // the same replication `narrow` inverts, so no precision is lost on ingress.
+    let src16: Vec<u16> = raw.samples.iter().map(|&v| widen(v)).collect();
+    let mut out = vec![0u16; pixels * 3];
+    transform.transform(&src16, &mut out).ok()?;
     Some(out)
 }
 
@@ -180,6 +226,80 @@ mod tests {
         let samples = vec![200, 100, 50, 25];
         let out = cmyk_to_rgb8(&raw(1, samples.clone(), Some(b"not an icc profile".to_vec())));
         assert_eq!(out, naive_cmyk_to_rgb(&samples));
+    }
+
+    #[test]
+    fn prophoto_path_requires_a_cmyk_profile() {
+        // Only profiled CMYK is promoted to ProPhoto; unprofiled/invalid inputs
+        // return `None` so the caller keeps the byte-exact naive sRGB path.
+        let samples = vec![200, 100, 50, 25];
+        assert!(cmyk_to_prophoto16(&raw(1, samples.clone(), None)).is_none());
+        assert!(
+            cmyk_to_prophoto16(&raw(1, samples, Some(b"not an icc profile".to_vec()))).is_none()
+        );
+    }
+
+    #[test]
+    fn cmyk_to_prophoto16_profiled_egresses_near_srgb_reference() {
+        // Needs a system CMYK profile; skipped on runners without one (Linux CI).
+        let icc = match std::fs::read(SWOP_ICC) {
+            Ok(bytes) => bytes,
+            Err(_) => return,
+        };
+
+        let patches: [[u8; 4]; 7] = [
+            [0, 0, 0, 0],
+            [255, 0, 0, 0],
+            [0, 255, 0, 0],
+            [0, 0, 255, 0],
+            [0, 0, 0, 255],
+            [128, 64, 32, 16],
+            [200, 100, 50, 25],
+        ];
+        // The same littleCMS sRGB reference the direct path checks: routing CMYK
+        // through ProPhoto and back must still land near it.
+        let reference: [[u8; 3]; 7] = [
+            [255, 255, 255],
+            [0, 159, 215],
+            [232, 39, 131],
+            [255, 241, 20],
+            [24, 24, 23],
+            [135, 152, 171],
+            [78, 115, 140],
+        ];
+
+        let samples: Vec<u8> = patches.iter().flatten().copied().collect();
+        let wide = cmyk_to_prophoto16(&raw(patches.len() as u32, samples, Some(icc)))
+            .expect("profiled CMYK must reach ProPhoto");
+        assert_eq!(wide.len(), patches.len() * 3);
+
+        // No-ink stays white, full-K stays near black in ProPhoto's own encoding.
+        assert!(
+            wide[0] >= 55_000 && wide[1] >= 55_000 && wide[2] >= 55_000,
+            "no-ink must stay white in ProPhoto",
+        );
+        let black = &wide[4 * 3..5 * 3];
+        assert!(
+            black.iter().all(|&v| v <= 12_000),
+            "full-K must stay near black in ProPhoto",
+        );
+
+        // Egress ProPhoto -> sRGB and compare to the littleCMS reference. The
+        // double transform (CMYK->ProPhoto->sRGB) widens the tolerance vs the
+        // direct CMYK->sRGB path.
+        let srgb = crate::studio::working_image::prophoto16_rgb_to_srgb8(&wide, patches.len())
+            .expect("ProPhoto -> sRGB egress");
+        const TOL: i32 = 40;
+        for (i, expected) in reference.iter().enumerate() {
+            for ch in 0..3 {
+                let got = srgb[i * 3 + ch] as i32;
+                let want = expected[ch] as i32;
+                assert!(
+                    (got - want).abs() <= TOL,
+                    "patch {i} ch {ch}: prophoto-egress {got} vs littleCMS {want} exceeds ±{TOL}"
+                );
+            }
+        }
     }
 
     #[test]

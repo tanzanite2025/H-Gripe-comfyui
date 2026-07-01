@@ -58,36 +58,74 @@ pub(crate) fn cmyk_to_rgb8_with_intent(raw: &RawCmyk, intent: RenderingIntent) -
     naive_cmyk_to_rgb(&raw.samples)
 }
 
+/// Bit depth of a colour-managed CMYK egress. Selects the *validated* moxcms
+/// transform options for that depth (see [`cmyk_transform_options`]).
+#[derive(Clone, Copy)]
+enum TransformDepth {
+    /// 8-bit sRGB egress.
+    Bit8,
+    /// 16-bit ProPhoto egress.
+    Bit16,
+}
+
+/// The single source of truth for how the CMYK A2B LUT is walked. Both the 8-bit
+/// sRGB and 16-bit ProPhoto paths build their `TransformOptions` here so a
+/// depth-specific setting can't silently drift between two copy-pasted structs —
+/// that drift is exactly what shipped the moxcms `High`-weight collapse.
+///
+/// littleCMS/lcms2 walk the LUT with **tetrahedral** interpolation, so both
+/// depths pin that (moxcms defaults to quadlinear). Barycentric weights differ
+/// **by necessity**: `High` tracks littleCMS on the 8-bit path, but moxcms
+/// 0.8.1's `High` weights are broken on the 16-bit LUT path — they collapse every
+/// CMYK input to white (full-K egresses as paper white instead of near-black) —
+/// so the 16-bit path keeps moxcms's default (`Low`) weights. There is no
+/// black-point compensation: Pillow's `profileToProfile` default is `flags=0`
+/// (BPC off) and moxcms 0.8.1 does not expose it.
+fn cmyk_transform_options(intent: RenderingIntent, depth: TransformDepth) -> TransformOptions {
+    let mut options = TransformOptions {
+        rendering_intent: intent,
+        interpolation_method: InterpolationMethod::Tetrahedral,
+        ..TransformOptions::default()
+    };
+    match depth {
+        TransformDepth::Bit8 => {
+            options.barycentric_weight_scale = BarycentricWeightScale::High;
+        }
+        // Bit16 keeps moxcms's default (`Low`) weights: `High` is broken here.
+        TransformDepth::Bit16 => {}
+    }
+    options
+}
+
+/// Parse an embedded ICC profile and confirm it is a CMYK device profile — the
+/// shared prologue for every colour-managed CMYK path. Returns `None` (so the
+/// caller falls back to naive) when it can't be parsed or isn't CMYK.
+fn parse_cmyk_profile(icc: &[u8]) -> Option<ColorProfile> {
+    let src = ColorProfile::new_from_slice(icc).ok()?;
+    (src.color_space == DataColorSpace::Cmyk).then_some(src)
+}
+
+/// The pixel count for `raw`, or `None` if the buffer isn't exactly 4 packed
+/// channels per pixel (the ink layout every CMYK transform below assumes).
+fn cmyk_pixel_count(raw: &RawCmyk) -> Option<usize> {
+    let pixels = raw.width as usize * raw.height as usize;
+    (raw.samples.len() == pixels * 4).then_some(pixels)
+}
+
 /// Apply the embedded CMYK ICC profile to reach sRGB. Returns `None` (so the
 /// caller falls back to the naive formula) if the profile is not CMYK, cannot be
 /// parsed, or the transform fails.
 fn icc_cmyk_to_rgb(raw: &RawCmyk, icc: &[u8], intent: RenderingIntent) -> Option<Vec<u8>> {
-    let src = ColorProfile::new_from_slice(icc).ok()?;
-    if src.color_space != DataColorSpace::Cmyk {
-        return None;
-    }
+    let src = parse_cmyk_profile(icc)?;
     let dst = ColorProfile::new_srgb();
-    let options = TransformOptions {
-        rendering_intent: intent,
-        // littleCMS/lcms2 walk the CMYK A2B LUT with tetrahedral interpolation;
-        // moxcms defaults to quadlinear, so pin tetrahedral + high-precision
-        // barycentric weights to track the Python (littleCMS) reference. There
-        // is no black-point compensation: Pillow's `profileToProfile` default is
-        // `flags=0` (BPC off) and moxcms 0.8.1 does not expose it.
-        interpolation_method: InterpolationMethod::Tetrahedral,
-        barycentric_weight_scale: BarycentricWeightScale::High,
-        ..TransformOptions::default()
-    };
+    let options = cmyk_transform_options(intent, TransformDepth::Bit8);
     // A CMYK 4-channel buffer uses the same packed layout as RGBA; the source
     // profile's colour space marks it as ink, so `Layout::Rgba` is correct here.
     let transform = src
         .create_transform_8bit(Layout::Rgba, &dst, Layout::Rgb, options)
         .ok()?;
 
-    let pixels = raw.width as usize * raw.height as usize;
-    if raw.samples.len() != pixels * 4 {
-        return None;
-    }
+    let pixels = cmyk_pixel_count(raw)?;
     let mut out = vec![0u8; pixels * 3];
     transform.transform(&raw.samples, &mut out).ok()?;
     Some(out)
@@ -111,29 +149,14 @@ pub(crate) fn cmyk_to_prophoto16(raw: &RawCmyk) -> Option<Vec<u16>> {
 }
 
 fn icc_cmyk_to_prophoto16(raw: &RawCmyk, icc: &[u8], intent: RenderingIntent) -> Option<Vec<u16>> {
-    let src = ColorProfile::new_from_slice(icc).ok()?;
-    if src.color_space != DataColorSpace::Cmyk {
-        return None;
-    }
+    let src = parse_cmyk_profile(icc)?;
     let dst = ColorProfile::new_pro_photo_rgb();
-    let options = TransformOptions {
-        rendering_intent: intent,
-        // Tetrahedral tracks littleCMS like the 8-bit sRGB path, but keep the
-        // default (`Low`) barycentric weights here: moxcms 0.8.1's `High`-precision
-        // weights are broken on the 16-bit LUT path and collapse every CMYK input
-        // to white (full-K would egress as paper white instead of near-black). The
-        // 8-bit sRGB transform is unaffected, so it keeps `High`.
-        interpolation_method: InterpolationMethod::Tetrahedral,
-        ..TransformOptions::default()
-    };
+    let options = cmyk_transform_options(intent, TransformDepth::Bit16);
     let transform = src
         .create_transform_16bit(Layout::Rgba, &dst, Layout::Rgb, options)
         .ok()?;
 
-    let pixels = raw.width as usize * raw.height as usize;
-    if raw.samples.len() != pixels * 4 {
-        return None;
-    }
+    let pixels = cmyk_pixel_count(raw)?;
     // The 16-bit transform consumes 0..=65535 samples; widen the 8-bit inks with
     // the same replication `narrow` inverts, so no precision is lost on ingress.
     let src16: Vec<u16> = raw.samples.iter().map(|&v| widen(v)).collect();

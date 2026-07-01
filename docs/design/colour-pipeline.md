@@ -164,7 +164,13 @@ Design-first; each phase is an independently reviewable, CI-gated PR.
     loader recognises on reload and rebuilds at full precision. The
     auto-subject segmenter (model ingress) and the thumbnail fallback keep the
     sRGB egress.
-  - **P4c:** 16-bit TIFF (with ICC) encoder.
+  - **P4c (landed):** 16-bit TIFF (with ICC) encoder. `write_working_output`
+    dispatches on the output path's extension — `.tif` / `.tiff` →
+    `write_working_tiff`, everything else → `write_working_png` — and both
+    honour the space tag identically (an `Srgb` surface writes the exact 8-bit
+    narrow, a `ProPhoto` surface writes 16-bit RGBA with the ProPhoto profile
+    embedded in the TIFF `IccProfile` (34675) tag, which the loader recognises
+    on reload). crop gains a `format` param (`png` default / `tiff`).
   - **P4d:** subject-mask / matte / edge-refine chain (16-bit cutouts; masks
     stay 8-bit gray; model ingress keeps the sRGB egress).
   - **P4e:** remaining manual cards + docs close-out.

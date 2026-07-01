@@ -353,12 +353,13 @@ fn materialize(entry: &Entry) {
         DecodedImage::Rgba { image, .. } => {
             let _ = image.save(path);
         }
-        // Same encoder the producing card would have used on a direct write:
-        // an Srgb surface lands as the exact 8-bit narrow, a ProPhoto surface
-        // as 16-bit PNG with the ProPhoto profile embedded, so a deferred
-        // output materialises byte-identical to its non-deferred twin.
+        // Same encoder the producing card would have used on a direct write,
+        // keyed off the deferred path's extension (PNG or TIFF): an Srgb surface
+        // lands as the exact 8-bit narrow, a ProPhoto surface as 16-bit with the
+        // ProPhoto profile embedded, so a deferred output materialises
+        // byte-identical to its non-deferred twin.
         DecodedImage::Working { image, .. } => {
-            let _ = super::studio_image::write_working_png(path, image);
+            let _ = super::studio_image::write_working_output(path, image);
         }
         DecodedImage::Gray(image) => {
             let _ = image.save(path);

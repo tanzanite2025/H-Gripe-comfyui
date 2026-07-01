@@ -165,10 +165,19 @@ pub(super) fn execute_studio_crop(
     };
     studio_reject_unsafe_basename(&base)?;
 
+    // The manual output carrier: `png` (default) or 16-bit `tiff`. Both encoders
+    // honour the space tag identically — a wide-gamut ProPhoto surface lands as
+    // 16-bit with the profile embedded, a plain Srgb surface as the exact 8-bit
+    // narrow — so the choice is purely which container the manual pipeline wants.
+    let ext = match param_or(node, "format", "png").as_str() {
+        "tiff" => "tiff",
+        _ => "png",
+    };
+
     let dir = PathBuf::from(&output_dir);
     std::fs::create_dir_all(&dir)
         .map_err(|err| format!("failed to create output dir {}: {err}", dir.display()))?;
-    let out_path = dir.join(format!("{base}.png"));
+    let out_path = dir.join(format!("{base}.{ext}"));
     // When the `image` output feeds only other in-process compute cards, the
     // file is never read: the consumer loads the decoded surface straight from
     // the buffer. In that case skip the PNG encode+write and publish a
@@ -181,7 +190,7 @@ pub(super) fn execute_studio_crop(
     if skip_write_ports.contains("image") && !out_path.exists() {
         image_buffer::publish_working_deferred(&out_path, &cropped, studio_image::png_output_meta());
     } else {
-        studio_image::write_working_png(&out_path, &cropped)?;
+        studio_image::write_working_output(&out_path, &cropped)?;
         // Hand the decoded crop to the next compute card in memory so it skips
         // the PNG re-decode; the file on disk stays the source of truth for
         // everyone else (preview, Python-bridge cards, export).
@@ -527,6 +536,66 @@ mod tests {
         // The next manual card reads back the exact 16-bit crop window: for
         // each pixel of the 3x2 window at (1,1), all four channels match the
         // source samples — no 8-bit round-trip anywhere in the chain.
+        let loaded = studio_image::load_working(&out_path, 0).unwrap();
+        assert_eq!(loaded.image.space, WorkingSpace::ProPhoto);
+        let mut expected = Vec::new();
+        for y in 1..3usize {
+            let start = (y * 6 + 1) * 4;
+            expected.extend_from_slice(&source.pixels[start..start + 3 * 4]);
+        }
+        assert_eq!(loaded.image.pixels, expected);
+
+        let _ = std::fs::remove_file(&src);
+        let _ = std::fs::remove_file(&out_path);
+    }
+
+    #[test]
+    fn a_tiff_format_crops_to_a_16bit_prophoto_tiff() {
+        use super::super::working_image::{self, WorkingImage, WorkingSpace};
+
+        let dir = std::env::temp_dir().join(format!(
+            "hgripe_crop_tiff_{}_{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        std::fs::create_dir_all(&dir).unwrap();
+
+        let src = dir.join("wide_src.png");
+        let source = WorkingImage {
+            width: 6,
+            height: 4,
+            pixels: (0..6 * 4 * 4)
+                .map(|i| (i as u16).wrapping_mul(2_741).wrapping_add(11))
+                .collect(),
+            space: WorkingSpace::ProPhoto,
+            icc: Some(working_image::prophoto_icc().to_vec()),
+        };
+        studio_image::write_working_png(&src, &source).unwrap();
+
+        let node = StudioGraphNode {
+            id: "crop-tiff".to_string(),
+            kind: "crop".to_string(),
+            params: BTreeMap::from([
+                ("mode".to_string(), json!("manual")),
+                ("crop_box".to_string(), json!([1, 1, 3, 2])),
+                ("format".to_string(), json!("tiff")),
+                ("output_dir".to_string(), json!(dir.to_string_lossy())),
+                ("output_name".to_string(), json!("wide_out")),
+            ]),
+        };
+        let inputs = BTreeMap::from([("image".to_string(), json!(src.to_string_lossy()))]);
+        let out = execute_studio_crop(&node, &inputs, &HashSet::new()).unwrap();
+        // The emitted path carries the tiff extension, and the file exists.
+        let emitted = out.get("image").and_then(|v| v.as_str()).unwrap();
+        let out_path = dir.join("wide_out.tiff");
+        assert_eq!(emitted, out_path.to_string_lossy());
+        assert!(out_path.exists());
+
+        // The next manual card reads back the exact 16-bit crop window off the
+        // TIFF — same wide-gamut surface as the PNG carrier, no 8-bit hop.
         let loaded = studio_image::load_working(&out_path, 0).unwrap();
         assert_eq!(loaded.image.space, WorkingSpace::ProPhoto);
         let mut expected = Vec::new();

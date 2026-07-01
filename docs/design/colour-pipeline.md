@@ -54,7 +54,7 @@ conversion on the model lanes.
 | --- | --- | --- |
 | Bit depth | **16-bit** per channel, both paths | Removes 8-bit banding/quantisation in grading; keeps model inputs precise. Unifies the pipeline on one depth (no dual-depth plumbing). |
 | Colour | **Wide-gamut RGB** with an ICC tag carried alongside the pixels | Contains the CMYK gamut so print colours survive into grading. |
-| Working primaries | **Proposed: ProPhoto RGB (ROMM)** | Fully contains coated-stock CMYK; at 16-bit its wide primaries do not band. *(Open decision — Adobe RGB (1998) is the conservative alternative; see Open decisions.)* |
+| Working primaries | **ProPhoto RGB (ROMM)** — decided | Fully contains coated-stock CMYK; at 16-bit its wide primaries do not band. (Adobe RGB (1998) was the conservative alternative; ProPhoto chosen for maximum gamut coverage.) |
 | Alpha | Straight (un-premultiplied) 16-bit alpha track, as today | Matches the current independent-alpha handling. |
 
 The canonical surface replaces today's `RgbaImage` (8-bit) as the type the
@@ -129,8 +129,8 @@ has landed for P1+ yet.
 
 ## Open decisions
 
-1. **Working-space primaries:** ProPhoto RGB (ROMM, widest — recommended) vs
-   Adobe RGB (1998) (conservative, print-standard). Affects clipping headroom.
+1. **Working-space primaries:** ~~ProPhoto RGB vs Adobe RGB (1998)~~ —
+   **decided: ProPhoto RGB (ROMM)** for maximum gamut coverage.
 2. **TRC:** gamma-encoded working space (minimal behavioural change from today)
    vs linear-light (more correct resampling/compositing math, but changes
    results and cost). Recommendation: keep gamma-encoded for P1–P2, revisit

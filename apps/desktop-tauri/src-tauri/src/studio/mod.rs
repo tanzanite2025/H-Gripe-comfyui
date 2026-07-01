@@ -58,6 +58,7 @@ mod subject_segment;
 pub(crate) mod torch_worker;
 pub(crate) mod video_engine;
 pub(crate) mod video_worker;
+mod working_image;
 
 // Glob re-exports so the original `crate::studio::*` command paths keep
 // resolving from `main.rs`'s `generate_handler!`. A plain `use exec::cmd` only

@@ -9,17 +9,22 @@
 //! - **JPEG** via `zune-jpeg`, pinning the *output* colourspace to `CMYK` so the
 //!   decoder hands back the stored ink samples unconverted (zune copies the four
 //!   channels through when input and output colourspace both equal CMYK). Only
-//!   sources whose *input* colourspace is CMYK are taken; YCCK / Adobe-RGB JPEGs
-//!   (which zune cannot pass through as CMYK) return `None` and stay on the
-//!   Python fallback.
+//!   **Adobe** CMYK JPEGs (an APP14 marker with transform code 0) are taken:
+//!   Adobe stores *inverted* ink (0 = full ink), which libjpeg/PIL normalise on
+//!   load, so we apply `255 - v` here to land in the device direction (0 = no
+//!   ink) that matches TIFF Separated and the `cmyk_transform` input contract.
+//!   YCCK JPEGs (transform 2; zune reports a non-CMYK input colourspace) and
+//!   CMYK JPEGs without an Adobe marker return `None` and stay on the Python
+//!   fallback — the former loses the embedded ICC through zune's YCCK->RGB, and
+//!   the latter is too rare to generate and validate a round-trip for.
 //! - **TIFF** via the `tiff` crate when the photometric interpretation is CMYK
-//!   (8-bit, 4 samples/pixel).
+//!   (8-bit, 4 samples/pixel). TIFF Separated is already 0 = no ink, so no
+//!   inversion is applied.
 //!
-//! Wired into `try_enhance` via `cmyk_transform::cmyk_to_rgb8` for **TIFF** CMYK
-//! (step c3); CMYK JPEGs still defer to Python (the caller gates on container).
-//! The Adobe-APP14 inverted-ink convention and the CMS transform are *not*
-//! handled here — this module only extracts the samples faithfully; the CMS
-//! transform lives in `cmyk_transform`.
+//! Wired into `try_enhance` via `cmyk_transform::cmyk_to_rgb8` for both **TIFF**
+//! and **Adobe CMYK JPEG** sources (step c3). The samples this module returns
+//! are always in the device direction (0 = no ink); the CMS / naive transform
+//! lives in `cmyk_transform`.
 
 use std::path::Path;
 
@@ -31,12 +36,13 @@ use zune_core::colorspace::ColorSpace;
 use zune_core::options::DecoderOptions;
 use zune_jpeg::JpegDecoder;
 
-/// Raw, unconverted CMYK samples plus the embedded ICC profile (if any).
+/// Raw CMYK samples plus the embedded ICC profile (if any).
 ///
 /// `samples` is tightly packed, 4 bytes per pixel in C, M, Y, K order, row-major
-/// (`width * height * 4` bytes). The values are exactly what the container's
-/// decoder produced — no colour conversion and no Adobe inversion has been
-/// applied (that is resolved by the later CMS step).
+/// (`width * height * 4` bytes). No colour conversion has been applied, but the
+/// samples are normalised to the device direction (0 = no ink): a TIFF is taken
+/// as-is and an Adobe CMYK JPEG has its stored inversion undone here, so the
+/// later CMS / naive transform always sees the same convention.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct RawCmyk {
     pub(crate) width: u32,
@@ -53,10 +59,11 @@ enum Container {
 /// Attempt to read raw CMYK samples from `path`, guarding the decode size first.
 ///
 /// Returns:
-/// - `Ok(Some(raw))` — the source is a CMYK JPEG or CMYK TIFF we could decode.
+/// - `Ok(Some(raw))` — the source is an Adobe CMYK JPEG or a CMYK TIFF we could
+///   decode, returned in the device direction (0 = no ink).
 /// - `Ok(None)` — the source is not a container/colour we handle here (an RGB
-///   JPEG, a YCCK JPEG, a non-CMYK TIFF, or any other format). The caller should
-///   fall back to the existing path.
+///   JPEG, a YCCK JPEG, a non-Adobe CMYK JPEG, a non-CMYK TIFF, or any other
+///   format). The caller should fall back to the existing path.
 /// - `Err(_)` — the source *is* a CMYK container we recognise but decoding it
 ///   failed (truncated file, oversize, unsupported bit depth, ...).
 pub(crate) fn decode_cmyk(path: &Path, max_pixels: u64) -> Result<Option<RawCmyk>, String> {
@@ -107,6 +114,14 @@ fn decode_cmyk_jpeg(bytes: &[u8], max_pixels: u64) -> Result<Option<RawCmyk>, St
         return Ok(None);
     }
 
+    // Only Adobe CMYK JPEGs (APP14 transform 0) are handled: their stored ink is
+    // inverted (0 = full ink) and we know how to normalise it. A CMYK JPEG with
+    // no Adobe marker is too rare to validate a faithful round-trip for, so it
+    // defers to the colour-managed Python bridge.
+    if adobe_transform(bytes) != Some(0) {
+        return Ok(None);
+    }
+
     let info = decoder
         .info()
         .ok_or_else(|| "JPEG headers decoded but info() was empty".to_string())?;
@@ -115,11 +130,68 @@ fn decode_cmyk_jpeg(bytes: &[u8], max_pixels: u64) -> Result<Option<RawCmyk>, St
     guard(u64::from(width), u64::from(height), max_pixels)?;
 
     let icc = decoder.icc_profile();
-    let samples = decoder
+    let mut samples = decoder
         .decode()
         .map_err(|err| format!("failed to decode CMYK JPEG: {err:?}"))?;
 
+    // Undo the Adobe inversion so the samples match the device direction
+    // (0 = no ink) that TIFF Separated and `cmyk_transform` expect.
+    for v in &mut samples {
+        *v = 255 - *v;
+    }
+
     finish(width, height, samples, icc, "JPEG")
+}
+
+/// Scan a JPEG's marker segments for the Adobe APP14 marker and return its
+/// colour-transform code (`0` = unknown/CMYK-or-RGB, `1` = YCbCr, `2` = YCCK).
+/// Returns `None` when there is no Adobe APP14 marker. Parsing stops at
+/// start-of-scan; the marker always precedes it.
+fn adobe_transform(bytes: &[u8]) -> Option<u8> {
+    // Skip the SOI (`FF D8`).
+    let mut i = 2usize;
+    while i + 3 < bytes.len() {
+        if bytes[i] != 0xFF {
+            i += 1;
+            continue;
+        }
+        let marker = bytes[i + 1];
+        // A run of 0xFF is fill/padding before the real marker byte; step over
+        // one 0xFF and re-read.
+        if marker == 0xFF {
+            i += 1;
+            continue;
+        }
+        // Standalone markers (SOI/EOI, RSTn, TEM) carry no length payload.
+        if marker == 0xD8 || marker == 0xD9 || (0xD0..=0xD7).contains(&marker) || marker == 0x01 {
+            i += 2;
+            continue;
+        }
+        // Start-of-scan: entropy-coded data follows; the Adobe marker, if any,
+        // has already been seen.
+        if marker == 0xDA {
+            return None;
+        }
+        let seg_len = usize::from(u16::from_be_bytes([bytes[i + 2], bytes[i + 3]]));
+        if seg_len < 2 {
+            return None;
+        }
+        let payload_start = i + 4;
+        let payload_end = i + 2 + seg_len;
+        if payload_end > bytes.len() {
+            return None;
+        }
+        // APP14 with an "Adobe" identifier: 5-byte tag, 2+2+2 version/flags, then
+        // the 1-byte transform code (14 bytes total).
+        if marker == 0xEE {
+            let payload = &bytes[payload_start..payload_end];
+            if payload.len() >= 12 && payload.starts_with(b"Adobe") {
+                return Some(payload[11]);
+            }
+        }
+        i = payload_end;
+    }
+    None
 }
 
 fn decode_cmyk_tiff(bytes: &[u8], max_pixels: u64) -> Result<Option<RawCmyk>, String> {
@@ -260,5 +332,104 @@ mod tests {
         let err = decode_cmyk(&path, 1).unwrap_err();
         assert!(err.contains("too large to decode safely"), "{err}");
         let _ = std::fs::remove_file(&path);
+    }
+
+    // A PIL-generated 32x32 Adobe CMYK JPEG (APP14 transform 0), a 2x2 grid of
+    // flat ink tiles: top-left no-ink, top-right full-cyan, bottom-left full-K,
+    // bottom-right mixed (128, 64, 32, 16). q100 + no chroma subsampling keeps
+    // the tiles near-lossless. See `scripts/gen_cmyk_jpeg_fixture.py`.
+    const ADOBE_CMYK_JPEG: &[u8] = include_bytes!("../../tests/fixtures/cmyk_adobe_app14.jpg");
+
+    // Tile-centre (x, y) samples, well inside each 16x16 tile so JPEG block
+    // edges don't bleed in, paired with the device inks PIL round-trips them to.
+    const TILE_CENTRES: [((u32, u32), [u8; 4]); 4] = [
+        ((8, 8), [0, 0, 0, 0]),
+        ((24, 8), [255, 0, 0, 0]),
+        ((8, 24), [0, 0, 0, 255]),
+        ((24, 24), [128, 64, 32, 16]),
+    ];
+
+    fn sample_at(raw: &RawCmyk, x: u32, y: u32) -> [u8; 4] {
+        let idx = (y as usize * raw.width as usize + x as usize) * 4;
+        [
+            raw.samples[idx],
+            raw.samples[idx + 1],
+            raw.samples[idx + 2],
+            raw.samples[idx + 3],
+        ]
+    }
+
+    #[test]
+    fn adobe_transform_reads_fixture_marker() {
+        assert_eq!(adobe_transform(ADOBE_CMYK_JPEG), Some(0));
+    }
+
+    #[test]
+    fn adobe_transform_absent_without_app14() {
+        // A minimal JPEG-ish stream (SOI, an APP0/JFIF segment, then SOS) with
+        // no Adobe APP14 marker must report no transform.
+        let bytes = [
+            0xFF, 0xD8, // SOI
+            0xFF, 0xE0, 0x00, 0x04, 0x00, 0x00, // APP0, len 4
+            0xFF, 0xDA, 0x00, 0x02, // SOS
+        ];
+        assert_eq!(adobe_transform(&bytes), None);
+    }
+
+    #[test]
+    fn decodes_adobe_cmyk_jpeg_inverted_to_device_direction() {
+        let raw = decode_cmyk_jpeg(ADOBE_CMYK_JPEG, DEFAULT_MAX_DECODE_PIXELS)
+            .unwrap()
+            .expect("an Adobe CMYK JPEG should decode to raw CMYK samples");
+        assert_eq!((raw.width, raw.height), (32, 32));
+        assert_eq!(raw.icc, None);
+
+        // After undoing the Adobe inversion, the tile centres land back on the
+        // device inks PIL stores (0 = no ink). A missing / wrong inversion would
+        // read as 255 - ink and blow past this tolerance.
+        for ((x, y), expected) in TILE_CENTRES {
+            let got = sample_at(&raw, x, y);
+            for ch in 0..4 {
+                assert!(
+                    (i32::from(got[ch]) - i32::from(expected[ch])).abs() <= 4,
+                    "tile ({x},{y}) ch {ch}: {} vs {} (device ink)",
+                    got[ch],
+                    expected[ch]
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn adobe_cmyk_jpeg_transforms_to_pil_rgb() {
+        use crate::studio::cmyk_transform::cmyk_to_rgb8;
+
+        let raw = decode_cmyk_jpeg(ADOBE_CMYK_JPEG, DEFAULT_MAX_DECODE_PIXELS)
+            .unwrap()
+            .expect("an Adobe CMYK JPEG should decode");
+        let rgb = cmyk_to_rgb8(&raw);
+        assert_eq!(rgb.len(), 32 * 32 * 3);
+
+        // sRGB that Pillow's `Image.open(fixture).convert("RGB")` produces at the
+        // same tile centres (naive path; the fixture carries no ICC). The cross-
+        // decoder IDCT drift is bounded, so compare within a small tolerance --
+        // an inversion-direction bug fails this by a wide margin.
+        let expected: [((u32, u32), [u8; 3]); 4] = [
+            ((8, 8), [255, 255, 255]),
+            ((24, 8), [0, 255, 255]),
+            ((8, 24), [0, 0, 0]),
+            ((24, 24), [119, 179, 209]),
+        ];
+        for ((x, y), want) in expected {
+            let idx = (y as usize * 32 + x as usize) * 3;
+            for ch in 0..3 {
+                let got = i32::from(rgb[idx + ch]);
+                assert!(
+                    (got - i32::from(want[ch])).abs() <= 6,
+                    "tile ({x},{y}) ch {ch}: rust {got} vs PIL {}",
+                    want[ch]
+                );
+            }
+        }
     }
 }

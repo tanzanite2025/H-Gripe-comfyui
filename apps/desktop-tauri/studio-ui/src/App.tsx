@@ -46,7 +46,8 @@ import { useStudioFileController } from "./editor/useStudioFileController";
 import { loadPersistedGraph } from "./editor/persist";
 import { defaultParams } from "./graph/nodeSpecs";
 import { topoLevels, validateGraph } from "./runtime/dag";
-import { isTauri, listenFileDrop } from "./bridge/tauri";
+import { isTauri, listenFileDrop, primeIngest } from "./bridge/tauri";
+import { startIngestListener } from "./runtime/ingestStore";
 import { useT } from "./i18n";
 
 function makeNode(id: string, kind: string, x: number, y: number, params?: Record<string, unknown>): Node {
@@ -266,6 +267,13 @@ function Studio({ onToggleLang }: { onToggleLang: () => void }) {
       }));
       setNodes((ns) => [...ns.map((n) => ({ ...n, selected: false })), ...created]);
       setSelectedId(created[created.length - 1]?.id ?? null);
+      // Warm the backend ingestion pipeline for the dropped images: it probes
+      // header dims and decodes thumbnails off the UI thread, pushing both to
+      // the cards over `ingest://progress`. Fire-and-forget; cards still have
+      // their own probe/lazy-thumbnail fallback.
+      void primeIngest(
+        media.filter((m) => m.kind === "imageSource").map((m) => m.path),
+      );
       const images = media.filter((m) => m.kind === "imageSource").length;
       const videos = media.length - images;
       const note =
@@ -282,6 +290,8 @@ function Studio({ onToggleLang }: { onToggleLang: () => void }) {
   // Subscribe to the Tauri webview file-drop (desktop only; browser preview has
   // no native drag-drop paths). Re-subscribes if the handler identity changes.
   useEffect(() => {
+    // Register the shared ingest-progress sink before any drop can fire.
+    startIngestListener();
     let unlisten: (() => void) | null = null;
     let disposed = false;
     void listenFileDrop((e) => ingestDroppedFiles(e.paths, e.position)).then((fn) => {

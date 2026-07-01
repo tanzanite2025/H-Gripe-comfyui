@@ -88,6 +88,59 @@ export async function probeImageDims(path: string): Promise<ImageDims | null> {
   }
 }
 
+// Fields are snake_case to match the Rust `IngestEvent` serialization.
+export interface IngestProgress {
+  /** Absolute source path this update is about. */
+  path: string;
+  /** `"dims"` (header W×H known), `"thumb"` (thumbnail ready), or `"error"`. */
+  phase: "dims" | "thumb" | "error";
+  width?: number;
+  height?: number;
+  /** `data:` URL of the ready thumbnail (only on the `"thumb"` phase). */
+  data_url?: string;
+  cache_path?: string;
+  source_hash?: string;
+  mime?: string;
+  /** Failure message (only on the `"error"` phase). */
+  error?: string;
+}
+
+/**
+ * Warm the backend ingestion pipeline for freshly dropped image `paths`. This
+ * fires and returns immediately: the backend probes header dimensions and
+ * generates thumbnails off the UI thread, pushing {@link IngestProgress}
+ * updates over {@link listenIngestProgress}. Cards render `W×H` from the pushed
+ * `dims` and swap in the thumbnail from the pushed `thumb`, so ingestion never
+ * touches the React main thread. No-op outside Tauri (browser preview).
+ */
+export async function primeIngest(paths: string[], size = 256, dpr?: number): Promise<void> {
+  const invoke = tauriInvoke();
+  if (!invoke || paths.length === 0) return;
+  try {
+    await invoke("prime_ingest", {
+      paths,
+      size,
+      dpr: dpr ?? window.devicePixelRatio ?? 1,
+    });
+  } catch {
+    /* best-effort warmup; cards still lazy-load on their own */
+  }
+}
+
+/**
+ * Subscribe to backend ingestion progress ({@link primeIngest}). Returns `null`
+ * outside Tauri.
+ */
+export async function listenIngestProgress(
+  cb: (event: IngestProgress) => void,
+): Promise<UnlistenFn | null> {
+  const listen = tauriListen();
+  if (!listen) return null;
+  return listen<IngestProgress>("ingest://progress", (event) => {
+    if (event.payload?.path) cb(event.payload);
+  });
+}
+
 export interface PickFileOptions {
   title?: string;
   /** Display name for the extension filter (e.g. "Images"). */

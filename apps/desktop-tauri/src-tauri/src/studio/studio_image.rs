@@ -155,26 +155,28 @@ pub(crate) fn load_rgba(path: &Path, max_pixels: u64) -> Result<LoadedRgba, Stri
     }
     let LoadedWorking { image, meta } = load_working(path, max_pixels)?;
     Ok(LoadedRgba {
-        image: image.to_rgba8(),
+        image: image.to_srgb_rgba8(),
         meta,
     })
 }
 
 /// Decode a source into the canonical 16-bit [`WorkingImage`] carrier (the
 /// cold, un-cached path — [`load_rgba`] handles the in-process cache before
-/// calling here). Phase 2 keeps the surface in the `Srgb` working space and
-/// only widens 8→16-bit (no gamut change), so narrowing it back reproduces the
-/// previous 8-bit result exactly; the carrier additionally holds the source ICC
-/// so later phases can consume it instead of dropping it.
+/// calling here). Each surface is tagged with its *actual* space: profiled
+/// (wide-gamut) CMYK is colour-managed straight into 16-bit `ProPhoto`, while
+/// plain images and unprofiled/naive CMYK stay `Srgb` (a pure 8→16-bit widen).
+/// [`load_rgba`]'s [`WorkingImage::to_srgb_rgba8`] egress converts `ProPhoto`
+/// down to sRGB but leaves `Srgb` an exact bit-narrow, so only sources that
+/// truly carry wide-gamut information change at the card boundary.
 pub(crate) fn load_working(path: &Path, max_pixels: u64) -> Result<LoadedWorking, String> {
     // CMYK-family sources (Adobe CMYK / YCCK JPEG, CMYK TIFF): the `image` crate
     // would decode them to RGB and silently discard the embedded ICC, so every
     // native card that loaded through here (crop, subject mask, ...) got
     // colour-shifted pixels. Decode the raw inks + profile ourselves and
-    // colour-manage to sRGB, mirroring the enhance fast path. `decode_cmyk`
-    // returns `None` for non-CMYK sources and the CMYK shapes it won't take
-    // faithfully (an unmarked CMYK JPEG); both, and any decode error, fall
-    // through to the generic decode below (unchanged behaviour).
+    // colour-manage into the canonical surface (ProPhoto for profiled CMYK, sRGB
+    // for naive). `decode_cmyk` returns `None` for non-CMYK sources and the CMYK
+    // shapes it won't take faithfully (an unmarked CMYK JPEG); both, and any
+    // decode error, fall through to the generic decode below (unchanged).
     if let Ok(Some(raw)) = super::cmyk_decode::decode_cmyk(path, max_pixels) {
         if let Some(loaded) = cmyk_to_working(&raw) {
             return Ok(loaded);
@@ -187,16 +189,32 @@ pub(crate) fn load_working(path: &Path, max_pixels: u64) -> Result<LoadedWorking
     })
 }
 
-/// Build an opaque 16-bit `Srgb` [`WorkingImage`] from raw CMYK samples
-/// colour-managed to sRGB (CMYK carries no alpha, so the alpha track is fully
-/// opaque). Returns `None` on an empty or malformed buffer so the caller falls
-/// back to the generic decode.
+/// Build an opaque 16-bit [`WorkingImage`] from raw CMYK samples (CMYK carries
+/// no alpha, so the alpha track is fully opaque). Returns `None` on an empty or
+/// malformed buffer so the caller falls back to the generic decode.
+///
+/// **Profiled** CMYK is colour-managed straight into 16-bit `ProPhoto`, keeping
+/// inks that fall outside sRGB. **Unprofiled** CMYK has no colorimetric meaning
+/// beyond the naive formula, so it stays `Srgb` (8→16-bit widen) and reaches the
+/// cards byte-for-byte — the pinned cross-language naive contract is untouched.
 fn cmyk_to_working(raw: &super::cmyk_decode::RawCmyk) -> Option<LoadedWorking> {
     if raw.width == 0 || raw.height == 0 {
         return None;
     }
-    let rgb = super::cmyk_transform::cmyk_to_rgb8(raw);
     let expected = raw.width as usize * raw.height as usize * 3;
+    let meta = LoadMeta {
+        source_mode: "CMYK".to_string(),
+        exif_transposed: false,
+    };
+    if let Some(rgb16) = super::cmyk_transform::cmyk_to_prophoto16(raw) {
+        if rgb16.len() == expected {
+            return Some(LoadedWorking {
+                image: WorkingImage::from_prophoto_rgb16(raw.width, raw.height, &rgb16, None),
+                meta,
+            });
+        }
+    }
+    let rgb = super::cmyk_transform::cmyk_to_rgb8(raw);
     if rgb.len() != expected {
         return None;
     }
@@ -206,10 +224,7 @@ fn cmyk_to_working(raw: &super::cmyk_decode::RawCmyk) -> Option<LoadedWorking> {
     }
     Some(LoadedWorking {
         image: WorkingImage::from_rgba8(&out, WorkingSpace::Srgb, None),
-        meta: LoadMeta {
-            source_mode: "CMYK".to_string(),
-            exif_transposed: false,
-        },
+        meta,
     })
 }
 
@@ -444,10 +459,10 @@ mod tests {
         let _ = std::fs::remove_file(&path);
     }
 
-    // The loader now decodes into the 16-bit `WorkingImage` carrier first, then
-    // narrows to 8-bit. Widening (`* 257`) is exactly invertible, so the narrowed
-    // surface must be byte-identical to what `load_rgba` returns; the carrier
-    // also reports the right dimensions and the `Srgb` working space.
+    // A plain RGB source carries no wide-gamut information, so it stays in the
+    // `Srgb` working space (a pure `* 257` widen). Egress is then an exact
+    // bit-narrow, so `to_srgb_rgba8` must be byte-identical to what `load_rgba`
+    // returns — plain images are never round-tripped through ProPhoto.
     #[test]
     fn load_working_widens_to_16bit_and_narrows_identically() {
         let path = unique_tmp("working_rgb.png");
@@ -464,16 +479,16 @@ mod tests {
         assert_eq!(work.image.pixels.len(), 4 * 3 * 4);
         assert_eq!(work.image.space, WorkingSpace::Srgb);
 
-        let narrowed = work.image.to_rgba8();
+        let egress = work.image.to_srgb_rgba8();
         let loaded = load_rgba(&path, DEFAULT_MAX_DECODE_PIXELS).unwrap();
-        assert_eq!(narrowed, loaded.image);
+        assert_eq!(egress, loaded.image);
         assert_eq!(loaded.meta.source_mode, "RGBA");
         let _ = std::fs::remove_file(&path);
     }
 
-    // A CMYK source is colour-managed into the 16-bit `Srgb` carrier; narrowing
-    // reproduces the same sRGB the pre-carrier path produced (no gamut change in
-    // this phase), and the provenance still reads `CMYK`.
+    // An *unprofiled* CMYK source (this fixture carries no ICC) has no wide-gamut
+    // information, so it stays in the `Srgb` carrier via the naive formula and
+    // reaches the cards byte-for-byte; the provenance still reads `CMYK`.
     #[test]
     fn load_working_colour_manages_cmyk_to_16bit_srgb() {
         let path = unique_tmp("working_cmyk.jpg");
@@ -488,9 +503,9 @@ mod tests {
         assert_eq!(work.image.space, WorkingSpace::Srgb);
         assert_eq!(work.meta.source_mode, "CMYK");
 
-        let narrowed = work.image.to_rgba8();
+        let egress = work.image.to_srgb_rgba8();
         let loaded = load_rgba(&path, DEFAULT_MAX_DECODE_PIXELS).unwrap();
-        assert_eq!(narrowed, loaded.image);
+        assert_eq!(egress, loaded.image);
         let _ = std::fs::remove_file(&path);
     }
 

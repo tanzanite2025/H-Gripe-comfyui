@@ -14,6 +14,8 @@ use std::path::Path;
 use image::metadata::Orientation;
 use image::{DynamicImage, ExtendedColorType, GrayImage, ImageDecoder, ImageReader, RgbaImage};
 
+use super::image_buffer;
+
 /// Default decode budget, aligned with the Python PSD chain
 /// (`--max-decode-pixels`). A source whose declared `width * height` exceeds
 /// this is rejected before any pixel buffer is allocated.
@@ -73,9 +75,28 @@ fn guard_dimensions(path: &Path, width: u32, height: u32, max_pixels: u64) -> Re
     Ok(())
 }
 
+/// The provenance a freshly-written 8-bit RGBA output PNG would report if it
+/// were reloaded: the surface is already normalised, so the source mode is
+/// plain `RGBA` and there is no EXIF orientation to undo. Compute cards publish
+/// their RGBA outputs to [`image_buffer`] with this meta so a cache hit mirrors
+/// what a disk decode of the written file would produce.
+pub(crate) fn png_output_meta() -> LoadMeta {
+    LoadMeta {
+        source_mode: "RGBA".to_string(),
+        exif_transposed: false,
+    }
+}
+
 /// Open + decode an image to an 8-bit RGBA surface, guarding the decode size
 /// first and normalising colour space / bit depth / EXIF orientation.
+///
+/// A compute card upstream may have already published this exact surface to the
+/// in-process [`image_buffer`] cache; a fresh hit there skips the file read and
+/// decode entirely and is otherwise indistinguishable from decoding the PNG.
 pub(crate) fn load_rgba(path: &Path, max_pixels: u64) -> Result<LoadedRgba, String> {
+    if let Some(hit) = image_buffer::lookup_rgba(path, max_pixels) {
+        return Ok(hit);
+    }
     let (image, meta) = load_dynamic(path, max_pixels)?;
     Ok(LoadedRgba {
         image: image.into_rgba8(),
@@ -87,7 +108,13 @@ pub(crate) fn load_rgba(path: &Path, max_pixels: u64) -> Result<LoadedRgba, Stri
 /// size first. High-bit-depth mattes are tone-scaled (not clipped) by the
 /// `image` crate's luma conversion. (Mask provenance is not surfaced in Phase 1,
 /// so only the pixels are returned.)
+///
+/// Like [`load_rgba`], a mask published upstream to [`image_buffer`] is served
+/// from memory on a fresh hit rather than re-decoded from disk.
 pub(crate) fn load_mask(path: &Path, max_pixels: u64) -> Result<GrayImage, String> {
+    if let Some(hit) = image_buffer::lookup_gray(path, max_pixels) {
+        return Ok(hit);
+    }
     let (image, _meta) = load_dynamic(path, max_pixels)?;
     Ok(image.into_luma8())
 }
@@ -192,6 +219,38 @@ mod tests {
         let mask = load_mask(&path, DEFAULT_MAX_DECODE_PIXELS).unwrap();
         assert_eq!(mask.dimensions(), (2, 2));
         assert_eq!(mask.get_pixel(0, 0).0[0], 255);
+        let _ = std::fs::remove_file(&path);
+    }
+
+    #[test]
+    fn load_rgba_prefers_a_published_buffer() {
+        let path = unique_tmp("published_rgba.png");
+        // On disk: red. A published green buffer must shadow it, proving the
+        // loader served the in-process buffer without re-decoding the PNG.
+        DynamicImage::ImageRgba8(RgbaImage::from_pixel(3, 2, image::Rgba([255, 0, 0, 255])))
+            .save(&path)
+            .unwrap();
+        image_buffer::publish_rgba(
+            &path,
+            &RgbaImage::from_pixel(3, 2, image::Rgba([0, 255, 0, 255])),
+            png_output_meta(),
+        );
+
+        let loaded = load_rgba(&path, DEFAULT_MAX_DECODE_PIXELS).unwrap();
+        assert_eq!(loaded.image.get_pixel(0, 0).0, [0, 255, 0, 255]);
+        let _ = std::fs::remove_file(&path);
+    }
+
+    #[test]
+    fn load_mask_prefers_a_published_buffer() {
+        let path = unique_tmp("published_mask.png");
+        DynamicImage::ImageLuma8(GrayImage::from_pixel(2, 2, image::Luma([10])))
+            .save(&path)
+            .unwrap();
+        image_buffer::publish_gray(&path, &GrayImage::from_pixel(2, 2, image::Luma([200])));
+
+        let mask = load_mask(&path, DEFAULT_MAX_DECODE_PIXELS).unwrap();
+        assert_eq!(mask.get_pixel(0, 0).0[0], 200);
         let _ = std::fs::remove_file(&path);
     }
 }

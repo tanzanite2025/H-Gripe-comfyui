@@ -1,6 +1,8 @@
 //! Studio graph editor backend, split into focused submodules:
 //! - [`graph`]: the workflow graph schema + shared value-coercion helpers.
 //! - [`exec`]: the topological execution engine, run events, and cancellation.
+//! - [`node_registry`]: single source of truth mapping a node `kind` to its
+//!   executor + resource lane (`studio_executor_for_kind` / `category_for_kind`).
 //! - [`psd_analyze`]: the `psdContextAnalyze` node executor (PSD context bridge).
 //! - [`color_match`]: the `matchLightColor` node executor (light/colour match).
 //! - [`edge_refine`]: the `refineMaskEdge` node executor (mask edge refine).
@@ -34,6 +36,7 @@ mod graph;
 mod history;
 pub(crate) mod image_buffer;
 mod image_enhance;
+mod node_registry;
 mod onnx_pool;
 mod persist;
 mod pixel_ops;

@@ -20,10 +20,11 @@ use std::sync::Arc;
 
 use tokio::sync::{OwnedSemaphorePermit, Semaphore};
 
-use super::exec::{studio_executor_for_kind, StudioExecutor};
+use super::node_registry::node_class;
 
-/// The resource lane a node's work runs in. Distinct from [`StudioExecutor`]
-/// (which decides *who* runs the node — graph / python / native / broker):
+/// The resource lane a node's work runs in. Distinct from
+/// [`StudioExecutor`](super::exec::StudioExecutor) (which decides *who* runs the
+/// node — graph / python / native / broker):
 /// this decides *what limited resource* the work contends for, which is what
 /// the concurrency policy gates on.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -42,23 +43,11 @@ pub(crate) enum JobCategory {
 }
 
 /// Classify a node kind into its resource lane, or `None` for an unknown kind
-/// (mirrors [`studio_executor_for_kind`]'s single unsupported-kind gate). Keep
-/// in sync with `nodeSpecs.ts` and the executor split.
+/// (the single unsupported-kind gate). Delegates to the shared
+/// [`node_registry`](super::node_registry) so the lane travels with the kind's
+/// executor classification. Keep in sync with `nodeSpecs.ts`.
 pub(crate) fn category_for_kind(kind: &str) -> Option<JobCategory> {
-    use JobCategory::*;
-    Some(match studio_executor_for_kind(kind)? {
-        StudioExecutor::Graph => CpuLight,
-        StudioExecutor::Local => CpuBound,
-        // Native `Compute` cards split by whether they hit the GPU: the ONNX
-        // matte runs on the device, plain geometry (crop) is CPU-only.
-        StudioExecutor::Compute => match kind {
-            "subjectMask" => Gpu,
-            _ => CpuBound,
-        },
-        // Broker calls await a provider (possibly remote); they don't hold the
-        // local GPU. `promptOptimize` (Hybrid) may call a provider too.
-        StudioExecutor::Api | StudioExecutor::Hybrid => Network,
-    })
+    node_class(kind).map(|class| class.category)
 }
 
 /// The number of concurrent jobs allowed in a lane, given the CPU pool size.

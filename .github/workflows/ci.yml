@@ -48,7 +48,11 @@ jobs:
     name: tauri (cargo test)
     runs-on: windows-latest
     steps:
+      # lfs: true pulls the vendored FFmpeg import libs/DLLs under
+      # third_party/ffmpeg that the native-ffmpeg feature links against.
       - uses: actions/checkout@v4
+        with:
+          lfs: true
 
       - uses: actions/setup-node@v4
         with:
@@ -70,7 +74,9 @@ jobs:
 
       - name: cargo test
         working-directory: apps/desktop-tauri/src-tauri
-        run: cargo test
+        # --features native-ffmpeg links + smoke-tests the vendored libav decoder
+        # (build.rs copies the runtime DLLs next to the test binaries).
+        run: cargo test --features native-ffmpeg
 
   vitmatte-e2e:
     name: tauri (vitmatte e2e)

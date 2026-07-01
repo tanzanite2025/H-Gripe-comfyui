@@ -15,6 +15,7 @@ use std::path::{Path, PathBuf};
 use std::time::Instant;
 
 use image::{imageops, GrayImage, Luma, Rgba, RgbaImage};
+use rayon::prelude::*;
 use serde::Serialize;
 use serde_json::{json, Value};
 
@@ -545,38 +546,44 @@ fn morphology(mask: &GrayImage, radius: u32, grow: bool) -> GrayImage {
         return mask.clone();
     }
     let (width, height) = mask.dimensions();
-    let r = radius as i32;
+    let (w, h) = (width as usize, height as usize);
+    let r = radius as usize;
+    let init = if grow { MASK_OFF } else { MASK_ON };
     let pick = |acc: u8, v: u8| if grow { acc.max(v) } else { acc.min(v) };
+    let src = mask.as_raw();
 
-    // Horizontal pass.
-    let mut tmp = GrayImage::new(width, height);
-    for y in 0..height {
-        for x in 0..width {
-            let mut acc = if grow { MASK_OFF } else { MASK_ON };
-            for dx in -r..=r {
-                let sx = x as i32 + dx;
-                if sx >= 0 && (sx as u32) < width {
-                    acc = pick(acc, mask.get_pixel(sx as u32, y).0[0]);
-                }
+    // Horizontal pass: each output row depends only on the matching source row,
+    // so rows are independent and processed in parallel across CPU workers.
+    let mut tmp = vec![0u8; w * h];
+    tmp.par_chunks_mut(w).enumerate().for_each(|(y, row)| {
+        let base = y * w;
+        for (x, slot) in row.iter_mut().enumerate() {
+            let lo = x.saturating_sub(r);
+            let hi = (x + r).min(w - 1);
+            let mut acc = init;
+            for sx in lo..=hi {
+                acc = pick(acc, src[base + sx]);
             }
-            tmp.put_pixel(x, y, Luma([acc]));
+            *slot = acc;
         }
-    }
-    // Vertical pass.
-    let mut out = GrayImage::new(width, height);
-    for y in 0..height {
-        for x in 0..width {
-            let mut acc = if grow { MASK_OFF } else { MASK_ON };
-            for dy in -r..=r {
-                let sy = y as i32 + dy;
-                if sy >= 0 && (sy as u32) < height {
-                    acc = pick(acc, tmp.get_pixel(x, sy as u32).0[0]);
-                }
+    });
+
+    // Vertical pass: each output row reads a column window from `tmp`; the rows
+    // are still independent, so the same row-parallel split applies.
+    let mut out = vec![0u8; w * h];
+    out.par_chunks_mut(w).enumerate().for_each(|(y, row)| {
+        let lo = y.saturating_sub(r);
+        let hi = (y + r).min(h - 1);
+        for (x, slot) in row.iter_mut().enumerate() {
+            let mut acc = init;
+            for sy in lo..=hi {
+                acc = pick(acc, tmp[sy * w + x]);
             }
-            out.put_pixel(x, y, Luma([acc]));
+            *slot = acc;
         }
-    }
-    out
+    });
+
+    GrayImage::from_raw(width, height, out).expect("morphology buffer matches dimensions")
 }
 
 fn mask_coverage(mask: &GrayImage) -> f64 {
@@ -821,6 +828,78 @@ mod tests {
         assert!(mask_coverage(&grown) > before);
         let shrunk = erode(&grown, 1);
         assert!(mask_coverage(&shrunk) < mask_coverage(&grown));
+    }
+
+    /// Straightforward, obviously-correct serial reference the parallel
+    /// [`morphology`] must match bit-for-bit.
+    fn morphology_serial(mask: &GrayImage, radius: u32, grow: bool) -> GrayImage {
+        if radius == 0 {
+            return mask.clone();
+        }
+        let (width, height) = mask.dimensions();
+        let r = radius as i32;
+        let pick = |acc: u8, v: u8| if grow { acc.max(v) } else { acc.min(v) };
+        let init = if grow { MASK_OFF } else { MASK_ON };
+        let mut tmp = GrayImage::new(width, height);
+        for y in 0..height {
+            for x in 0..width {
+                let mut acc = init;
+                for dx in -r..=r {
+                    let sx = x as i32 + dx;
+                    if sx >= 0 && (sx as u32) < width {
+                        acc = pick(acc, mask.get_pixel(sx as u32, y).0[0]);
+                    }
+                }
+                tmp.put_pixel(x, y, Luma([acc]));
+            }
+        }
+        let mut out = GrayImage::new(width, height);
+        for y in 0..height {
+            for x in 0..width {
+                let mut acc = init;
+                for dy in -r..=r {
+                    let sy = y as i32 + dy;
+                    if sy >= 0 && (sy as u32) < height {
+                        acc = pick(acc, tmp.get_pixel(x, sy as u32).0[0]);
+                    }
+                }
+                out.put_pixel(x, y, Luma([acc]));
+            }
+        }
+        out
+    }
+
+    #[test]
+    fn parallel_morphology_matches_serial_reference() {
+        // Deterministic LCG so the fuzz mask is reproducible without an RNG dep.
+        let mut state: u32 = 0x1234_5678;
+        let mut next = || {
+            state = state.wrapping_mul(1_664_525).wrapping_add(1_013_904_223);
+            (state >> 24) as u8
+        };
+        let mut mask = GrayImage::new(37, 23);
+        for p in mask.pixels_mut() {
+            // Mixed hard/soft edges: mostly 0/255 with some mid-tones.
+            let v = next();
+            p.0[0] = if v < 110 {
+                MASK_OFF
+            } else if v < 220 {
+                MASK_ON
+            } else {
+                v
+            };
+        }
+        for grow in [true, false] {
+            for radius in [1u32, 2, 5, 13] {
+                let got = morphology(&mask, radius, grow);
+                let want = morphology_serial(&mask, radius, grow);
+                assert_eq!(
+                    got.as_raw(),
+                    want.as_raw(),
+                    "grow={grow} radius={radius} parallel morphology diverged from serial"
+                );
+            }
+        }
     }
 
     #[test]

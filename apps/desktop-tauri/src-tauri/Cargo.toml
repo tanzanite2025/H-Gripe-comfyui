@@ -33,6 +33,9 @@ serde_json = "1"
 tokio = { version = "1", features = ["macros", "rt", "time", "sync"] }
 # Thumbnail generation for the node-graph editor (generate_thumbnail command).
 image = "0.25"
+# Data-parallelism for CPU-bound image operators (e.g. mask morphology). Runs on
+# the Compute lane's worker threads, independent of the GPU serialization gate.
+rayon = "1"
 # ONNX Runtime for Phase 2 auto-subject model inference (in-process, Compute lane).
 # `download-binaries` fetches a prebuilt CPU onnxruntime at build time so no
 # system install is required.

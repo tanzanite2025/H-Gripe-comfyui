@@ -24,8 +24,10 @@
 //!   JPEG return `None` and stay on the Python fallback — an unmarked CMYK JPEG
 //!   is too rare to generate and validate a round-trip for.
 //! - **TIFF** via the `tiff` crate when the photometric interpretation is CMYK
-//!   (8-bit, 4 samples/pixel). TIFF Separated is already 0 = no ink, so no
-//!   inversion is applied.
+//!   (CMYK or CMYK+alpha, 8- or 16-bit). 16-bit is scaled to 8-bit (`v >> 8`)
+//!   and any alpha channel is dropped, so the result is always tightly-packed
+//!   8-bit CMYK. TIFF Separated is already 0 = no ink, so no inversion is
+//!   applied.
 //!
 //! Wired into `try_enhance` via `cmyk_transform::cmyk_to_rgb8` for **TIFF** and
 //! **Adobe CMYK / YCCK JPEG** sources (step c3). The samples this module returns
@@ -267,12 +269,18 @@ fn decode_cmyk_tiff(bytes: &[u8], max_pixels: u64) -> Result<Option<RawCmyk>, St
     let mut decoder = TiffDecoder::new(std::io::Cursor::new(bytes))
         .map_err(|err| format!("failed to open TIFF: {err}"))?;
 
-    match decoder.colortype() {
-        Ok(ColorType::CMYK(8)) => {}
-        // A non-CMYK (or non-8-bit CMYK) TIFF is not ours to handle here.
+    // Take CMYK and CMYK+alpha at 8 or 16 bits per channel. 16-bit is scaled
+    // down to the 8-bit working space (`v >> 8`) and any alpha channel is
+    // dropped (the enhance path emits opaque sRGB), so the samples always land
+    // as tightly-packed 8-bit CMYK. TIFF Separated is already 0 = no ink, so no
+    // inversion is applied. Other photometrics, bit depths (32-bit / float) or
+    // sample layouts are not ours and defer to the caller.
+    let channels: usize = match decoder.colortype() {
+        Ok(ColorType::CMYK(8)) | Ok(ColorType::CMYK(16)) => 4,
+        Ok(ColorType::CMYKA(8)) | Ok(ColorType::CMYKA(16)) => 5,
         Ok(_) => return Ok(None),
         Err(err) => return Err(format!("failed to read TIFF colortype: {err}")),
-    }
+    };
 
     let (width, height) = decoder
         .dimensions()
@@ -285,16 +293,25 @@ fn decode_cmyk_tiff(bytes: &[u8], max_pixels: u64) -> Result<Option<RawCmyk>, St
         .flatten()
         .and_then(|value| value.into_u8_vec().ok());
 
-    let samples = match decoder
+    // Flatten to one 8-bit sample per channel, whatever bit depth the TIFF used.
+    let flat: Vec<u8> = match decoder
         .read_image()
         .map_err(|err| format!("failed to decode CMYK TIFF: {err}"))?
     {
         DecodingResult::U8(buf) => buf,
+        DecodingResult::U16(buf) => buf.into_iter().map(|v| (v >> 8) as u8).collect(),
         other => {
             return Err(format!(
                 "CMYK TIFF decoded to an unexpected sample type: {other:?}"
             ))
         }
+    };
+
+    // Drop the alpha channel when present so downstream always sees 4-channel CMYK.
+    let samples = if channels == 5 {
+        flat.chunks_exact(5).flat_map(|px| px[..4].to_vec()).collect()
+    } else {
+        flat
     };
 
     finish(width, height, samples, icc, "TIFF")
@@ -351,6 +368,26 @@ mod tests {
         buf.into_inner()
     }
 
+    fn cmyk16_tiff(width: u32, height: u32, samples: &[u16]) -> Vec<u8> {
+        let mut buf = Cursor::new(Vec::new());
+        {
+            let mut enc = TiffEncoder::new(&mut buf).unwrap();
+            enc.write_image::<colortype::CMYK16>(width, height, samples)
+                .unwrap();
+        }
+        buf.into_inner()
+    }
+
+    fn cmyka8_tiff(width: u32, height: u32, samples: &[u8]) -> Vec<u8> {
+        let mut buf = Cursor::new(Vec::new());
+        {
+            let mut enc = TiffEncoder::new(&mut buf).unwrap();
+            enc.write_image::<colortype::CMYKA8>(width, height, samples)
+                .unwrap();
+        }
+        buf.into_inner()
+    }
+
     #[test]
     fn decodes_cmyk_tiff_samples_faithfully() {
         // 4 pixels, C M Y K order — a mix of ink extremes.
@@ -368,6 +405,42 @@ mod tests {
         assert_eq!((raw.width, raw.height), (4, 1));
         // Samples come back byte-for-byte, unconverted.
         assert_eq!(raw.samples, samples);
+        let _ = std::fs::remove_file(&path);
+    }
+
+    #[test]
+    fn decodes_16bit_cmyk_tiff_scaled_to_8bit() {
+        // 3 pixels, C M Y K order, 16-bit. `v >> 8` is the 8-bit scale-down.
+        let samples16: Vec<u16> = vec![
+            0, 0, 0, 0, // no ink -> 0,0,0,0
+            0xFFFF, 0x8000, 0x0100, 0x00FF, // -> 255, 128, 1, 0
+            0x1234, 0xABCD, 0xFF00, 0x00AB, // -> 0x12, 0xAB, 0xFF, 0x00
+        ];
+        let path = write_tmp("rt16.tiff", &cmyk16_tiff(3, 1, &samples16));
+
+        let raw = decode_cmyk(&path, DEFAULT_MAX_DECODE_PIXELS)
+            .unwrap()
+            .expect("a 16-bit CMYK TIFF should decode");
+        assert_eq!((raw.width, raw.height), (3, 1));
+        let expected: Vec<u8> = samples16.iter().map(|&v| (v >> 8) as u8).collect();
+        assert_eq!(raw.samples, expected);
+        let _ = std::fs::remove_file(&path);
+    }
+
+    #[test]
+    fn decodes_cmyk_alpha_tiff_dropping_alpha() {
+        // 2 pixels, C M Y K A order (5 samples/pixel); the alpha byte is dropped.
+        let samples = vec![
+            10, 20, 30, 40, 200, // px0: alpha 200 dropped
+            50, 60, 70, 80, 5, // px1: alpha 5 dropped
+        ];
+        let path = write_tmp("rta.tiff", &cmyka8_tiff(2, 1, &samples));
+
+        let raw = decode_cmyk(&path, DEFAULT_MAX_DECODE_PIXELS)
+            .unwrap()
+            .expect("a CMYK+alpha TIFF should decode");
+        assert_eq!((raw.width, raw.height), (2, 1));
+        assert_eq!(raw.samples, vec![10, 20, 30, 40, 50, 60, 70, 80]);
         let _ = std::fs::remove_file(&path);
     }
 

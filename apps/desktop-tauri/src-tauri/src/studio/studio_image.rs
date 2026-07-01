@@ -169,6 +169,13 @@ pub(crate) fn load_rgba(path: &Path, max_pixels: u64) -> Result<LoadedRgba, Stri
 /// down to sRGB but leaves `Srgb` an exact bit-narrow, so only sources that
 /// truly carry wide-gamut information change at the card boundary.
 pub(crate) fn load_working(path: &Path, max_pixels: u64) -> Result<LoadedWorking, String> {
+    // A manual card upstream may have published its 16-bit canonical surface to
+    // the in-process [`image_buffer`] cache; a fresh hit returns the wide-gamut
+    // pixels straight from memory (no re-decode, no 8-bit round-trip). A miss
+    // falls back to the identical disk decode below.
+    if let Some(hit) = image_buffer::lookup_working(path, max_pixels) {
+        return Ok(hit);
+    }
     // CMYK-family sources (Adobe CMYK / YCCK JPEG, CMYK TIFF): the `image` crate
     // would decode them to RGB and silently discard the embedded ICC, so every
     // native card that loaded through here (crop, subject mask, ...) got

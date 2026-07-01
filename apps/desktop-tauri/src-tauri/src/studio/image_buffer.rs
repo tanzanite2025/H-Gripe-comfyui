@@ -36,7 +36,7 @@ use std::path::Path;
 use std::sync::{Arc, Mutex, OnceLock};
 use std::time::SystemTime;
 
-use image::{GrayImage, RgbaImage};
+use image::{DynamicImage, GrayImage, RgbaImage};
 
 use super::studio_image::{LoadMeta, LoadedRgba};
 
@@ -214,6 +214,20 @@ pub(crate) fn lookup_gray(path: &Path, max_pixels: u64) -> Option<GrayImage> {
     }
 }
 
+/// Fetch a published surface for `path` as a [`DynamicImage`] (RGBA or luma),
+/// or `None` on a miss / stale entry. Unlike [`lookup_rgba`] there is no decode
+/// budget: the only caller is the thumbnail path, which always downsamples, so
+/// resizing even a large surface is bounded and cheaper than a PNG re-decode.
+/// This is the display half of the buffer handoff — a compute card's output
+/// thumbnail is produced from the buffer the card already decoded.
+pub(crate) fn lookup_dynamic(path: &Path) -> Option<DynamicImage> {
+    let entry = fetch_fresh(path)?;
+    Some(match entry.image {
+        DecodedImage::Rgba { image, .. } => DynamicImage::ImageRgba8((*image).clone()),
+        DecodedImage::Gray(image) => DynamicImage::ImageLuma8((*image).clone()),
+    })
+}
+
 /// Fetch the entry for `path` only when it is still fresh against disk; a stale
 /// entry is evicted so it stops shadowing the file. An unresolvable /
 /// unregistered path yields `None`.
@@ -271,6 +285,47 @@ mod tests {
         assert_eq!(hit.image.get_pixel(0, 0).0, [0, 255, 0, 255]);
         assert_eq!(hit.meta.source_mode, "RGBA");
         let _ = std::fs::remove_file(&path);
+    }
+
+    #[test]
+    fn lookup_dynamic_returns_the_published_surface_by_kind() {
+        // RGBA publish -> ImageRgba8 carrying the published pixels.
+        let rgba_path = unique_tmp("dyn_rgba.png");
+        RgbaImage::from_pixel(3, 2, Rgba([1, 2, 3, 4]))
+            .save(&rgba_path)
+            .unwrap();
+        publish_rgba(
+            &rgba_path,
+            &RgbaImage::from_pixel(3, 2, Rgba([9, 8, 7, 255])),
+            rgba_meta(),
+        );
+        match lookup_dynamic(&rgba_path).expect("rgba hit") {
+            DynamicImage::ImageRgba8(img) => {
+                assert_eq!(img.dimensions(), (3, 2));
+                assert_eq!(img.get_pixel(0, 0).0, [9, 8, 7, 255]);
+            }
+            other => panic!("expected ImageRgba8, got {other:?}"),
+        }
+
+        // Gray publish -> ImageLuma8.
+        let gray_path = unique_tmp("dyn_gray.png");
+        GrayImage::from_pixel(2, 2, Luma([5])).save(&gray_path).unwrap();
+        publish_gray(&gray_path, &GrayImage::from_pixel(2, 2, Luma([222])));
+        match lookup_dynamic(&gray_path).expect("gray hit") {
+            DynamicImage::ImageLuma8(img) => {
+                assert_eq!(img.get_pixel(0, 0).0[0], 222);
+            }
+            other => panic!("expected ImageLuma8, got {other:?}"),
+        }
+
+        // A path that was never published is a miss.
+        let missing = unique_tmp("dyn_missing.png");
+        GrayImage::from_pixel(1, 1, Luma([0])).save(&missing).unwrap();
+        assert!(lookup_dynamic(&missing).is_none());
+
+        let _ = std::fs::remove_file(&rgba_path);
+        let _ = std::fs::remove_file(&gray_path);
+        let _ = std::fs::remove_file(&missing);
     }
 
     #[test]

@@ -999,6 +999,14 @@ button:disabled { opacity: 0.6; cursor: default; }
   color: #f46262;
   border-color: rgba(244, 98, 98, 0.4);
 }
+.mask-preview-actions {
+  padding: 8px;
+  border-radius: 8px;
+  background: rgba(86, 168, 255, 0.08);
+  border: 1px solid rgba(86, 168, 255, 0.28);
+}
+.mask-preview-actions .slider-row { gap: 6px; }
+.mask-preview-actions small { display: block; margin-top: 6px; line-height: 1.4; }
 .mask-edit-note { line-height: 1.5; }
 .mask-edit-note code {
   background: #11131a;

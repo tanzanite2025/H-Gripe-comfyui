@@ -8,6 +8,8 @@ import {
 } from "./maskTools";
 import { localizeTool } from "./maskToolsI18n";
 import { LangContext, useT } from "../i18n";
+import { PreviewLane } from "../runtime/previewLane";
+import { applyOp, buildProxyMask, isPreviewableOp, type ProxyMask } from "./maskMorphology";
 import {
   addBrushStroke,
   addMatteStroke,
@@ -102,7 +104,15 @@ export function MaskEditModal({
   const marquee = useRef<{ start: [number, number]; end: [number, number] } | null>(null);
   const [, forceRedraw] = useState(0);
 
+  // Preview lane for morphology ops: a live, best-effort proxy render of
+  // grow/shrink/feather/smooth so a slider drag shows roughly what Apply will
+  // do — off the global run lock, latest-wins so rapid drags don't pile up
+  // (docs/cards/editor-resource-model.md § "Four lanes" → Preview).
+  const previewLane = useRef(new PreviewLane());
+  const [preview, setPreview] = useState<ProxyMask | null>(null);
+
   const tool = maskTool(toolId) ?? MASK_TOOLS[0];
+  const previewing = isPreviewableOp(toolId) && preview != null;
 
   // Best-effort underlay: a large thumbnail of the connected image. Empty in
   // browser preview (mocked backend) — we then draw a checkerboard so the user
@@ -205,7 +215,10 @@ export function MaskEditModal({
       ctx.stroke();
     };
 
-    state.current.brush_strokes.forEach((s) => paintStroke(s));
+    // While previewing a morphology op, the proxy overlay already folds in the
+    // brush strokes (transformed), so skip the raw stroke overlay to avoid a
+    // confusing double-draw; matte strokes / points / marquee still render.
+    if (!previewing) state.current.brush_strokes.forEach((s) => paintStroke(s));
     state.current.matte_strokes.forEach((s) => paintStroke(s, "matte"));
     const live = drawing.current;
     if (live) {
@@ -238,6 +251,28 @@ export function MaskEditModal({
       ctx.fillText(String(i + 1), x + 11, y - 6);
     });
 
+    // Morphology preview: paint the proxy result mask (scaled up) as a tinted
+    // overlay. Soft alpha (feather) reads through the per-pixel opacity.
+    if (previewing && preview) {
+      const tmp = document.createElement("canvas");
+      tmp.width = preview.w;
+      tmp.height = preview.h;
+      const tctx = tmp.getContext("2d");
+      if (tctx) {
+        const img = tctx.createImageData(preview.w, preview.h);
+        for (let i = 0; i < preview.data.length; i++) {
+          const a = preview.data[i];
+          img.data[i * 4] = 86;
+          img.data[i * 4 + 1] = 168;
+          img.data[i * 4 + 2] = 255;
+          img.data[i * 4 + 3] = Math.round(a * 0.55);
+        }
+        tctx.putImageData(img, 0, 0);
+        ctx.imageSmoothingEnabled = true;
+        ctx.drawImage(tmp, 0, 0, dims.w, dims.h);
+      }
+    }
+
     const mq = marquee.current;
     if (mq) {
       const [x1, y1] = mq.start;
@@ -254,11 +289,36 @@ export function MaskEditModal({
       }
       ctx.setLineDash([]);
     }
-  }, [dims.w, dims.h, underlay, overlayOnly, state.current.brush_strokes, state.current.matte_strokes, state.current.points, tool.mode, tool.kind, tool.id, brushSize]);
+  }, [dims.w, dims.h, underlay, overlayOnly, state.current.brush_strokes, state.current.matte_strokes, state.current.points, tool.mode, tool.kind, tool.id, brushSize, previewing, preview]);
 
   useEffect(() => {
     redraw();
   }, [redraw]);
+
+  // Recompute the morphology preview whenever the active op, its amount, or the
+  // underlying edits change. The compute is cheap (a downscaled proxy) but is
+  // routed through PreviewLane so an in-flight job is superseded by the next
+  // slider tick rather than blocking it.
+  useEffect(() => {
+    if (!isPreviewableOp(toolId)) {
+      setPreview(null);
+      previewLane.current.cancel();
+      return;
+    }
+    let disposed = false;
+    void previewLane.current
+      .run<ProxyMask | null>(async (signal) => {
+        const { mask, scale } = buildProxyMask(state.current, dims);
+        if (signal.cancelled) return null;
+        return applyOp(mask, toolId, Math.max(0, Math.round(amount * scale)));
+      })
+      .then((outcome) => {
+        if (!disposed && outcome.status === "applied" && outcome.value) setPreview(outcome.value);
+      });
+    return () => {
+      disposed = true;
+    };
+  }, [toolId, amount, state.current, dims]);
 
   const onPointerDown = (e: React.PointerEvent) => {
     if (tool.status !== "ready") return;
@@ -317,11 +377,24 @@ export function MaskEditModal({
   const onToolClick = (t: MaskTool) => {
     if (t.status !== "ready") return;
     if (t.kind === "global") {
-      const needsAmount = t.id === "grow" || t.id === "shrink" || t.id === "feather" || t.id === "smooth";
-      dispatch({ type: "op", op: needsAmount ? { type: t.id, amount } : { type: t.id } });
+      // Amount-taking morphology ops (grow/shrink/feather/smooth) enter a live
+      // preview mode — the user tunes the amount and commits via Apply. The
+      // amount-less ops (invert/fill_holes) still commit immediately.
+      if (isPreviewableOp(t.id)) {
+        setToolId(t.id);
+        return;
+      }
+      dispatch({ type: "op", op: { type: t.id } });
       return;
     }
     setToolId(t.id);
+  };
+
+  // Commit the previewed morphology op as intent (the backend rasterises it on
+  // run) and drop back to the brush; the transient proxy preview is discarded.
+  const applyPreviewOp = () => {
+    dispatch({ type: "op", op: { type: toolId, amount } });
+    setToolId(DEFAULT_TOOL_ID);
   };
 
   const count = editCount(state.current);
@@ -370,7 +443,7 @@ export function MaskEditModal({
               return (
                 <button
                   key={mt.id}
-                  className={`mask-tool ${mt.status === "planned" ? "planned" : ""} ${toolId === mt.id && mt.kind !== "global" ? "active" : ""}`}
+                  className={`mask-tool ${mt.status === "planned" ? "planned" : ""} ${toolId === mt.id && (mt.kind !== "global" || isPreviewableOp(mt.id)) ? "active" : ""}`}
                   disabled={mt.status === "planned"}
                   title={mt.status === "planned" ? `${loc.hint}（${t("mask.comingSoon")}）` : loc.hint}
                   onClick={() => onToolClick(mt)}
@@ -411,6 +484,21 @@ export function MaskEditModal({
                   <output>{amount}</output>
                 </span>
               </label>
+            ) : null}
+            {isPreviewableOp(toolId) ? (
+              <div className="field mask-preview-actions">
+                <span>
+                  {localizeTool(tool, lang).label}{" "}
+                  <span className="muted">· {t("mask.previewBadge")}</span>
+                </span>
+                <span className="slider-row">
+                  <button className="primary" onClick={applyPreviewOp} title={t("mask.applyTitle")}>
+                    {t("mask.previewApply", { op: localizeTool(tool, lang).label })}
+                  </button>
+                  <button onClick={() => setToolId(DEFAULT_TOOL_ID)}>{t("mask.previewCancel")}</button>
+                </span>
+                <small className="muted">{t("mask.previewHint")}</small>
+              </div>
             ) : null}
             {tool.id === "wand" ? (
               <label className="field">

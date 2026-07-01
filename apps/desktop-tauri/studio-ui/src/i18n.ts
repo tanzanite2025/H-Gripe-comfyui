@@ -421,6 +421,13 @@ export const messages = {
   "mask.brushSize": { en: "Brush size", zh: "笔刷大小" },
   "mask.amount": { en: "Amount (px)", zh: "数量（px）" },
   "mask.wandTolerance": { en: "Wand tolerance", zh: "魔棒容差" },
+  "mask.previewApply": { en: "Apply {op}", zh: "应用{op}" },
+  "mask.previewCancel": { en: "Cancel", zh: "取消" },
+  "mask.previewBadge": { en: "live preview", zh: "实时预览" },
+  "mask.previewHint": {
+    en: "Live proxy preview — tune the amount, then Apply. The backend renders the final mask.",
+    zh: "实时代理预览 —— 调整数量后点应用；最终蒙版由后端渲染。",
+  },
   "mask.queuedOps": { en: "Queued ops ({count})", zh: "排队操作（{count}）" },
   "mask.opsEmpty": { en: "none — paint or pick a tool", zh: "无 —— 涂抹或选择工具" },
   "mask.mattingBand": { en: "Matting band ({count})", zh: "抠像带（{count}）" },

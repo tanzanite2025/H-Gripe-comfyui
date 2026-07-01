@@ -1,9 +1,9 @@
 """Local PSD-first production nodes for H-Gripe.
 
-These nodes implement the MVP of the PSD production workflow described in
-``PSD_AI_PRODUCTION_WORKFLOW_RESEARCH.md``: load a PSD template, compose a
-generated image into a placeholder while preserving template/reference/candidate
-layers, and export ``final.psd`` + ``preview.png`` + ``metadata.json``.
+These nodes implement the MVP of the PSD-first production workflow: load a PSD
+template, compose a generated image into a placeholder while preserving
+template/reference/candidate layers, and export ``final.psd`` +
+``preview.png`` + ``metadata.json``.
 
 PSD reading and writing use ``psd-tools``, vendored under ``third_party/`` so the
 nodes depend on a copy we control. Heavy imports are deferred to call time so the

@@ -267,23 +267,30 @@ fn base64_encode(bytes: &[u8]) -> String {
     out
 }
 
-/// Read an image file and return it as a `data:` URL for inline display.
+/// The `<img>`-native MIME for a format the webview can render directly from
+/// its original bytes (no transcode). Anything else the decoder supports (TIFF,
+/// …) is decoded and re-encoded to PNG for display instead.
+fn browser_native_mime(format: image::ImageFormat) -> Option<&'static str> {
+    match format {
+        image::ImageFormat::Png => Some("image/png"),
+        image::ImageFormat::Jpeg => Some("image/jpeg"),
+        image::ImageFormat::WebP => Some("image/webp"),
+        image::ImageFormat::Gif => Some("image/gif"),
+        image::ImageFormat::Bmp => Some("image/bmp"),
+        _ => None,
+    }
+}
+
+/// Read an image file and return it as a `data:` URL for inline display. The
+/// format is determined by *sniffing the header*, never the extension, so a
+/// mislabelled or extension-less file still resolves and the accepted set stays
+/// in lock-step with what the decoder can actually read. A browser-native
+/// format is inlined byte-for-byte; any other decodable format (e.g. TIFF,
+/// which `<img>` cannot render) is decoded and re-encoded to PNG so it still
+/// displays.
 #[tauri::command]
 fn read_image_data_url(path: String) -> Result<String, String> {
     let path = Path::new(path.trim());
-    let mime = match path
-        .extension()
-        .and_then(|ext| ext.to_str())
-        .map(|ext| ext.to_ascii_lowercase())
-        .as_deref()
-    {
-        Some("png") => "image/png",
-        Some("jpg") | Some("jpeg") => "image/jpeg",
-        Some("webp") => "image/webp",
-        Some("gif") => "image/gif",
-        Some("bmp") => "image/bmp",
-        other => return Err(format!("unsupported image type: {}", other.unwrap_or(""))),
-    };
     // Guard against accidentally inlining huge files into the webview.
     let metadata =
         fs::metadata(path).map_err(|err| format!("failed to stat {}: {err}", path.display()))?;
@@ -292,8 +299,36 @@ fn read_image_data_url(path: String) -> Result<String, String> {
     }
     let bytes =
         fs::read(path).map_err(|err| format!("failed to read {}: {err}", path.display()))?;
-    Ok(format!("data:{mime};base64,{}", base64_encode(&bytes)))
+
+    let format = image::guess_format(&bytes)
+        .map_err(|_| format!("unsupported image type: {}", path.display()))?;
+
+    if let Some(mime) = browser_native_mime(format) {
+        return Ok(format!("data:{mime};base64,{}", base64_encode(&bytes)));
+    }
+
+    // Decodable but not `<img>`-native (TIFF, …): guard the decode size, then
+    // decode + re-encode to PNG so the webview can show it.
+    let reader = image::ImageReader::with_format(std::io::Cursor::new(&bytes), format);
+    let (width, height) = reader
+        .into_dimensions()
+        .map_err(|err| format!("failed to read {}: {err}", path.display()))?;
+    if u64::from(width) * u64::from(height) > MAX_PREVIEW_DECODE_PIXELS {
+        return Err("image is too large to decode safely".to_string());
+    }
+    let decoded = image::load_from_memory_with_format(&bytes, format)
+        .map_err(|err| format!("failed to decode {}: {err}", path.display()))?;
+    let mut png: Vec<u8> = Vec::new();
+    decoded
+        .write_to(&mut std::io::Cursor::new(&mut png), image::ImageFormat::Png)
+        .map_err(|err| format!("failed to encode {}: {err}", path.display()))?;
+    Ok(format!("data:image/png;base64,{}", base64_encode(&png)))
 }
+
+/// Decode-size ceiling for the [`read_image_data_url`] transcode path, aligned
+/// with the compute lane's default budget (see `studio::studio_image`). Guards
+/// a decompression bomb before the pixel buffer is allocated.
+const MAX_PREVIEW_DECODE_PIXELS: u64 = 96_000_000;
 
 /// Image pixel dimensions, read from the file header only (no full decode).
 #[derive(Clone, Serialize)]
@@ -904,4 +939,74 @@ fn main() {
         ])
         .run(tauri::generate_context!())
         .expect("error while running H-Gripe Desktop");
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use image::{Rgba, RgbaImage};
+
+    fn tmp_dir(tag: &str) -> std::path::PathBuf {
+        let nanos = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_nanos();
+        let dir = std::env::temp_dir().join(format!("hgripe_{tag}_{}_{nanos}", std::process::id()));
+        fs::create_dir_all(&dir).unwrap();
+        dir
+    }
+
+    #[test]
+    fn browser_native_formats_are_inlined_verbatim() {
+        let dir = tmp_dir("dataurl_png");
+        let path = dir.join("scene.png");
+        RgbaImage::from_pixel(4, 4, Rgba([10, 20, 30, 255]))
+            .save(&path)
+            .unwrap();
+        let raw = fs::read(&path).unwrap();
+
+        let url = read_image_data_url(path.to_string_lossy().to_string()).unwrap();
+        assert!(url.starts_with("data:image/png;base64,"), "{url}");
+        // A browser-native format is passed through byte-for-byte (no transcode).
+        assert_eq!(url, format!("data:image/png;base64,{}", base64_encode(&raw)));
+
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn tiff_is_transcoded_to_png_for_display() {
+        // The extension is deliberately `.tiff` (not browser-native): the header
+        // is sniffed and the image is re-encoded to PNG so `<img>` can show it,
+        // instead of being rejected as an "unsupported image type".
+        let dir = tmp_dir("dataurl_tiff");
+        let path = dir.join("scene.tiff");
+        RgbaImage::from_pixel(4, 4, Rgba([200, 100, 50, 255]))
+            .save(&path)
+            .unwrap();
+        assert_eq!(
+            image::guess_format(&fs::read(&path).unwrap()).unwrap(),
+            image::ImageFormat::Tiff
+        );
+
+        let url = read_image_data_url(path.to_string_lossy().to_string()).unwrap();
+        assert!(
+            url.starts_with("data:image/png;base64,"),
+            "a TIFF must be transcoded to a PNG data URL, got: {}",
+            &url[..url.len().min(40)]
+        );
+
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn a_non_image_file_is_rejected() {
+        let dir = tmp_dir("dataurl_bogus");
+        let path = dir.join("notes.txt");
+        fs::write(&path, b"this is not an image").unwrap();
+
+        let err = read_image_data_url(path.to_string_lossy().to_string()).unwrap_err();
+        assert!(err.contains("unsupported image type"), "{err}");
+
+        let _ = fs::remove_dir_all(&dir);
+    }
 }

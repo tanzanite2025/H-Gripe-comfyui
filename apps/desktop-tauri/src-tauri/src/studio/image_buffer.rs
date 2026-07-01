@@ -32,7 +32,7 @@
 //! [`load_mask`]: super::studio_image::load_mask
 
 use std::collections::HashMap;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex, OnceLock};
 use std::time::SystemTime;
 
@@ -52,13 +52,29 @@ enum DecodedImage {
     Gray(Arc<GrayImage>),
 }
 
-/// A published buffer plus the disk `(mtime, len)` it was captured with, so a
-/// later on-disk change invalidates it.
+/// How a published buffer is validated against the outside world.
+#[derive(Clone)]
+enum Freshness {
+    /// File-backed: the producer wrote a PNG, so the buffer is only served
+    /// while the file's `(mtime, len)` still match what was captured at publish
+    /// time (an edited / replaced output invalidates its own entry).
+    File {
+        mtime: Option<SystemTime>,
+        len: u64,
+    },
+    /// Deferred: the producer *skipped* the PNG write (its output is consumed
+    /// only by in-process compute cards), so there is no file to check against.
+    /// The entry is served unconditionally, and if it is ever evicted it is
+    /// first **materialised** — written to `path` — so any later reader that
+    /// only knows the file (a thumbnail fallback, a disk decode) still resolves.
+    Deferred { path: PathBuf },
+}
+
+/// A published buffer plus how to validate / persist it (see [`Freshness`]).
 #[derive(Clone)]
 struct Entry {
     image: DecodedImage,
-    mtime: Option<SystemTime>,
-    len: u64,
+    freshness: Freshness,
 }
 
 /// Fixed-capacity LRU from `ResourceId` -> published buffer. `order` lists ids
@@ -102,13 +118,21 @@ impl Lru {
         }
     }
 
-    fn insert(&mut self, key: String, value: Entry) {
+    /// Insert `value`, returning any entries dropped to stay within capacity so
+    /// the caller can materialise deferred surfaces *after* releasing the lock
+    /// (an overwrite of the same key is not an eviction and is not returned —
+    /// its replacement carries the same, more recent, pixels).
+    fn insert(&mut self, key: String, value: Entry) -> Vec<Entry> {
         self.entries.insert(key.clone(), value);
         self.touch(&key);
+        let mut evicted = Vec::new();
         while self.entries.len() > self.capacity {
             let oldest = self.order.remove(0);
-            self.entries.remove(&oldest);
+            if let Some(entry) = self.entries.remove(&oldest) {
+                evicted.push(entry);
+            }
         }
+        evicted
     }
 }
 
@@ -126,12 +150,29 @@ fn cache() -> &'static Mutex<Lru> {
 
 /// Resolve `path` to its stable cache key plus the current disk `(mtime, len)`.
 /// Returns `None` when the file cannot be resolved (missing / unreadable), so
-/// an unresolvable path is simply never cached.
+/// an unresolvable path is simply never cached under a file-backed key.
 fn key_for(path: &Path) -> Option<(String, Option<SystemTime>, u64)> {
     let canonical = std::fs::canonicalize(path).ok()?;
     let meta = std::fs::metadata(&canonical).ok()?;
     let id = crate::resource::id_for(&canonical.to_string_lossy());
     Some((id, meta.modified().ok(), meta.len()))
+}
+
+/// Resolve the cache key for a *lookup*, along with the current disk
+/// `(mtime, len)` when the file exists. Unlike [`key_for`] this always yields a
+/// key: when the file is present it uses the canonical-path id (matching the
+/// file-backed publish); when it is absent it falls back to the id of the raw
+/// path string, which is exactly what a deferred publish keyed itself under.
+/// The producer emits that same string as the output value, so a downstream
+/// consumer re-derives the identical id even though no file was ever written.
+fn key_for_lookup(path: &Path) -> (String, Option<(Option<SystemTime>, u64)>) {
+    match key_for(path) {
+        Some((id, mtime, len)) => (id, Some((mtime, len))),
+        None => (
+            crate::resource::id_for(&path.to_string_lossy()),
+            None,
+        ),
+    }
 }
 
 /// Whether `width * height` overflows a non-zero decode budget (`0` disables
@@ -152,11 +193,35 @@ pub(crate) fn publish_rgba(path: &Path, image: &RgbaImage, meta: LoadMeta) {
                     image: Arc::new(image.clone()),
                     meta,
                 },
-                mtime,
-                len,
+                freshness: Freshness::File { mtime, len },
             },
         );
     }
+}
+
+/// Publish an RGBA surface whose PNG was **not** written to disk (the producer
+/// skipped the write because every consumer of this output is an in-process
+/// compute card). The entry is keyed by the raw output path so a downstream
+/// loader that receives that path as its input resolves it from memory, and it
+/// is materialised to that path if it is ever evicted (so a later thumbnail or
+/// disk decode still works). This is the producer half of the write-skip
+/// (item 5, option 2): the buffer, not the file, is the source of truth while
+/// it stays resident. Callers must only use this when the file does not already
+/// exist, so the on-disk state can never go stale behind the buffer.
+pub(crate) fn publish_rgba_deferred(path: &Path, image: &RgbaImage, meta: LoadMeta) {
+    let id = crate::resource::id_for(&path.to_string_lossy());
+    store(
+        id,
+        Entry {
+            image: DecodedImage::Rgba {
+                image: Arc::new(image.clone()),
+                meta,
+            },
+            freshness: Freshness::Deferred {
+                path: path.to_path_buf(),
+            },
+        },
+    );
 }
 
 /// Publish a freshly-written single-channel output (mask / trimap).
@@ -166,17 +231,40 @@ pub(crate) fn publish_gray(path: &Path, image: &GrayImage) {
             id,
             Entry {
                 image: DecodedImage::Gray(Arc::new(image.clone())),
-                mtime,
-                len,
+                freshness: Freshness::File { mtime, len },
             },
         );
     }
 }
 
 fn store(id: String, entry: Entry) {
-    if let Ok(mut lru) = cache().lock() {
-        lru.insert(id, entry);
+    let evicted = match cache().lock() {
+        Ok(mut lru) => lru.insert(id, entry),
+        Err(_) => Vec::new(),
+    };
+    // Materialise any evicted deferred surface *after* dropping the lock — the
+    // PNG write is best-effort I/O and must not block other cache users.
+    for entry in &evicted {
+        materialize(entry);
     }
+}
+
+/// Write a deferred entry's surface to its path so a reader that only knows the
+/// file still resolves after the buffer is gone. Best-effort: a failure here
+/// just means the (rare) evicted-then-read case falls back to a miss, exactly
+/// as an un-published output would. A file-backed entry already has its file
+/// and is a no-op.
+fn materialize(entry: &Entry) {
+    let Freshness::Deferred { path } = &entry.freshness else {
+        return;
+    };
+    if let Some(parent) = path.parent() {
+        let _ = std::fs::create_dir_all(parent);
+    }
+    let _ = match &entry.image {
+        DecodedImage::Rgba { image, .. } => image.save(path),
+        DecodedImage::Gray(image) => image.save(path),
+    };
 }
 
 /// Look up a published RGBA surface for `path`, or `None` (a miss) when it was
@@ -232,15 +320,21 @@ pub(crate) fn lookup_dynamic(path: &Path) -> Option<DynamicImage> {
 /// entry is evicted so it stops shadowing the file. An unresolvable /
 /// unregistered path yields `None`.
 fn fetch_fresh(path: &Path) -> Option<Entry> {
-    let (id, mtime, len) = key_for(path)?;
+    let (id, disk) = key_for_lookup(path);
     let mut lru = cache().lock().ok()?;
-    match lru.get(&id) {
-        Some(entry) if entry.mtime == mtime && entry.len == len => Some(entry),
-        Some(_) => {
-            lru.remove(&id);
-            None
-        }
-        None => None,
+    let entry = lru.get(&id)?;
+    match &entry.freshness {
+        // A deferred entry has no file to check; it is served until evicted.
+        Freshness::Deferred { .. } => Some(entry),
+        Freshness::File { mtime, len } => match disk {
+            Some((disk_mtime, disk_len)) if *mtime == disk_mtime && *len == disk_len => {
+                Some(entry)
+            }
+            _ => {
+                lru.remove(&id);
+                None
+            }
+        },
     }
 }
 
@@ -385,16 +479,76 @@ mod tests {
         let mut lru = Lru::new(2);
         let entry = |v: u8| Entry {
             image: DecodedImage::Gray(Arc::new(GrayImage::from_pixel(1, 1, Luma([v])))),
-            mtime: None,
-            len: 0,
+            freshness: Freshness::File { mtime: None, len: 0 },
         };
         lru.insert("a".to_string(), entry(1));
         lru.insert("b".to_string(), entry(2));
         assert!(lru.get("a").is_some()); // a is now most-recent
-        lru.insert("c".to_string(), entry(3)); // evicts b
+        let evicted = lru.insert("c".to_string(), entry(3)); // evicts b
+        assert_eq!(evicted.len(), 1, "one entry dropped for capacity");
         assert!(lru.get("b").is_none());
         assert!(lru.get("a").is_some());
         assert!(lru.get("c").is_some());
         assert_eq!(lru.entries.len(), 2);
+    }
+
+    #[test]
+    fn a_deferred_entry_is_served_without_a_file() {
+        // A path with no file on disk: a normal publish cannot key it (there is
+        // nothing to canonicalise), but a deferred publish keys it by the raw
+        // path and serves it unconditionally — the write-skip display path.
+        let path = unique_tmp("deferred_rgba.png");
+        assert!(!path.exists(), "the deferred output is never written");
+        assert!(lookup_rgba(&path, 0).is_none());
+
+        publish_rgba_deferred(
+            &path,
+            &RgbaImage::from_pixel(5, 4, Rgba([1, 2, 3, 255])),
+            rgba_meta(),
+        );
+        // The downstream compute loader resolves the surface from memory.
+        let hit = lookup_rgba(&path, 0).expect("deferred buffer is a hit");
+        assert_eq!(hit.image.dimensions(), (5, 4));
+        assert_eq!(hit.image.get_pixel(0, 0).0, [1, 2, 3, 255]);
+        // ...and so does the thumbnail path, even though no file exists.
+        match lookup_dynamic(&path).expect("deferred dynamic hit") {
+            DynamicImage::ImageRgba8(img) => assert_eq!(img.dimensions(), (5, 4)),
+            other => panic!("expected ImageRgba8, got {other:?}"),
+        }
+        assert!(!path.exists(), "serving the buffer never writes the file");
+    }
+
+    #[test]
+    fn evicting_a_deferred_entry_materialises_it() {
+        // A deferred entry that is pushed out of the cache must leave its pixels
+        // on disk so a later reader (a thumbnail fallback, a disk decode) still
+        // resolves. Exercised on a local LRU so eviction is deterministic.
+        let mut lru = Lru::new(1);
+        let path = unique_tmp("materialise_on_evict.png");
+        let deferred = Entry {
+            image: DecodedImage::Rgba {
+                image: Arc::new(RgbaImage::from_pixel(3, 3, Rgba([7, 8, 9, 255]))),
+                meta: rgba_meta(),
+            },
+            freshness: Freshness::Deferred { path: path.clone() },
+        };
+        assert!(lru.insert("deferred".to_string(), deferred).is_empty());
+        assert!(!path.exists());
+
+        // A second insert evicts the deferred entry; the caller materialises it.
+        let filler = Entry {
+            image: DecodedImage::Gray(Arc::new(GrayImage::from_pixel(1, 1, Luma([0])))),
+            freshness: Freshness::File { mtime: None, len: 0 },
+        };
+        let evicted = lru.insert("filler".to_string(), filler);
+        assert_eq!(evicted.len(), 1);
+        for entry in &evicted {
+            materialize(entry);
+        }
+        assert!(path.exists(), "the evicted deferred surface is written to disk");
+        let reloaded = image::open(&path).expect("materialised png decodes").to_rgba8();
+        assert_eq!(reloaded.dimensions(), (3, 3));
+        assert_eq!(reloaded.get_pixel(0, 0).0, [7, 8, 9, 255]);
+        let _ = std::fs::remove_file(&path);
     }
 }

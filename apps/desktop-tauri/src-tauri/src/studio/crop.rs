@@ -85,6 +85,7 @@ fn image_stem(path: &str) -> String {
 pub(super) fn execute_studio_crop(
     node: &StudioGraphNode,
     inputs: &BTreeMap<String, Value>,
+    skip_write_ports: &std::collections::HashSet<String>,
 ) -> Result<BTreeMap<String, Value>, String> {
     let started = Instant::now();
 
@@ -179,13 +180,26 @@ pub(super) fn execute_studio_crop(
     std::fs::create_dir_all(&dir)
         .map_err(|err| format!("failed to create output dir {}: {err}", dir.display()))?;
     let out_path = dir.join(format!("{base}.png"));
-    cropped
-        .save(&out_path)
-        .map_err(|err| format!("failed to write {}: {err}", out_path.display()))?;
-    // Hand the decoded crop to the next compute card in memory so it skips the
-    // PNG re-decode; the file on disk stays the source of truth for everyone
-    // else (preview, Python-bridge cards, export).
-    image_buffer::publish_rgba(&out_path, &cropped, studio_image::png_output_meta());
+    // When the `image` output feeds only other in-process compute cards, the
+    // file is never read: the consumer loads the decoded surface straight from
+    // the buffer. In that case skip the PNG encode+write and publish a
+    // *deferred* buffer instead (materialised to `out_path` only if it is later
+    // evicted, so any thumbnail / disk fallback still resolves). Otherwise write
+    // the file and publish a file-backed buffer as before — preview, the
+    // Python-bridge, export and API uploads all read the file. The skip is
+    // suppressed if a file already exists at the path, so a stale output can
+    // never linger behind the buffer.
+    if skip_write_ports.contains("image") && !out_path.exists() {
+        image_buffer::publish_rgba_deferred(&out_path, &cropped, studio_image::png_output_meta());
+    } else {
+        cropped
+            .save(&out_path)
+            .map_err(|err| format!("failed to write {}: {err}", out_path.display()))?;
+        // Hand the decoded crop to the next compute card in memory so it skips
+        // the PNG re-decode; the file on disk stays the source of truth for
+        // everyone else (preview, Python-bridge cards, export).
+        image_buffer::publish_rgba(&out_path, &cropped, studio_image::png_output_meta());
+    }
 
     let report = CropReport {
         mode,
@@ -334,6 +348,7 @@ mod tests {
     use super::*;
     use image::{Luma, Rgba};
     use serde_json::json;
+    use std::collections::HashSet;
 
     fn solid_mask(w: u32, h: u32, box_: (u32, u32, u32, u32)) -> GrayImage {
         let mut mask = GrayImage::from_pixel(w, h, Luma([0]));
@@ -414,11 +429,57 @@ mod tests {
             ]),
         };
         let inputs = BTreeMap::from([("image".to_string(), json!(src.to_string_lossy()))]);
-        let out = execute_studio_crop(&node, &inputs).unwrap();
+        let out = execute_studio_crop(&node, &inputs, &HashSet::new()).unwrap();
         let report = out.get("crop_report").unwrap();
         let size = &report["output_size"];
         // the cropped result is far smaller than the 40x40 source.
         assert!(size[0].as_u64().unwrap() <= 20);
         assert!(size[1].as_u64().unwrap() <= 24);
+    }
+
+    #[test]
+    fn a_compute_only_image_output_skips_the_png_write() {
+        // A plain manual crop whose `image` port is marked skippable: the file
+        // is never written, yet the decoded surface is available from the buffer
+        // (the downstream compute card and the node thumbnail both read it).
+        let img = RgbaImage::from_pixel(20, 20, Rgba([4, 5, 6, 255]));
+        let dir = std::env::temp_dir().join(format!(
+            "hgripe_crop_skip_{}_{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        std::fs::create_dir_all(&dir).unwrap();
+        let src = dir.join("skip_src.png");
+        img.save(&src).unwrap();
+
+        let node = StudioGraphNode {
+            id: "crop-skip".to_string(),
+            kind: "crop".to_string(),
+            params: BTreeMap::from([
+                ("mode".to_string(), json!("manual")),
+                ("crop_box".to_string(), json!([2, 2, 10, 8])),
+                ("output_dir".to_string(), json!(dir.to_string_lossy())),
+                ("output_name".to_string(), json!("skip_out")),
+            ]),
+        };
+        let inputs = BTreeMap::from([("image".to_string(), json!(src.to_string_lossy()))]);
+        let skip = HashSet::from(["image".to_string()]);
+        let out = execute_studio_crop(&node, &inputs, &skip).unwrap();
+
+        let out_path = dir.join("skip_out.png");
+        assert!(
+            !out_path.exists(),
+            "a compute-only image output must not write its PNG"
+        );
+        // The path is still emitted, and the surface resolves from the buffer.
+        let emitted = out.get("image").and_then(|v| v.as_str()).unwrap();
+        assert_eq!(emitted, out_path.to_string_lossy());
+        let loaded = studio_image::load_rgba(&out_path, 0).expect("crop output loads from buffer");
+        assert_eq!(loaded.image.dimensions(), (10, 8));
+
+        let _ = std::fs::remove_file(&src);
     }
 }

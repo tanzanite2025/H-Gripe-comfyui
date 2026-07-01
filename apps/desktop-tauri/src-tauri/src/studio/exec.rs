@@ -802,11 +802,63 @@ pub(crate) fn studio_executor_for_kind(kind: &str) -> Option<StudioExecutor> {
     })
 }
 
+/// The set of a compute node's output ports whose PNG write may be skipped: an
+/// output is skippable when it has at least one consumer and *every* consumer
+/// is another `Compute` card (which loads it in-process through the shared
+/// [`image_buffer`], so the file is never read). An output that feeds any
+/// other lane — a `Local` python-bridge card, an `Api` upload, a `preview` /
+/// `save` / export sink, or the frontend as a returned result — always keeps
+/// its file. Only compute nodes can skip; every other kind returns empty.
+///
+/// [`image_buffer`]: super::image_buffer
+fn studio_skippable_output_ports(
+    node: &StudioGraphNode,
+    graph: &StudioWorkflowGraph,
+    nodes_by_id: &HashMap<String, &StudioGraphNode>,
+) -> HashSet<String> {
+    let mut skippable = HashSet::new();
+    if studio_executor_for_kind(node.kind.as_str()) != Some(StudioExecutor::Compute) {
+        return skippable;
+    }
+    let ports: HashSet<&str> = graph
+        .edges
+        .iter()
+        .filter(|edge| edge.source == node.id)
+        .map(|edge| edge.source_port.as_str())
+        .collect();
+    for port in ports {
+        let mut has_consumer = false;
+        let mut all_compute = true;
+        for edge in graph
+            .edges
+            .iter()
+            .filter(|edge| edge.source == node.id && edge.source_port == port)
+        {
+            has_consumer = true;
+            let consumer_is_compute = nodes_by_id
+                .get(&edge.target)
+                .map(|target| {
+                    studio_executor_for_kind(target.kind.as_str()) == Some(StudioExecutor::Compute)
+                })
+                .unwrap_or(false);
+            if !consumer_is_compute {
+                all_compute = false;
+                break;
+            }
+        }
+        if has_consumer && all_compute {
+            skippable.insert(port.to_string());
+        }
+    }
+    skippable
+}
+
 async fn execute_studio_node(
     node: &StudioGraphNode,
     inputs: BTreeMap<String, Value>,
     cancels: &tauri::State<'_, StudioRunCancels>,
     run_id: &str,
+    skip_write_ports: &HashSet<String>,
 ) -> Result<BTreeMap<String, Value>, String> {
     // Route on the executor first, then dispatch by kind inside that class.
     // Each class-handler only has access to the resources its executor is
@@ -814,7 +866,9 @@ async fn execute_studio_node(
     match studio_executor_for_kind(node.kind.as_str()) {
         Some(StudioExecutor::Graph) => execute_studio_graph_node(node, &inputs),
         Some(StudioExecutor::Local) => execute_studio_local_node(node, &inputs),
-        Some(StudioExecutor::Compute) => execute_studio_compute_node(node, &inputs),
+        Some(StudioExecutor::Compute) => {
+            execute_studio_compute_node(node, &inputs, skip_write_ports)
+        }
         Some(StudioExecutor::Api) => execute_studio_api_node(node, &inputs, cancels, run_id).await,
         Some(StudioExecutor::Hybrid) => {
             execute_studio_prompt_optimize(node, &inputs, cancels, run_id).await
@@ -968,10 +1022,11 @@ fn execute_studio_local_node(
 fn execute_studio_compute_node(
     node: &StudioGraphNode,
     inputs: &BTreeMap<String, Value>,
+    skip_write_ports: &HashSet<String>,
 ) -> Result<BTreeMap<String, Value>, String> {
     match node.kind.as_str() {
         "subjectMask" => execute_studio_subject_mask(node, inputs),
-        "crop" => execute_studio_crop(node, inputs),
+        "crop" => execute_studio_crop(node, inputs, skip_write_ports),
         other => Err(format!("node kind is not a compute node: {other}")),
     }
 }
@@ -1081,7 +1136,11 @@ pub(crate) async fn run_studio_graph(
         // the shared gate a parallel scheduler will contend on.
         let category = category_for_kind(node.kind.as_str()).unwrap_or(JobCategory::CpuLight);
         let _lane_permit = scheduler.acquire(category).await;
-        match execute_studio_node(node, inputs, &cancels, &run_id).await {
+        // Outputs consumed exclusively by other in-process compute cards never
+        // need a file on disk (the consumer loads them from the shared buffer),
+        // so the producer may skip the PNG write for those ports.
+        let skip_write_ports = studio_skippable_output_ports(node, &graph, &nodes_by_id);
+        match execute_studio_node(node, inputs, &cancels, &run_id, &skip_write_ports).await {
             Ok(node_outputs) => {
                 let duration_ms = started_at.elapsed().as_millis();
                 outputs.insert(node.id.clone(), node_outputs);
@@ -1293,10 +1352,89 @@ mod tests {
         // path, and a python-bridge kind must never run through compute.
         let err = execute_studio_local_node(&node_with_kind("subjectMask"), &inputs).unwrap_err();
         assert!(err.contains("not a local node"), "{err}");
-        let err = execute_studio_compute_node(&node_with_kind("psdExport"), &inputs).unwrap_err();
+        let err = execute_studio_compute_node(&node_with_kind("psdExport"), &inputs, &HashSet::new())
+            .unwrap_err();
         assert!(err.contains("not a compute node"), "{err}");
         // A genuine graph node still resolves through its own handler.
         assert!(execute_studio_graph_node(&node_with_kind("prompt"), &inputs).is_ok());
+    }
+
+    fn node(id: &str, kind: &str) -> StudioGraphNode {
+        StudioGraphNode {
+            id: id.to_string(),
+            kind: kind.to_string(),
+            params: BTreeMap::new(),
+        }
+    }
+
+    fn edge(id: &str, source: &str, source_port: &str, target: &str) -> StudioGraphEdge {
+        StudioGraphEdge {
+            id: id.to_string(),
+            source: source.to_string(),
+            source_port: source_port.to_string(),
+            target: target.to_string(),
+            target_port: "image".to_string(),
+        }
+    }
+
+    #[test]
+    fn skippable_ports_are_the_ones_feeding_only_compute() {
+        // crop.image -> a second crop (Compute): skippable.
+        // crop.crop_report -> a preview (Graph): not skippable.
+        // A second port that fans out to one compute + one preview: not
+        // skippable (any non-compute consumer keeps the file).
+        let graph = StudioWorkflowGraph {
+            version: 1,
+            nodes: vec![
+                node("crop1", "crop"),
+                node("crop2", "crop"),
+                node("prev", "preview"),
+                node("enh", "imageEnhance"),
+            ],
+            edges: vec![
+                edge("e1", "crop1", "image", "crop2"),
+                edge("e2", "crop1", "crop_report", "prev"),
+                edge("e3", "crop2", "image", "crop1"),
+                edge("e4", "crop2", "image", "enh"),
+            ],
+        };
+        let nodes_by_id: HashMap<String, &StudioGraphNode> =
+            graph.nodes.iter().map(|n| (n.id.clone(), n)).collect();
+
+        let crop1 = nodes_by_id.get("crop1").unwrap();
+        let skippable = studio_skippable_output_ports(crop1, &graph, &nodes_by_id);
+        assert_eq!(
+            skippable,
+            HashSet::from(["image".to_string()]),
+            "crop1.image feeds only a compute card; crop_report feeds a preview"
+        );
+
+        // crop2.image fans out to a compute card *and* a Local imageEnhance, so
+        // the file must stay — nothing is skippable.
+        let crop2 = nodes_by_id.get("crop2").unwrap();
+        assert!(
+            studio_skippable_output_ports(crop2, &graph, &nodes_by_id).is_empty(),
+            "a mixed fan-out (compute + local) always keeps the file"
+        );
+
+        // A non-compute node never skips, even when its consumer is compute.
+        let prev = nodes_by_id.get("prev").unwrap();
+        assert!(studio_skippable_output_ports(prev, &graph, &nodes_by_id).is_empty());
+    }
+
+    #[test]
+    fn an_output_with_no_consumer_is_not_skippable() {
+        // A terminal-ish crop whose image port has no outgoing edge must keep
+        // its file: it is the run's returned artifact / a thumbnail source.
+        let graph = StudioWorkflowGraph {
+            version: 1,
+            nodes: vec![node("crop1", "crop")],
+            edges: vec![],
+        };
+        let nodes_by_id: HashMap<String, &StudioGraphNode> =
+            graph.nodes.iter().map(|n| (n.id.clone(), n)).collect();
+        let crop1 = nodes_by_id.get("crop1").unwrap();
+        assert!(studio_skippable_output_ports(crop1, &graph, &nodes_by_id).is_empty());
     }
 
     #[test]

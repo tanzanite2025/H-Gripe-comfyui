@@ -79,6 +79,59 @@ The input is normalised to an 8-bit RGB working space and the original
 | `CMYK` | Converted to sRGB via the embedded ICC profile when present, else a naive convert; profile not carried over (`icc_preserved: false`). |
 | `I` / `I;16*` / `F` (high bit) | Data range normalised down to 8-bit via numpy before RGB conversion. |
 
+### `engine = cpu` in-process fast path (Rust)
+
+The default `cpu` engine no longer always shells out: `studio/image_enhance_cpu.rs`
+reproduces the CLI's `cpu` pipeline **in-process** (Lanczos3 / box resample,
+unsharp, edge-preserving median denoise, independent alpha track) so a run of
+common inputs skips the Python subprocess entirely. It is behaviour-preserving
+by construction — anything it cannot reproduce faithfully returns `Ok(None)` and
+falls straight through to `image_enhance_cli.py`, so no input regresses.
+
+| Source colour | In-process (Rust) | Notes |
+| --- | --- | --- |
+| 8-bit `RGB` / `RGBA` / `L` / `LA` | ✅ | Embedded ICC re-embedded on output (iCCP) + DPI (pHYs), matching the CLI `save`. |
+| 16-bit `Rgb16` / `Rgba16` / `La16` | ✅ | High byte kept (PIL / `into_rgba8` parity). |
+| single-channel 16-bit (`I;16`, `L16`) | ✅ | Range-scaled by the source's own peak to 8-bit (numpy parity), not a naive `>>8`. |
+| `CMYK` | ⛔ defers to Python | The `image` crate discards the raw CMYK samples + ICC at decode, so a faithful transform is impossible on this path today. See below. |
+| `Rgb32F` / `Rgba32F` (float) | ⛔ defers to Python | |
+
+Landed: [#172](https://github.com/tanzanite2025/H-Gripe-Studio/pull/172)
+(8-bit fast path), [#174](https://github.com/tanzanite2025/H-Gripe-Studio/pull/174)
+(16-bit range-scale + ICC/DPI preserve).
+
+### Planned: CMYK → sRGB in-process (phased)
+
+To pull CMYK onto the Rust fast path we must bypass the `image` crate (which
+converts CMYK→RGB and drops the profile at decode) and read the **raw CMYK
+samples + embedded ICC** ourselves, then run a real CMS transform. Sequenced as
+small, independently shippable, CI-verifiable steps:
+
+- **c1 — raw CMYK decoder (dead code + tests, still defers).** Add
+  `studio/cmyk_decode.rs` returning `Option<(w, h, Vec<u8> /*4ch CMYK*/, Option<Vec<u8>> /*icc*/)>`
+  from JPEG (`zune-jpeg`) and TIFF (`tiff`) CMYK sources. Not wired into the
+  enhance path yet; unit-tested against CMYK JPEG/TIFF fixtures. CMYK keeps
+  deferring to Python. Zero runtime risk.
+- **c2 — `moxcms` CMYK→sRGB transform (isolated, fixture-tested).** Add the
+  `moxcms` dep; build `cmyk_to_rgb8(cmyk, icc)` that transforms via the embedded
+  profile to sRGB, and replicates PIL's *naive* CMYK→RGB formula
+  (`r=(255-c)*(255-k)/255`, …) when **no** profile is present (to match the CLI's
+  non-ICC branch). Validated against ImageCms/PIL reference patches within a ΔE
+  tolerance. Still not wired.
+- **c3 — wire behind the gate, Python fallback on any miss.** In `try_enhance`,
+  route CMYK through `cmyk_decode` + `cmyk_to_rgb8` → the normal pipeline →
+  sRGB PNG (old CMYK profile dropped, `icc_preserved: false`, matching Python).
+  On **any** failure (unsupported container, profile/transform error) return
+  `Ok(None)` → Python. `can_handle_in_process` stops deferring CMYK only for the
+  containers the decoder covers.
+- **c4 — colour-accuracy regression + docs.** Small CMYK fixture set asserting
+  Rust vs Python output agree within ΔE; flip the CMYK row above and this
+  section to "landed".
+
+Risk lives entirely in c2/c3 (colour fidelity); c1 is inert. Because there is no
+local Rust toolchain, each step leans on CI + the fixture assertions rather than
+manual inspection.
+
 ## Boundary behaviour
 
 | Condition | Behaviour |

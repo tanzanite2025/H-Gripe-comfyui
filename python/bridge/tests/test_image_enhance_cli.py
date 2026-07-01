@@ -90,6 +90,40 @@ def test_cmyk_source_is_converted_and_reported(tmp_path: Path) -> None:
     assert Image.open(out["enhanced_image"]).mode == "RGB"
 
 
+# Shared, profile-less CMYK->sRGB reference. Each row is the exact byte triple
+# Pillow's naive `Image.convert("RGB")` emits for a (C, M, Y, K) patch, and the
+# Rust in-process transform is frozen to the identical values in
+# `studio/cmyk_transform.rs` (test `naive_matches_pil_convert_rgb`). Asserting
+# the same table on both sides makes the TIFF-CMYK fast path a zero-deltaE
+# cross-language regression: if either engine's naive transform ever shifts,
+# CI fails. (R3 CMYK step c4.)
+CMYK_TO_SRGB_NAIVE: list[tuple[tuple[int, int, int, int], tuple[int, int, int]]] = [
+    ((0, 0, 0, 0), (255, 255, 255)),
+    ((255, 0, 0, 0), (0, 255, 255)),
+    ((0, 255, 0, 0), (255, 0, 255)),
+    ((0, 0, 255, 0), (255, 255, 0)),
+    ((0, 0, 0, 255), (0, 0, 0)),
+    ((255, 255, 255, 255), (0, 0, 0)),
+    ((128, 64, 32, 16), (119, 179, 209)),
+    ((200, 100, 50, 25), (50, 140, 185)),
+    ((255, 255, 255, 0), (0, 0, 0)),
+    ((10, 20, 30, 40), (207, 198, 190)),
+]
+
+
+def test_cmyk_naive_transform_matches_rust_reference() -> None:
+    np = pytest.importorskip("numpy")
+    patches = [cmyk for cmyk, _ in CMYK_TO_SRGB_NAIVE]
+    img = Image.new("CMYK", (len(patches), 1))
+    img.putdata(patches)
+
+    # A profile-less CMYK image takes `_cmyk_to_rgb`'s naive `convert("RGB")`,
+    # exactly what the Rust fallback reproduces byte-for-byte.
+    got = np.asarray(cli._cmyk_to_rgb(img))
+    expected = np.array([[rgb for _, rgb in CMYK_TO_SRGB_NAIVE]], dtype=np.uint8)
+    assert np.array_equal(got, expected)
+
+
 def test_high_bit_depth_source_is_normalised(tmp_path: Path) -> None:
     src = tmp_path / "depth.tiff"
     Image.new("I", (16, 16), 40000).save(src)

@@ -20,9 +20,11 @@
 //!       copy hands back the raw Y/Cb/Cr/K planes, and we run the YCCK->CMYK
 //!       reconstruction ourselves (libjpeg's `ycck_cmyk_convert`: YCbCr->RGB
 //!       then C=255-R, M=255-G, Y=255-B, K passthrough), preserving the ICC.
-//!   CMYK JPEGs without an Adobe marker (transform code absent) and any other
-//!   JPEG return `None` and stay on the Python fallback — an unmarked CMYK JPEG
-//!   is too rare to generate and validate a round-trip for.
+//!   **Unmarked CMYK** (a 4-component JPEG with no Adobe APP14 marker, which
+//!   zune defaults to `CMYK`): Pillow inverts the stored ink to the device
+//!   direction *unconditionally*, marker or not, so we treat it exactly like
+//!   Adobe CMYK (`255 - v`). Any other JPEG (RGB, YCbCr) returns `None` and
+//!   stays on the existing path.
 //! - **TIFF** via the `tiff` crate when the photometric interpretation is CMYK
 //!   (CMYK or CMYK+alpha, 8- or 16-bit). 16-bit is scaled to 8-bit (`v >> 8`)
 //!   and any alpha channel is dropped, so the result is always tightly-packed
@@ -85,15 +87,14 @@ pub(crate) fn decode_cmyk(path: &Path, max_pixels: u64) -> Result<Option<RawCmyk
 }
 
 /// Whether `bytes` is a JPEG whose sample data is four-channel CMYK-family
-/// (Adobe CMYK or YCCK).
+/// (Adobe CMYK, unmarked CMYK, or YCCK).
 ///
 /// The `image` crate reports both as `Rgb8` — it converts to RGB on decode and
 /// drops the embedded ICC — so [`studio_image::probe_source`] cannot tell them
 /// apart from an ordinary RGB JPEG. The enhance probe uses this to route such
 /// JPEGs to the CMYK fast path ([`decode_cmyk`] + `cmyk_transform`) instead of
-/// the lossy generic decode. `decode_cmyk_jpeg` still has the final say and
-/// returns `None` for the CMYK shapes it won't take faithfully (e.g. an
-/// unmarked CMYK JPEG), which keeps those on the Python fallback.
+/// the lossy generic decode. `decode_cmyk_jpeg` still has the final say for the
+/// exact shapes it takes faithfully.
 pub(crate) fn is_cmyk_family_jpeg(bytes: &[u8]) -> bool {
     if !matches!(sniff(bytes), Some(Container::Jpeg)) {
         return false;
@@ -150,10 +151,13 @@ fn decode_cmyk_jpeg(bytes: &[u8], max_pixels: u64) -> Result<Option<RawCmyk>, St
         .map_err(|err| format!("failed to read JPEG headers: {err:?}"))?;
 
     // Decide whether (and how) to take this JPEG from its input colourspace and
-    // the Adobe APP14 transform code. Only the two Adobe shapes are handled;
-    // an unmarked CMYK JPEG or anything else defers to the Python bridge.
+    // the Adobe APP14 transform code. CMYK (Adobe transform 0 *or* no marker at
+    // all) and Adobe YCCK (transform 2) are handled; anything else defers.
+    // Pillow inverts the stored ink to the device direction whether or not the
+    // Adobe marker is present, so unmarked CMYK is decoded exactly like Adobe
+    // CMYK -- matching the Python path this replaces.
     let mode = match (decoder.input_colorspace(), adobe_transform(bytes)) {
-        (Some(ColorSpace::CMYK), Some(0)) => JpegCmyk::Cmyk,
+        (Some(ColorSpace::CMYK), Some(0) | None) => JpegCmyk::Cmyk,
         (Some(ColorSpace::YCCK), Some(2)) => JpegCmyk::Ycck,
         _ => return Ok(None),
     };
@@ -486,6 +490,13 @@ mod tests {
     // ink tiles, written by `scripts/gen_ycck_jpeg_fixture.py`.
     const YCCK_CMYK_JPEG: &[u8] = include_bytes!("../../tests/fixtures/cmyk_ycck_app14.jpg");
 
+    // The same 2x2 ink tiles as the Adobe CMYK fixture but with the APP14 Adobe
+    // marker stripped, so nothing declares the ink direction. zune defaults a
+    // 4-component JPEG to CMYK and Pillow inverts it to the device direction
+    // just like the marked file. Written by
+    // `scripts/gen_unmarked_cmyk_jpeg_fixture.py`.
+    const UNMARKED_CMYK_JPEG: &[u8] = include_bytes!("../../tests/fixtures/cmyk_unmarked.jpg");
+
     // Tile-centre (x, y) samples, well inside each 16x16 tile so JPEG block
     // edges don't bleed in, paired with the device inks PIL round-trips them to.
     const TILE_CENTRES: [((u32, u32), [u8; 4]); 4] = [
@@ -582,6 +593,71 @@ mod tests {
     #[test]
     fn adobe_transform_reads_ycck_fixture_marker() {
         assert_eq!(adobe_transform(YCCK_CMYK_JPEG), Some(2));
+    }
+
+    #[test]
+    fn unmarked_cmyk_jpeg_has_no_adobe_marker_but_is_cmyk_family() {
+        // The fixture carries no APP14 Adobe marker, yet zune defaults its four
+        // components to CMYK, so the enhance probe still routes it to the CMYK
+        // path rather than the lossy generic RGB decode.
+        assert_eq!(adobe_transform(UNMARKED_CMYK_JPEG), None);
+        assert!(is_cmyk_family_jpeg(UNMARKED_CMYK_JPEG));
+    }
+
+    #[test]
+    fn decodes_unmarked_cmyk_jpeg_inverted_to_device_direction() {
+        // With no Adobe marker, Pillow still inverts the stored ink to the
+        // device direction; we match it, so the tile centres land on the same
+        // device inks as the Adobe fixture (0 = no ink).
+        let raw = decode_cmyk_jpeg(UNMARKED_CMYK_JPEG, DEFAULT_MAX_DECODE_PIXELS)
+            .unwrap()
+            .expect("an unmarked CMYK JPEG should decode to raw CMYK samples");
+        assert_eq!((raw.width, raw.height), (32, 32));
+        assert_eq!(raw.icc, None);
+
+        for ((x, y), expected) in TILE_CENTRES {
+            let got = sample_at(&raw, x, y);
+            for ch in 0..4 {
+                assert!(
+                    (i32::from(got[ch]) - i32::from(expected[ch])).abs() <= 4,
+                    "tile ({x},{y}) ch {ch}: {} vs {} (device ink)",
+                    got[ch],
+                    expected[ch]
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn unmarked_cmyk_jpeg_transforms_to_pil_rgb() {
+        use crate::studio::cmyk_transform::cmyk_to_rgb8;
+
+        let raw = decode_cmyk_jpeg(UNMARKED_CMYK_JPEG, DEFAULT_MAX_DECODE_PIXELS)
+            .unwrap()
+            .expect("an unmarked CMYK JPEG should decode");
+        let rgb = cmyk_to_rgb8(&raw);
+        assert_eq!(rgb.len(), 32 * 32 * 3);
+
+        // Identical to what Pillow's `Image.open(fixture).convert("RGB")`
+        // produces (verified with Pillow 12.3): the stripped marker changes
+        // nothing about the decoded colour.
+        let expected: [((u32, u32), [u8; 3]); 4] = [
+            ((8, 8), [255, 255, 255]),
+            ((24, 8), [0, 255, 255]),
+            ((8, 24), [0, 0, 0]),
+            ((24, 24), [119, 179, 209]),
+        ];
+        for ((x, y), want) in expected {
+            let idx = (y as usize * 32 + x as usize) * 3;
+            for ch in 0..3 {
+                let got = i32::from(rgb[idx + ch]);
+                assert!(
+                    (got - i32::from(want[ch])).abs() <= 6,
+                    "tile ({x},{y}) ch {ch}: rust {got} vs PIL {}",
+                    want[ch]
+                );
+            }
+        }
     }
 
     #[test]

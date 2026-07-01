@@ -95,7 +95,8 @@ falls straight through to `image_enhance_cli.py`, so no input regresses.
 | single-channel 16-bit (`I;16`, `L16`) | ✅ | Range-scaled by the source's own peak to 8-bit (numpy parity), not a naive `>>8`. |
 | `CMYK` (TIFF) | ✅ | Raw ink samples + embedded ICC read via `cmyk_decode` (bypassing the `image` crate, which drops them at decode), then colour-managed to sRGB via `cmyk_transform` (the profile's A2B LUT through `moxcms`, else PIL's naive formula). Output is sRGB, so the source CMYK profile is dropped (`icc_preserved: false`), matching Python. See below. |
 | `CMYK` (Adobe JPEG) | ✅ | APP14 transform-0 JPEGs store *inverted* ink (0 = full ink); `cmyk_decode` undoes it (`255 - v`) so the samples match TIFF Separated, then the same `cmyk_transform` path applies. |
-| `CMYK` (YCCK / unmarked JPEG) | ⛔ defers to Python | `zune-jpeg`'s YCCK→RGB drops the embedded ICC, and an unmarked CMYK JPEG is too rare to validate a round-trip for, so both stay on the colour-managed Python path. |
+| `CMYK` (YCCK JPEG) | ✅ | APP14 transform-2 JPEGs (`zune` reports a `YCCK` input colourspace). Instead of `zune`'s lossy YCCK→RGB (which drops the ICC), the output colourspace is pinned to `YCCK` so `zune` copies the raw Y/Cb/Cr/K planes through; `cmyk_decode` reconstructs CMYK (libjpeg's `ycck_cmyk_convert`) and undoes the inversion, keeping the ICC, then the same `cmyk_transform` path applies. |
+| `CMYK` (unmarked JPEG) | ⛔ defers to Python | An unmarked CMYK JPEG is too rare to validate a round-trip for, so it stays on the colour-managed Python path. |
 | `Rgb32F` / `Rgba32F` (float) | ⛔ defers to Python | |
 
 Landed: [#172](https://github.com/tanzanite2025/H-Gripe-Studio/pull/172)
@@ -131,13 +132,33 @@ independently reviewable, CI-verifiable steps:
   transform 0): Adobe stores inverted ink (0 = full ink) that PIL/libjpeg
   normalise on load, so we apply `255 - v` after `zune-jpeg` decode to land in
   the device direction (0 = no ink) that TIFF Separated and `cmyk_transform`
-  expect. **YCCK** JPEGs (transform 2; `zune` reports a non-CMYK input
-  colourspace, and its YCCK→RGB drops the embedded ICC) and CMYK JPEGs **without**
-  an Adobe marker still return `Ok(None)` → Python. A committed PIL-generated
-  fixture (`tests/fixtures/cmyk_adobe_app14.jpg`, regenerable via
+  expect. A committed PIL-generated fixture
+  (`tests/fixtures/cmyk_adobe_app14.jpg`, regenerable via
   `scripts/gen_cmyk_jpeg_fixture.py`) is decoded + transformed in Rust and
   compared to Pillow's RGB within tolerance, so an inversion-direction error
   fails CI immediately.
+- **c3c — YCCK JPEG in-process + probe routing fix.**
+  Two parts:
+  - **Routing.** The `image` crate decodes *both* CMYK and YCCK JPEGs to RGB and
+    reports them as `Rgb8`, so `probe_source` never saw `Cmyk8` for a JPEG and
+    CMYK/YCCK JPEGs silently took the generic RGB path (dropping the ICC) rather
+    than `cmyk_decode` — the c3b Adobe path was effectively unreachable in
+    production. `probe_source` now sniffs the JPEG itself
+    (`cmyk_decode::is_cmyk_family_jpeg`, via `zune`'s input colourspace) and
+    reclassifies CMYK-family JPEGs as `Cmyk8` so they reach the CMYK fast path;
+    `decode_cmyk` still returns `None` for shapes it won't take (unmarked CMYK),
+    keeping those on Python.
+  - **YCCK decode.** `zune` only offers a lossy YCCK→RGB that drops the ICC.
+    Instead the output colourspace is pinned to `YCCK`, so `zune`'s same
+    4-channel straight-through copy hands back the raw Y/Cb/Cr/K planes with the
+    ICC intact; `cmyk_decode` reconstructs CMYK the way libjpeg's
+    `ycck_cmyk_convert` does (YCbCr→RGB, then C=255-R, M=255-G, Y=255-B, K
+    passthrough) and undoes the Adobe inversion to reach the device direction.
+    No `zune` fork/patch is needed. A committed fixture
+    (`tests/fixtures/cmyk_ycck_app14.jpg`, regenerable via
+    `scripts/gen_ycck_jpeg_fixture.py` using `imagecodecs`, since Pillow only
+    emits transform 0) is decoded + transformed in Rust and compared to Pillow's
+    RGB within tolerance.
 - **c4 — colour-accuracy regression + docs (this section).** The naive CMYK→sRGB
   table is asserted **byte-for-byte on both sides** — Rust
   (`cmyk_transform` test `naive_matches_pil_convert_rgb`) and Python

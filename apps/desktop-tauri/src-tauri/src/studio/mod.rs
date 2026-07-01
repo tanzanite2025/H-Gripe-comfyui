@@ -23,6 +23,8 @@ mod crop;
 mod detail_watchdog;
 mod edge_refine;
 mod exec;
+#[cfg(feature = "native-ffmpeg")]
+mod ffmpeg_native;
 mod frame_cache;
 mod graph;
 mod history;

@@ -1,3 +1,9 @@
 /web/assets/** linguist-generated
 /web/** linguist-vendored
 comfy_api_nodes/apis/__init__.py linguist-generated
+
+# Vendored FFmpeg (LGPL shared) prebuilt libraries — cut from upstream, locally
+# maintained. Binaries go through git-lfs; headers stay as normal diffable text.
+third_party/ffmpeg/** linguist-vendored
+third_party/ffmpeg/**/*.dll filter=lfs diff=lfs merge=lfs -text
+third_party/ffmpeg/**/*.lib filter=lfs diff=lfs merge=lfs -text

@@ -1501,8 +1501,8 @@ fn video_probe_worker(
     ts: f64,
     poster_path: &Path,
 ) -> Result<VideoProbeResult, String> {
-    use crate::studio::video_engine::{FrameSource, PyAvFrameSource};
-    let mut source = PyAvFrameSource::new(python.to_path_buf(), dir.to_path_buf());
+    use crate::studio::video_engine::FrameSource;
+    let mut source = crate::studio::video_engine::make_frame_source(python, dir);
     let meta = source.probe(video)?;
     source.decode_frame(video, ts, poster_path)?;
     Ok(VideoProbeResult {

@@ -9,6 +9,17 @@ publish = false
 name = "hgripe-desktop"
 path = "src/main.rs"
 
+[features]
+# Native in-process FFmpeg decoder backend (a second `FrameSource` behind the
+# media-engine seam), linked against the vendored LGPL *shared* libav* libraries
+# checked into `third_party/ffmpeg` via git-lfs — cut from upstream, locally
+# maintained, no system ffmpeg and no PyAV. Off by default so the ordinary build
+# stays PyAV-only; the CI `tauri (cargo test)` job opts in. The `FFMPEG_*`
+# link/binding env for `rusty_ffmpeg` lives in `.cargo/config.toml`, and
+# `build.rs` copies the runtime DLLs next to the test/app binaries. Decoder
+# failures fall back to the PyAV/one-shot path exactly as before.
+native-ffmpeg = ["dep:rusty_ffmpeg"]
+
 [build-dependencies]
 tauri-build = { version = "2", features = [] }
 
@@ -26,4 +37,10 @@ image = "0.25"
 # `download-binaries` fetches a prebuilt CPU onnxruntime at build time so no
 # system install is required.
 ort = { version = "2.0.0-rc.10", default-features = false, features = ["download-binaries", "tls-rustls"] }
+# Native in-process FFmpeg decoder (feature `native-ffmpeg`). Linked against the
+# vendored LGPL shared libav* under third_party/ffmpeg via the FFMPEG_* env in
+# `.cargo/config.toml`; `use_prebuilt_binding` ships FFmpeg 8 bindings (matching
+# the vendored 8.1 libs) so no libclang/bindgen is needed on CI. `ffmpeg8_1`
+# aligns the version cfgs with those libs.
+rusty_ffmpeg = { version = "0.17", default-features = false, features = ["ffmpeg8_1", "use_prebuilt_binding"], optional = true }
 hgripe-api = { path = "../../../crates/hgripe-api" }

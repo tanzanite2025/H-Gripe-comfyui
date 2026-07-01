@@ -1,0 +1,24 @@
+# Build config for the optional `native-ffmpeg` feature.
+#
+# `rusty_ffmpeg` reads these `FFMPEG_*` vars at build time to link against the
+# vendored LGPL *shared* libav* libraries checked into `third_party/ffmpeg`
+# (cut from upstream, locally maintained) — no system ffmpeg, no pkg-config, no
+# vcpkg. Paths are `relative = true`, resolved against this crate directory
+# (the parent of `.cargo`), so they work identically in CI and locally.
+#
+#   * FFMPEG_LIBS_DIR   — dir holding the import libs (avcodec.lib, ...); with
+#     FFMPEG_LINK_MODE=dynamic rusty_ffmpeg emits `dylib=` link directives that
+#     resolve against these, while the matching DLLs are loaded at runtime
+#     (build.rs copies them next to the test/app binaries).
+#   * FFMPEG_BINDING_PATH — points at a tiny placeholder so rusty_ffmpeg's
+#     Windows link path does not fall through to bindgen (which would need
+#     libclang). The `use_prebuilt_binding` feature then overwrites the binding
+#     with the crate's shipped FFmpeg 8 bindings, which match the vendored 8.1
+#     libs. The placeholder content is irrelevant (it is overwritten).
+#
+# These vars are harmless when `native-ffmpeg` is off: `rusty_ffmpeg` is an
+# optional dependency, so its build script never runs and nothing reads them.
+[env]
+FFMPEG_LIBS_DIR = { value = "../../../third_party/ffmpeg/win-x64/lib", relative = true }
+FFMPEG_LINK_MODE = "dynamic"
+FFMPEG_BINDING_PATH = { value = "../../../third_party/ffmpeg/prebuilt-binding-placeholder.rs", relative = true }

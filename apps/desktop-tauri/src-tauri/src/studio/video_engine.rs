@@ -119,6 +119,26 @@ impl FrameSource for PyAvFrameSource {
     }
 }
 
+/// Build the decoder backend for `(python, dir)`.
+///
+/// Default build: the PyAV worker ([`PyAvFrameSource`]). With `native-ffmpeg`:
+/// the in-process libav decoder, wrapped so a per-clip decode failure falls back
+/// to the PyAV worker rather than erroring the scrub. Either way the returned
+/// box is what the playback thread and the one-shot poster path decode through.
+pub(crate) fn make_frame_source(python: &Path, dir: &Path) -> Box<dyn FrameSource> {
+    #[cfg(feature = "native-ffmpeg")]
+    {
+        Box::new(super::ffmpeg_native::FfmpegWithPyAvFallback::new(
+            python.to_path_buf(),
+            dir.to_path_buf(),
+        ))
+    }
+    #[cfg(not(feature = "native-ffmpeg"))]
+    {
+        Box::new(PyAvFrameSource::new(python.to_path_buf(), dir.to_path_buf()))
+    }
+}
+
 /// Return the frame path for `timestamp_sec`, decoding + caching on a miss.
 ///
 /// The cache key quantises the time to milliseconds, so two seeks to the same
@@ -276,7 +296,7 @@ pub(crate) fn scrub_frame(
         .map_err(|_| "playback engine mutex poisoned".to_string())?;
     if !guard.as_ref().is_some_and(|e| e.matches(python, dir)) {
         *guard = None; // drop (join) any engine bound to a different project
-        let source = Box::new(PyAvFrameSource::new(python.to_path_buf(), dir.to_path_buf()));
+        let source = make_frame_source(python, dir);
         *guard = Some(PlaybackEngine::spawn(
             source,
             SCRUB_CACHE_FRAMES,

@@ -259,7 +259,7 @@ fn prepare_source(
     }
 
     if is_single_channel_highbit(color) {
-        let (dynimg, _meta) = match studio_image::load_dynamic(path, DEFAULT_MAX_DECODE_PIXELS) {
+        let (dynimg, _meta, _icc) = match studio_image::load_dynamic(path, DEFAULT_MAX_DECODE_PIXELS) {
             Ok(loaded) => loaded,
             Err(_) => return Ok(None),
         };

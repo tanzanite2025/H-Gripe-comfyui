@@ -17,6 +17,7 @@ use image::{
 };
 
 use super::image_buffer;
+use super::working_image::{WorkingImage, WorkingSpace};
 
 /// Default decode budget, aligned with the Python PSD chain
 /// (`--max-decode-pixels`). A source whose declared `width * height` exceeds
@@ -36,6 +37,15 @@ pub(crate) struct LoadMeta {
 #[derive(Debug)]
 pub(crate) struct LoadedRgba {
     pub(crate) image: RgbaImage,
+    pub(crate) meta: LoadMeta,
+}
+
+/// A decoded [`WorkingImage`] (16-bit canonical surface) plus its provenance.
+/// This is the carrier the loader now builds first; [`load_rgba`] narrows it to
+/// the 8-bit [`LoadedRgba`] the cards still consume (see `load_working`).
+#[derive(Debug)]
+pub(crate) struct LoadedWorking {
+    pub(crate) image: WorkingImage,
     pub(crate) meta: LoadMeta,
 }
 
@@ -143,6 +153,20 @@ pub(crate) fn load_rgba(path: &Path, max_pixels: u64) -> Result<LoadedRgba, Stri
     if let Some(hit) = image_buffer::lookup_rgba(path, max_pixels) {
         return Ok(hit);
     }
+    let LoadedWorking { image, meta } = load_working(path, max_pixels)?;
+    Ok(LoadedRgba {
+        image: image.to_rgba8(),
+        meta,
+    })
+}
+
+/// Decode a source into the canonical 16-bit [`WorkingImage`] carrier (the
+/// cold, un-cached path — [`load_rgba`] handles the in-process cache before
+/// calling here). Phase 2 keeps the surface in the `Srgb` working space and
+/// only widens 8→16-bit (no gamut change), so narrowing it back reproduces the
+/// previous 8-bit result exactly; the carrier additionally holds the source ICC
+/// so later phases can consume it instead of dropping it.
+pub(crate) fn load_working(path: &Path, max_pixels: u64) -> Result<LoadedWorking, String> {
     // CMYK-family sources (Adobe CMYK / YCCK JPEG, CMYK TIFF): the `image` crate
     // would decode them to RGB and silently discard the embedded ICC, so every
     // native card that loaded through here (crop, subject mask, ...) got
@@ -152,22 +176,22 @@ pub(crate) fn load_rgba(path: &Path, max_pixels: u64) -> Result<LoadedRgba, Stri
     // faithfully (an unmarked CMYK JPEG); both, and any decode error, fall
     // through to the generic decode below (unchanged behaviour).
     if let Ok(Some(raw)) = super::cmyk_decode::decode_cmyk(path, max_pixels) {
-        if let Some(loaded) = cmyk_to_loaded_rgba(&raw) {
+        if let Some(loaded) = cmyk_to_working(&raw) {
             return Ok(loaded);
         }
     }
-    let (image, meta) = load_dynamic(path, max_pixels)?;
-    Ok(LoadedRgba {
-        image: image.into_rgba8(),
+    let (image, meta, icc) = load_dynamic(path, max_pixels)?;
+    Ok(LoadedWorking {
+        image: WorkingImage::from_rgba8(&image.into_rgba8(), WorkingSpace::Srgb, icc),
         meta,
     })
 }
 
-/// Build an opaque 8-bit RGBA surface from raw CMYK samples colour-managed to
-/// sRGB (CMYK carries no alpha, so the alpha track is fully opaque). Returns
-/// `None` on an empty or malformed buffer so the caller falls back to the
-/// generic decode.
-fn cmyk_to_loaded_rgba(raw: &super::cmyk_decode::RawCmyk) -> Option<LoadedRgba> {
+/// Build an opaque 16-bit `Srgb` [`WorkingImage`] from raw CMYK samples
+/// colour-managed to sRGB (CMYK carries no alpha, so the alpha track is fully
+/// opaque). Returns `None` on an empty or malformed buffer so the caller falls
+/// back to the generic decode.
+fn cmyk_to_working(raw: &super::cmyk_decode::RawCmyk) -> Option<LoadedWorking> {
     if raw.width == 0 || raw.height == 0 {
         return None;
     }
@@ -180,8 +204,8 @@ fn cmyk_to_loaded_rgba(raw: &super::cmyk_decode::RawCmyk) -> Option<LoadedRgba> 
     for (px, chunk) in out.pixels_mut().zip(rgb.chunks_exact(3)) {
         *px = image::Rgba([chunk[0], chunk[1], chunk[2], 255]);
     }
-    Some(LoadedRgba {
-        image: out,
+    Some(LoadedWorking {
+        image: WorkingImage::from_rgba8(&out, WorkingSpace::Srgb, None),
         meta: LoadMeta {
             source_mode: "CMYK".to_string(),
             exif_transposed: false,
@@ -200,7 +224,7 @@ pub(crate) fn load_mask(path: &Path, max_pixels: u64) -> Result<GrayImage, Strin
     if let Some(hit) = image_buffer::lookup_gray(path, max_pixels) {
         return Ok(hit);
     }
-    let (image, _meta) = load_dynamic(path, max_pixels)?;
+    let (image, _meta, _icc) = load_dynamic(path, max_pixels)?;
     Ok(image.into_luma8())
 }
 
@@ -210,7 +234,10 @@ pub(crate) fn load_mask(path: &Path, max_pixels: u64) -> Result<GrayImage, Strin
 /// Exposed to the enhance fast path, which needs the native (pre-`into_rgba8`)
 /// surface to range-scale a high-bit single-channel source itself rather than
 /// let the default 8-bit conversion truncate its tonal range.
-pub(crate) fn load_dynamic(path: &Path, max_pixels: u64) -> Result<(DynamicImage, LoadMeta), String> {
+pub(crate) fn load_dynamic(
+    path: &Path,
+    max_pixels: u64,
+) -> Result<(DynamicImage, LoadMeta, Option<Vec<u8>>), String> {
     let reader = ImageReader::open(path)
         .map_err(|err| format!("failed to open {}: {err}", path.display()))?
         .with_guessed_format()
@@ -225,6 +252,10 @@ pub(crate) fn load_dynamic(path: &Path, max_pixels: u64) -> Result<(DynamicImage
     let source_mode = source_mode_label(decoder.original_color_type());
     let orientation = decoder.orientation().unwrap_or(Orientation::NoTransforms);
     let exif_transposed = orientation != Orientation::NoTransforms;
+    // Read the embedded ICC off the header before `from_decoder` consumes the
+    // decoder, so the working-surface carrier can hold it (the generic 8-bit
+    // return still drops it, matching current behaviour).
+    let icc = decoder.icc_profile().ok().flatten();
 
     let mut image = DynamicImage::from_decoder(decoder)
         .map_err(|err| format!("failed to decode {}: {err}", path.display()))?;
@@ -236,6 +267,7 @@ pub(crate) fn load_dynamic(path: &Path, max_pixels: u64) -> Result<(DynamicImage
             source_mode,
             exif_transposed,
         },
+        icc,
     ))
 }
 
@@ -409,6 +441,56 @@ mod tests {
                 );
             }
         }
+        let _ = std::fs::remove_file(&path);
+    }
+
+    // The loader now decodes into the 16-bit `WorkingImage` carrier first, then
+    // narrows to 8-bit. Widening (`* 257`) is exactly invertible, so the narrowed
+    // surface must be byte-identical to what `load_rgba` returns; the carrier
+    // also reports the right dimensions and the `Srgb` working space.
+    #[test]
+    fn load_working_widens_to_16bit_and_narrows_identically() {
+        let path = unique_tmp("working_rgb.png");
+        let mut img = RgbaImage::new(4, 3);
+        let mut n = 0u8;
+        for p in img.pixels_mut() {
+            *p = image::Rgba([n, n.wrapping_add(50), n.wrapping_add(100), 255]);
+            n = n.wrapping_add(7);
+        }
+        DynamicImage::ImageRgba8(img).save(&path).unwrap();
+
+        let work = load_working(&path, DEFAULT_MAX_DECODE_PIXELS).unwrap();
+        assert_eq!((work.image.width, work.image.height), (4, 3));
+        assert_eq!(work.image.pixels.len(), 4 * 3 * 4);
+        assert_eq!(work.image.space, WorkingSpace::Srgb);
+
+        let narrowed = work.image.to_rgba8();
+        let loaded = load_rgba(&path, DEFAULT_MAX_DECODE_PIXELS).unwrap();
+        assert_eq!(narrowed, loaded.image);
+        assert_eq!(loaded.meta.source_mode, "RGBA");
+        let _ = std::fs::remove_file(&path);
+    }
+
+    // A CMYK source is colour-managed into the 16-bit `Srgb` carrier; narrowing
+    // reproduces the same sRGB the pre-carrier path produced (no gamut change in
+    // this phase), and the provenance still reads `CMYK`.
+    #[test]
+    fn load_working_colour_manages_cmyk_to_16bit_srgb() {
+        let path = unique_tmp("working_cmyk.jpg");
+        std::fs::write(
+            &path,
+            include_bytes!("../../tests/fixtures/cmyk_adobe_app14.jpg"),
+        )
+        .unwrap();
+
+        let work = load_working(&path, DEFAULT_MAX_DECODE_PIXELS).unwrap();
+        assert_eq!((work.image.width, work.image.height), (32, 32));
+        assert_eq!(work.image.space, WorkingSpace::Srgb);
+        assert_eq!(work.meta.source_mode, "CMYK");
+
+        let narrowed = work.image.to_rgba8();
+        let loaded = load_rgba(&path, DEFAULT_MAX_DECODE_PIXELS).unwrap();
+        assert_eq!(narrowed, loaded.image);
         let _ = std::fs::remove_file(&path);
     }
 

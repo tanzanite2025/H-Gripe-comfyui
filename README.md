@@ -63,6 +63,10 @@ embedded ICC), 16-bit / float, palette and grayscale sources to an 8-bit working
 space, apply EXIF orientation, and refuse oversized inputs before decoding
 (`--max-decode-pixels`). See the per-card docs and
 [`docs/design/executor-split-and-psd-chain-hardening.md`](docs/design/executor-split-and-psd-chain-hardening.md).
+The colour working space, bit depth, ICC handling, and the manual-vs-model
+split are defined once in
+[`docs/design/colour-pipeline.md`](docs/design/colour-pipeline.md) (the 8-bit
+sRGB above is current; a 16-bit wide-gamut target is decided but not yet built).
 For a consolidated view of what is implemented today versus still planned, see
 [`docs/implementation-status.md`](docs/implementation-status.md).
 

@@ -49,8 +49,13 @@ pixel layer (`03_GENERATED`) at `z_order`, optionally hiding the placeholder.
 
 ## Colour space & bit depth
 
-The generated image is normalised to an 8-bit RGBA working space and the
-original `source_mode` is recorded:
+> Working space / bit depth / ICC handling is defined once in
+> [`docs/design/colour-pipeline.md`](../design/colour-pipeline.md) (the source
+> of truth). Below is the **current** 8-bit sRGB behaviour; the decided target
+> (16-bit wide-gamut canonical + sRGB model egress) is not yet implemented.
+
+The generated image is *currently* normalised to an 8-bit RGBA working space and
+the original `source_mode` is recorded:
 
 | Source mode | Handling |
 | --- | --- |

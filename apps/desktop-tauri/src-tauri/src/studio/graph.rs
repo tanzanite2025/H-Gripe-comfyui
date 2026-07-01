@@ -84,3 +84,40 @@ pub(crate) fn studio_non_empty(value: &Value) -> bool {
         _ => true,
     }
 }
+
+/// Trim a string param, mapping blank to `None`.
+pub(crate) fn optional(value: String) -> Option<String> {
+    let trimmed = value.trim();
+    if trimmed.is_empty() {
+        None
+    } else {
+        Some(trimmed.to_string())
+    }
+}
+
+/// Read a numeric param, falling back to `default` when the key is absent.
+pub(crate) fn number_param(node: &StudioGraphNode, key: &str, default: f64) -> f64 {
+    match node.params.get(key) {
+        Some(value) => studio_value_to_number(Some(value)),
+        None => default,
+    }
+}
+
+/// Read a boolean param, falling back to `default` when the key is absent.
+pub(crate) fn bool_param(node: &StudioGraphNode, key: &str, default: bool) -> bool {
+    node.params.get(key).map(studio_truthy).unwrap_or(default)
+}
+
+/// Resolve a node's `output_dir` param, falling back to the runtime output
+/// directory when the param is blank.
+pub(crate) fn resolve_output_dir(node: &StudioGraphNode) -> Result<String, String> {
+    let configured = studio_value_to_string(node.params.get("output_dir"));
+    if configured.trim().is_empty() {
+        Ok(crate::runtime_paths()?
+            .output_dir
+            .to_string_lossy()
+            .to_string())
+    } else {
+        Ok(configured)
+    }
+}

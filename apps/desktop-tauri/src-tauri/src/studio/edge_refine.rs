@@ -8,33 +8,10 @@ use std::collections::BTreeMap;
 use serde_json::{json, Value};
 
 use super::graph::{
-    studio_output_map, studio_truthy, studio_value_to_number, studio_value_to_string,
-    StudioGraphNode,
+    bool_param, number_param, optional, resolve_output_dir, studio_output_map,
+    studio_value_to_string, StudioGraphNode,
 };
 use crate::psd::refine_mask_edge;
-use crate::runtime_paths;
-
-fn optional(value: String) -> Option<String> {
-    let trimmed = value.trim();
-    if trimmed.is_empty() {
-        None
-    } else {
-        Some(trimmed.to_string())
-    }
-}
-
-/// Read a numeric param, falling back to `default` when the key is absent.
-fn number_param(node: &StudioGraphNode, key: &str, default: f64) -> f64 {
-    match node.params.get(key) {
-        Some(value) => studio_value_to_number(Some(value)),
-        None => default,
-    }
-}
-
-/// Read a boolean param, falling back to `default` when the key is absent.
-fn bool_param(node: &StudioGraphNode, key: &str, default: bool) -> bool {
-    node.params.get(key).map(studio_truthy).unwrap_or(default)
-}
 
 pub(super) fn execute_studio_refine_mask_edge(
     node: &StudioGraphNode,
@@ -45,14 +22,7 @@ pub(super) fn execute_studio_refine_mask_edge(
         return Err("Mask Edge Refine needs a connected image input".to_string());
     }
 
-    let output_dir = {
-        let configured = studio_value_to_string(node.params.get("output_dir"));
-        if configured.trim().is_empty() {
-            runtime_paths()?.output_dir.to_string_lossy().to_string()
-        } else {
-            configured
-        }
-    };
+    let output_dir = resolve_output_dir(node)?;
 
     let result = refine_mask_edge(
         None,

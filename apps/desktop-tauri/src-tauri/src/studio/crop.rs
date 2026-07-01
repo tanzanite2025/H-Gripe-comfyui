@@ -22,7 +22,7 @@ use serde::Serialize;
 use serde_json::{json, Value};
 
 use super::graph::{
-    studio_output_map, studio_value_to_number, studio_value_to_string, StudioGraphNode,
+    number_param, optional, studio_output_map, studio_value_to_string, StudioGraphNode,
 };
 use super::image_buffer;
 use super::persist::studio_reject_unsafe_basename;
@@ -50,22 +50,6 @@ struct CropReport {
     margin_pct: f64,
     operations: Vec<Value>,
     processing_time_ms: u128,
-}
-
-fn number_param(node: &StudioGraphNode, key: &str, default: f64) -> f64 {
-    match node.params.get(key) {
-        Some(value) => studio_value_to_number(Some(value)),
-        None => default,
-    }
-}
-
-fn optional(value: String) -> Option<String> {
-    let trimmed = value.trim();
-    if trimmed.is_empty() {
-        None
-    } else {
-        Some(trimmed.to_string())
-    }
 }
 
 fn param_or(node: &StudioGraphNode, key: &str, default: &str) -> String {

@@ -4,6 +4,7 @@
 )]
 
 use std::fs;
+use std::path::PathBuf;
 
 use hgripe_api::providers::custom_http::CustomHttpProvider;
 use hgripe_api::providers::mock::MockProvider;
@@ -36,6 +37,14 @@ pub(crate) fn broker() -> ApiBroker {
 /// nodes that need the output directory.
 pub(crate) fn runtime_paths() -> Result<RuntimePaths, String> {
     RuntimePaths::from_env().map_err(|err| err.to_string())
+}
+
+/// Resolve (creating on demand) a named cache subdirectory under the runtime
+/// output dir, e.g. `.thumbnails` / `.posters`.
+pub(crate) fn cache_subdir(name: &str) -> Result<PathBuf, String> {
+    let dir = runtime_paths()?.output_dir.join(name);
+    fs::create_dir_all(&dir).map_err(|err| format!("failed to create {}: {err}", dir.display()))?;
+    Ok(dir)
 }
 
 /// File modification time in milliseconds since the Unix epoch, if available.

@@ -8,9 +8,10 @@ use std::collections::BTreeMap;
 
 use serde_json::{json, Value};
 
-use super::graph::{studio_output_map, studio_value_to_string, StudioGraphNode};
+use super::graph::{
+    optional, resolve_output_dir, studio_output_map, studio_value_to_string, StudioGraphNode,
+};
 use crate::psd::analyze_psd_context;
-use crate::runtime_paths;
 
 /// Split a multi-line param value into trimmed, non-empty lines.
 fn lines(value: &str) -> Vec<String> {
@@ -19,15 +20,6 @@ fn lines(value: &str) -> Vec<String> {
         .map(|line| line.trim().to_string())
         .filter(|line| !line.is_empty())
         .collect()
-}
-
-fn optional(value: String) -> Option<String> {
-    let trimmed = value.trim();
-    if trimmed.is_empty() {
-        None
-    } else {
-        Some(trimmed.to_string())
-    }
 }
 
 pub(super) fn execute_studio_psd_context_analyze(
@@ -51,14 +43,7 @@ pub(super) fn execute_studio_psd_context_analyze(
         );
     }
 
-    let output_dir = {
-        let configured = studio_value_to_string(node.params.get("output_dir"));
-        if configured.trim().is_empty() {
-            runtime_paths()?.output_dir.to_string_lossy().to_string()
-        } else {
-            configured
-        }
-    };
+    let output_dir = resolve_output_dir(node)?;
 
     let references = lines(&studio_value_to_string(node.params.get("reference_layers")));
 

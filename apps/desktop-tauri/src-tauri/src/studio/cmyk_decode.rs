@@ -15,13 +15,11 @@
 //! - **TIFF** via the `tiff` crate when the photometric interpretation is CMYK
 //!   (8-bit, 4 samples/pixel).
 //!
-//! This module is **not yet wired into the enhance path** — it is exercised only
-//! by its own tests. Routing CMYK through it (with a Python fallback on any
-//! miss) and the colour transform itself land in later steps (c2 = `moxcms`
-//! transform, c3 = wiring). The Adobe-APP14 inverted-ink convention and the CMS
-//! transform are deliberately *not* handled here; c1 only extracts the samples
-//! faithfully.
-#![allow(dead_code)]
+//! Wired into `try_enhance` via `cmyk_transform::cmyk_to_rgb8` for **TIFF** CMYK
+//! (step c3); CMYK JPEGs still defer to Python (the caller gates on container).
+//! The Adobe-APP14 inverted-ink convention and the CMS transform are *not*
+//! handled here — this module only extracts the samples faithfully; the CMS
+//! transform lives in `cmyk_transform`.
 
 use std::path::Path;
 

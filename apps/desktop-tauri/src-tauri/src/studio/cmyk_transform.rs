@@ -13,15 +13,15 @@
 //!   Pillow's rounding `((t >> 8) + t) >> 8` with `t = a*b + 128`. This matches
 //!   `Image.convert("RGB")` exactly (see the tests).
 //!
-//! This module is **not yet wired into the enhance path** — it is exercised only
-//! by its own tests. Wiring (with a Python fallback on any miss) is step c3, and
-//! the byte-accurate ΔE regression against the Python output is c4.
+//! Wired into `try_enhance` for TIFF CMYK (step c3). The naive path is pinned
+//! byte-for-byte to Pillow on both sides — see [`naive_cmyk_to_rgb`]'s test and
+//! the Python `test_cmyk_naive_transform_matches_rust_reference` — giving a
+//! zero-ΔE cross-language regression (step c4).
 //!
 //! Like the Python path, the produced sRGB no longer carries the old CMYK
 //! profile (`icc_preserved: false`). Adobe-APP14 inverted-ink JPEGs are handled
 //! by the caller (c3), not here — this transform trusts its input samples to be
 //! in the profile's device direction (0 = no ink).
-#![allow(dead_code)]
 
 use moxcms::{
     ColorProfile, DataColorSpace, Layout, RenderingIntent, TransformExecutor, TransformOptions,
@@ -108,7 +108,10 @@ mod tests {
     #[test]
     fn naive_matches_pil_convert_rgb() {
         // (C, M, Y, K) -> (R, G, B) reference values taken from Pillow's
-        // `Image.new("CMYK").convert("RGB")` (Pillow 12.3).
+        // `Image.new("CMYK").convert("RGB")` (Pillow 12.3). This table is the
+        // cross-language contract: the Python side asserts the identical rows in
+        // `test_cmyk_naive_transform_matches_rust_reference`, so a drift in
+        // either engine fails CI (R3 CMYK c4).
         let cases: &[([u8; 4], [u8; 3])] = &[
             ([0, 0, 0, 0], [255, 255, 255]),
             ([255, 0, 0, 0], [0, 255, 255]),
@@ -184,8 +187,10 @@ mod tests {
         let black = &out[4 * 3..5 * 3];
         assert!(black.iter().all(|&v| v <= 45), "full-K must stay near black");
 
-        // Loose parity with the littleCMS reference; c4 tightens this to a ΔE
-        // regression once the observed moxcms output is captured.
+        // Loose parity with the littleCMS reference: moxcms is not byte-identical
+        // to littleCMS, so the ICC path is bounded by a ΔE tolerance rather than
+        // the exact match the naive path holds. This test needs a system CMYK
+        // profile and is skipped on runners without one (e.g. Linux CI).
         const TOL: i32 = 30;
         for (i, expected) in reference.iter().enumerate() {
             for ch in 0..3 {

@@ -37,6 +37,32 @@ pub(crate) struct LoadedRgba {
     pub(crate) meta: LoadMeta,
 }
 
+/// The source colour type and whether an ICC profile is attached, read from the
+/// decoder header without decoding the pixels. A card can use this to decide
+/// whether it can faithfully process an input in-process or must defer to a
+/// colour-managed path (e.g. CMYK / high-bit / ICC-tagged inputs).
+#[derive(Debug, Clone)]
+pub(crate) struct SourceProbe {
+    pub(crate) color: ExtendedColorType,
+    pub(crate) has_icc: bool,
+}
+
+/// Read the source colour type + ICC presence from the header only (no pixel
+/// decode). Used by the in-process enhance fast path to route inputs it cannot
+/// reproduce faithfully back to the colour-managed Python pipeline.
+pub(crate) fn probe_source(path: &Path) -> Result<SourceProbe, String> {
+    let reader = ImageReader::open(path)
+        .map_err(|err| format!("failed to open {}: {err}", path.display()))?
+        .with_guessed_format()
+        .map_err(|err| format!("failed to read {}: {err}", path.display()))?;
+    let mut decoder = reader
+        .into_decoder()
+        .map_err(|err| format!("failed to decode {}: {err}", path.display()))?;
+    let color = decoder.original_color_type();
+    let has_icc = decoder.icc_profile().ok().flatten().is_some();
+    Ok(SourceProbe { color, has_icc })
+}
+
 /// Human-readable label for the *source* colour type, so a report can say what
 /// was converted from (the decoded surface is always normalised to 8-bit).
 fn source_mode_label(color: ExtendedColorType) -> String {

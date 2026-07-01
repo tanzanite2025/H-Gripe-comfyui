@@ -6,7 +6,10 @@
 //! - [`psd_analyze`]: the `psdContextAnalyze` node executor (PSD context bridge).
 //! - [`color_match`]: the `matchLightColor` node executor (light/colour match).
 //! - [`edge_refine`]: the `refineMaskEdge` node executor (mask edge refine).
-//! - [`image_enhance`]: the `imageEnhance` node executor (CPU upscale/sharpen).
+//! - [`image_enhance`]: the `imageEnhance` node executor (routes the default
+//!   `cpu` engine to the in-process fast path, other engines to Python).
+//! - [`image_enhance_cpu`]: native-Rust replica of the CLI's `--engine cpu`
+//!   pipeline, run in-process for common 8-bit inputs.
 //! - [`detail_watchdog`]: the `detailWatchdog` node executor (CPU quality scan).
 //! - [`psd_export`]: the `psdExport` node executor (PSD composition bridge).
 //! - [`studio_image`]: decode-guard + colour-space loaders shared by native
@@ -36,6 +39,7 @@ mod graph;
 mod history;
 pub(crate) mod image_buffer;
 mod image_enhance;
+mod image_enhance_cpu;
 mod node_registry;
 mod onnx_pool;
 mod persist;

@@ -1,8 +1,11 @@
-//! The `imageEnhance` node executor: bridges a graph node to the CPU image
-//! enhancement pipeline (`crate::psd::enhance_image`), upscaling and sharpening
-//! a low-resolution subject to a PSD placeholder's pixel target and exposing the
+//! The `imageEnhance` node executor. The default `cpu` engine runs the
+//! in-process native-Rust pipeline ([`super::image_enhance_cpu`]); a learned
+//! engine (`realesrgan`, …) — or any input the fast path cannot reproduce
+//! faithfully (CMYK / high-bit / ICC) — is served by the colour-managed Python
+//! bridge (`crate::psd::enhance_image`). Both paths upscale/sharpen a
+//! low-resolution subject to a PSD placeholder's pixel target and expose the
 //! enhanced image, the applied scale factor, and an enhance report as flat
-//! output ports.
+//! output ports with identical shape.
 
 use std::collections::BTreeMap;
 
@@ -12,7 +15,8 @@ use super::graph::{
     bool_param, number_param, optional, resolve_output_dir, studio_output_map,
     studio_value_to_string, StudioGraphNode,
 };
-use crate::psd::enhance_image;
+use super::image_enhance_cpu::{self, CpuEnhanceParams};
+use crate::psd::{enhance_image, EnhanceImageResult};
 
 pub(super) fn execute_studio_image_enhance(
     node: &StudioGraphNode,
@@ -34,31 +38,79 @@ pub(super) fn execute_studio_image_enhance(
     };
 
     let output_dir = resolve_output_dir(node)?;
+    let mode = optional(studio_value_to_string(node.params.get("mode")));
+    let target_width = number_param(node, "target_width", 0.0) as i64;
+    let target_height = number_param(node, "target_height", 0.0) as i64;
+    let target_dpi = number_param(node, "target_dpi", 300.0) as i64;
+    let max_pixels = number_param(node, "max_pixels", 48_000_000.0) as i64;
+    let scale = number_param(node, "scale", 2.0);
+    let denoise_strength = number_param(node, "denoise_strength", 0.3);
+    let texture_strength = number_param(node, "texture_strength", 0.25);
+    let preserve_text_logo = bool_param(node, "preserve_text_logo", true);
+    let engine = optional(studio_value_to_string(node.params.get("engine")));
+    // `device` selects the compute device for the learned upscaler (default
+    // `auto`); ignored by the CPU resize path.
+    let device = optional(studio_value_to_string(node.params.get("device")));
+    // `precision` selects fp16/fp32 for the learned upscaler (default `auto`);
+    // ignored by the CPU resize path.
+    let precision = optional(studio_value_to_string(node.params.get("precision")));
+    let output_name = optional(studio_value_to_string(node.params.get("output_name")));
+
+    // The default `cpu` engine runs in-process; a learned engine — or an input
+    // the fast path cannot reproduce faithfully — falls through to Python.
+    let engine_is_cpu = engine
+        .as_deref()
+        .map(|e| e.trim().eq_ignore_ascii_case("cpu"))
+        .unwrap_or(true);
+    if engine_is_cpu {
+        let cpu_params = CpuEnhanceParams {
+            image_path: image.clone(),
+            output_dir: output_dir.clone(),
+            output_name: output_name.clone(),
+            mode: mode.clone(),
+            target_bounds: target_bounds.clone(),
+            target_width,
+            target_height,
+            target_dpi,
+            max_pixels,
+            scale,
+            denoise_strength,
+            texture_strength,
+            preserve_text_logo,
+            device_requested: device.clone().unwrap_or_else(|| "auto".to_string()),
+            precision_requested: precision.clone().unwrap_or_else(|| "auto".to_string()),
+        };
+        if let Some(result) = image_enhance_cpu::try_enhance(&cpu_params)? {
+            return to_output_map(result);
+        }
+    }
 
     let result = enhance_image(
         None,
         image,
         target_bounds,
-        optional(studio_value_to_string(node.params.get("mode"))),
-        Some(number_param(node, "target_width", 0.0) as i64),
-        Some(number_param(node, "target_height", 0.0) as i64),
-        Some(number_param(node, "target_dpi", 300.0) as i64),
-        Some(number_param(node, "max_pixels", 48_000_000.0) as i64),
-        Some(number_param(node, "scale", 2.0)),
-        Some(number_param(node, "denoise_strength", 0.3)),
-        Some(number_param(node, "texture_strength", 0.25)),
-        Some(bool_param(node, "preserve_text_logo", true)),
-        optional(studio_value_to_string(node.params.get("engine"))),
-        // `device` selects the compute device for the learned upscaler (default
-        // `auto`); ignored by the CPU resize path.
-        optional(studio_value_to_string(node.params.get("device"))),
-        // `precision` selects fp16/fp32 for the learned upscaler (default
-        // `auto`); ignored by the CPU resize path.
-        optional(studio_value_to_string(node.params.get("precision"))),
+        mode,
+        Some(target_width),
+        Some(target_height),
+        Some(target_dpi),
+        Some(max_pixels),
+        Some(scale),
+        Some(denoise_strength),
+        Some(texture_strength),
+        Some(preserve_text_logo),
+        engine,
+        device,
+        precision,
         Some(output_dir),
-        optional(studio_value_to_string(node.params.get("output_name"))),
+        output_name,
     )?;
 
+    to_output_map(result)
+}
+
+/// Encode an [`EnhanceImageResult`] into the node's flat output ports. Shared
+/// by the in-process and Python paths so both emit an identical output shape.
+fn to_output_map(result: EnhanceImageResult) -> Result<BTreeMap<String, Value>, String> {
     let report = serde_json::to_value(&result.enhance_report)
         .map_err(|err| format!("failed to encode EnhanceReport: {err}"))?;
 

@@ -26,6 +26,7 @@ mod exec;
 mod graph;
 mod history;
 mod image_enhance;
+mod onnx_pool;
 mod persist;
 mod psd_analyze;
 mod psd_export;

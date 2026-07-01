@@ -118,8 +118,12 @@ fn icc_cmyk_to_prophoto16(raw: &RawCmyk, icc: &[u8], intent: RenderingIntent) ->
     let dst = ColorProfile::new_pro_photo_rgb();
     let options = TransformOptions {
         rendering_intent: intent,
+        // Tetrahedral tracks littleCMS like the 8-bit sRGB path, but keep the
+        // default (`Low`) barycentric weights here: moxcms 0.8.1's `High`-precision
+        // weights are broken on the 16-bit LUT path and collapse every CMYK input
+        // to white (full-K would egress as paper white instead of near-black). The
+        // 8-bit sRGB transform is unaffected, so it keeps `High`.
         interpolation_method: InterpolationMethod::Tetrahedral,
-        barycentric_weight_scale: BarycentricWeightScale::High,
         ..TransformOptions::default()
     };
     let transform = src

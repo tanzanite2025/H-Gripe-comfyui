@@ -6,6 +6,7 @@ import { LangContext, useT } from "../i18n";
 import { isLodActive } from "./lod";
 import type { NodeStatus } from "../runtime/dag";
 import { generateThumbnail, probeImageDims, videoProbe } from "../bridge/tauri";
+import { subscribeIngest } from "../runtime/ingestStore";
 import { ParamField } from "./ParamField";
 import { useNodeEditing } from "./editingContext";
 import { psdTemplatePathWarning } from "./psdcheck";
@@ -95,26 +96,45 @@ function LazyThumb({ path }: { path: string }) {
 
 // Generic image media card body: a thumbnail + `name · W×H` info row + an
 // action row whose buttons spawn a *bound* edit node (the source card is never
-// mutated). Ingestion is two-phase: a header-only dimension probe fills the
-// info row near-instantly (even for a 4K/8K source), while the heavier
-// thumbnail decode stays lazy (IntersectionObserver-gated) so off-screen cards
-// cost nothing. See docs/cards/generic-media-card.md.
+// mutated). Ingestion is two-phase and pushed from the backend: on a drop the
+// `prime_ingest` pipeline probes header dims (info row renders `W×H` at once,
+// even for a 4K/8K source) then decodes the thumbnail off-thread, both arriving
+// over `ingest://progress`. A header probe + IntersectionObserver-gated
+// thumbnail fetch remain as fallbacks for cards not created by a drop (manual
+// path entry, project load) or a missed event. See docs/cards/generic-media-card.md.
 function ImageSourceCard({ id, path }: { id: string; path: string }) {
   const t = useT();
   const editing = useNodeEditing();
   const ref = useRef<HTMLDivElement | null>(null);
   const [src, setSrc] = useState<string | null>(null);
   const [dims, setDims] = useState<{ w: number; h: number } | null>(null);
+  // Set once a thumbnail arrives (pushed or fetched) so the lazy fallback does
+  // not re-fetch what the backend already delivered.
+  const haveThumb = useRef(false);
 
-  // Phase 1: fetch dimensions from the file header right away so the info row
-  // renders before (and independently of) the thumbnail decode.
+  // Fast path: consume dims/thumbnail pushed by the backend ingestion pipeline.
+  useEffect(() => {
+    if (!path) return;
+    return subscribeIngest(path, (state) => {
+      if (state.dims) setDims(state.dims);
+      if (state.thumb) {
+        haveThumb.current = true;
+        setSrc(state.thumb);
+      }
+    });
+  }, [path]);
+
+  // Fallback phase 1: probe dimensions from the file header so the info row
+  // renders even when no drop pushed them.
   useEffect(() => {
     setDims(null);
     if (!path) return;
     let cancelled = false;
     probeImageDims(path)
       .then((d) => {
-        if (!cancelled && d && d.width && d.height) setDims({ w: d.width, h: d.height });
+        if (!cancelled && d && d.width && d.height) {
+          setDims((cur) => cur ?? { w: d.width, h: d.height });
+        }
       })
       .catch(() => {
         /* fall back to the dimensions the thumbnail reports */
@@ -124,9 +144,11 @@ function ImageSourceCard({ id, path }: { id: string; path: string }) {
     };
   }, [path]);
 
-  // Phase 2: decode the thumbnail once the card scrolls into view.
+  // Fallback phase 2: decode the thumbnail once the card scrolls into view,
+  // unless a pushed thumbnail already arrived. A warm cache makes this instant.
   useEffect(() => {
     setSrc(null);
+    haveThumb.current = false;
     const el = ref.current;
     if (!el) return;
     let cancelled = false;
@@ -134,9 +156,11 @@ function ImageSourceCard({ id, path }: { id: string; path: string }) {
       (entries) => {
         if (!entries.some((e) => e.isIntersecting)) return;
         io.disconnect();
+        if (haveThumb.current) return;
         generateThumbnail({ path, size: 256 })
           .then((thumb) => {
-            if (cancelled) return;
+            if (cancelled || haveThumb.current) return;
+            haveThumb.current = true;
             setSrc(thumb.data_url || null);
             // Fallback only: keep phase-1 dims if the probe already set them.
             if (thumb.width && thumb.height) {

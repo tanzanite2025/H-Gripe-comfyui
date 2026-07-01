@@ -295,19 +295,17 @@ fn read_image_data_url(path: String) -> Result<String, String> {
 }
 
 /// Image pixel dimensions, read from the file header only (no full decode).
-#[derive(Serialize)]
+#[derive(Clone, Serialize)]
 struct ImageDims {
     width: u32,
     height: u32,
 }
 
 /// Read an image's `width` x `height` from its header without decoding the
-/// pixels. This is the fast first phase of media-card ingestion: the info row
-/// can render `W×H` near-instantly while the (much heavier) thumbnail decode
-/// runs separately. Even a 4K/8K source resolves in microseconds because only
-/// the header is parsed.
-#[tauri::command]
-fn probe_image_dims(path: String) -> Result<ImageDims, String> {
+/// pixels (the shared core behind the [`probe_image_dims`] command and the
+/// ingestion pipeline). Even a 4K/8K source resolves in microseconds because
+/// only the header is parsed.
+fn probe_image_dims_inner(path: &str) -> Result<ImageDims, String> {
     let trimmed = path.trim();
     if trimmed.is_empty() {
         return Err("path is empty".to_string());
@@ -323,6 +321,14 @@ fn probe_image_dims(path: String) -> Result<ImageDims, String> {
         .into_dimensions()
         .map_err(|err| format!("failed to read image dimensions: {err}"))?;
     Ok(ImageDims { width, height })
+}
+
+/// Read an image's `width` x `height` from its header. This is the fast first
+/// phase of media-card ingestion: the info row can render `W×H` near-instantly
+/// while the (much heavier) thumbnail decode runs separately.
+#[tauri::command]
+fn probe_image_dims(path: String) -> Result<ImageDims, String> {
+    probe_image_dims_inner(&path)
 }
 
 /// In-memory thumbnail cache key: canonical path + target size + the source's
@@ -352,7 +358,7 @@ fn fnv1a_hex(bytes: &[u8]) -> String {
     format!("{hash:016x}")
 }
 
-#[derive(Serialize)]
+#[derive(Clone, Serialize)]
 struct ThumbnailResult {
     /// `data:` URL of the generated thumbnail, ready for an `<img src>`.
     data_url: String,
@@ -376,6 +382,16 @@ struct ThumbnailResult {
 #[tauri::command]
 fn generate_thumbnail(
     path: String,
+    size: u32,
+    dpr: Option<f64>,
+) -> Result<ThumbnailResult, String> {
+    generate_thumbnail_inner(&path, size, dpr)
+}
+
+/// Shared core behind the [`generate_thumbnail`] command and the ingestion
+/// pipeline: memory-LRU → disk cache → decode+resize, populating both caches.
+fn generate_thumbnail_inner(
+    path: &str,
     size: u32,
     dpr: Option<f64>,
 ) -> Result<ThumbnailResult, String> {
@@ -472,6 +488,123 @@ fn generate_thumbnail(
         source_hash,
         mime,
     })
+}
+
+/// Tauri event name for ingestion progress pushed by [`prime_ingest`].
+const INGEST_EVENT: &str = "ingest://progress";
+
+/// How many thumbnails the ingestion pipeline decodes at once. Header probes
+/// are cheap and run unbounded, but decoding is CPU/RAM heavy, so a batch drop
+/// of many 4K/8K sources warms the cache a few at a time instead of thrashing.
+const INGEST_CONCURRENCY: usize = 3;
+
+/// One ingestion progress message pushed to the webview. `phase` is
+/// `"dims"` (header W×H known), `"thumb"` (thumbnail ready), or `"error"`;
+/// the other fields are populated per phase.
+#[derive(Clone, Serialize)]
+struct IngestEvent {
+    path: String,
+    phase: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    width: Option<u32>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    height: Option<u32>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    data_url: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    cache_path: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    source_hash: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    mime: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    error: Option<String>,
+}
+
+impl IngestEvent {
+    fn new(path: &str, phase: &str) -> Self {
+        Self {
+            path: path.to_string(),
+            phase: phase.to_string(),
+            width: None,
+            height: None,
+            data_url: None,
+            cache_path: None,
+            source_hash: None,
+            mime: None,
+            error: None,
+        }
+    }
+}
+
+/// Warm the media-card ingestion pipeline for freshly dropped image `paths`.
+///
+/// Returns immediately after spawning background work — nothing here blocks the
+/// UI thread. For each path a task first probes header dimensions (cheap) and
+/// pushes a `dims` [`IngestEvent`] so the card's info row renders `W×H` at once,
+/// then (gated by a small [`INGEST_CONCURRENCY`] semaphore) generates the
+/// thumbnail, populating the in-memory LRU + disk cache and pushing a `thumb`
+/// event. Cards subscribe to `ingest://progress`; on a cache-warm hit their own
+/// `generate_thumbnail` call then returns instantly. Non-image or unreadable
+/// paths simply emit an `error` (or no `dims`) and the card falls back.
+#[tauri::command]
+async fn prime_ingest(
+    app: tauri::AppHandle,
+    paths: Vec<String>,
+    size: u32,
+    dpr: Option<f64>,
+) -> Result<(), String> {
+    use tauri::Emitter;
+
+    let gate = std::sync::Arc::new(tokio::sync::Semaphore::new(INGEST_CONCURRENCY));
+    for path in paths {
+        let app = app.clone();
+        let gate = gate.clone();
+        tokio::spawn(async move {
+            // Phase 1: header-only dimensions. Skip the event for anything that
+            // is not a readable image (the card keeps its placeholder).
+            let dims = {
+                let path = path.clone();
+                tokio::task::spawn_blocking(move || probe_image_dims_inner(&path)).await
+            };
+            if let Ok(Ok(d)) = dims {
+                let mut ev = IngestEvent::new(&path, "dims");
+                ev.width = Some(d.width);
+                ev.height = Some(d.height);
+                let _ = app.emit(INGEST_EVENT, ev);
+            }
+
+            // Phase 2: thumbnail decode, bounded so a big batch cannot thrash.
+            let _permit = gate.acquire_owned().await;
+            let thumb = {
+                let path = path.clone();
+                tokio::task::spawn_blocking(move || generate_thumbnail_inner(&path, size, dpr)).await
+            };
+            match thumb {
+                Ok(Ok(t)) => {
+                    let mut ev = IngestEvent::new(&path, "thumb");
+                    ev.width = Some(t.width);
+                    ev.height = Some(t.height);
+                    ev.data_url = Some(t.data_url);
+                    ev.cache_path = Some(t.cache_path);
+                    ev.source_hash = Some(t.source_hash);
+                    ev.mime = Some(t.mime);
+                    let _ = app.emit(INGEST_EVENT, ev);
+                }
+                Ok(Err(message)) => {
+                    let mut ev = IngestEvent::new(&path, "error");
+                    ev.error = Some(message);
+                    let _ = app.emit(INGEST_EVENT, ev);
+                }
+                Err(join_err) => {
+                    let mut ev = IngestEvent::new(&path, "error");
+                    ev.error = Some(join_err.to_string());
+                    let _ = app.emit(INGEST_EVENT, ev);
+                }
+            }
+        });
+    }
+    Ok(())
 }
 
 /// Read a text file, truncating to `max_bytes` so large files cannot freeze
@@ -608,6 +741,7 @@ fn main() {
             read_image_data_url,
             generate_thumbnail,
             probe_image_dims,
+            prime_ingest,
             read_text_file,
             open_path,
             psd::compose_psd,

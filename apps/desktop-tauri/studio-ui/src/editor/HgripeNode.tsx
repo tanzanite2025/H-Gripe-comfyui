@@ -5,7 +5,13 @@ import { localizeSpec } from "../graph/nodeSpecsI18n";
 import { LangContext, useT } from "../i18n";
 import { isLodActive } from "./lod";
 import type { NodeStatus } from "../runtime/dag";
-import { generateThumbnail, probeImageDims, videoProbe } from "../bridge/tauri";
+import {
+  generateThumbnail,
+  probeImageDims,
+  registerResource,
+  resourceThumbnail,
+  videoProbe,
+} from "../bridge/tauri";
 import { subscribeIngest } from "../runtime/ingestStore";
 import { ParamField } from "./ParamField";
 import { useNodeEditing } from "./editingContext";
@@ -111,6 +117,10 @@ function ImageSourceCard({ id, path }: { id: string; path: string }) {
   // Set once a thumbnail arrives (pushed or fetched) so the lazy fallback does
   // not re-fetch what the backend already delivered.
   const haveThumb = useRef(false);
+  // Lightweight backend handle for this path; the card fetches its thumbnail by
+  // id so the heavy pixels stay in Rust. Read from a ref inside the observer so
+  // resolving it does not re-run (and reset) the observer effect.
+  const resourceId = useRef<string | null>(null);
 
   // Fast path: consume dims/thumbnail pushed by the backend ingestion pipeline.
   useEffect(() => {
@@ -124,10 +134,33 @@ function ImageSourceCard({ id, path }: { id: string; path: string }) {
     });
   }, [path]);
 
-  // Fallback phase 1: probe dimensions from the file header so the info row
-  // renders even when no drop pushed them.
+  // Resolve the lightweight ResourceId handle for this path. Registration also
+  // returns header dims, so the info row renders `W×H` from the same round-trip
+  // (no separate probe needed on the fast path).
   useEffect(() => {
     setDims(null);
+    resourceId.current = null;
+    if (!path) return;
+    let cancelled = false;
+    registerResource(path)
+      .then((res) => {
+        if (cancelled || !res) return;
+        resourceId.current = res.id;
+        if (res.width && res.height) {
+          setDims((cur) => cur ?? { w: res.width!, h: res.height! });
+        }
+      })
+      .catch(() => {
+        /* fall back to the header probe below */
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [path]);
+
+  // Fallback: probe dimensions from the file header for the info row when the
+  // resource registry is unavailable (e.g. browser preview) or returned none.
+  useEffect(() => {
     if (!path) return;
     let cancelled = false;
     probeImageDims(path)
@@ -144,8 +177,9 @@ function ImageSourceCard({ id, path }: { id: string; path: string }) {
     };
   }, [path]);
 
-  // Fallback phase 2: decode the thumbnail once the card scrolls into view,
-  // unless a pushed thumbnail already arrived. A warm cache makes this instant.
+  // Decode the thumbnail once the card scrolls into view, unless a pushed
+  // thumbnail already arrived. Fetch by ResourceId when resolved (path only as
+  // a fallback); a warm cache makes either instant.
   useEffect(() => {
     setSrc(null);
     haveThumb.current = false;
@@ -157,12 +191,16 @@ function ImageSourceCard({ id, path }: { id: string; path: string }) {
         if (!entries.some((e) => e.isIntersecting)) return;
         io.disconnect();
         if (haveThumb.current) return;
-        generateThumbnail({ path, size: 256 })
+        const id = resourceId.current;
+        const req = id
+          ? resourceThumbnail(id, 256)
+          : generateThumbnail({ path, size: 256 });
+        req
           .then((thumb) => {
-            if (cancelled || haveThumb.current) return;
+            if (cancelled || haveThumb.current || !thumb) return;
             haveThumb.current = true;
             setSrc(thumb.data_url || null);
-            // Fallback only: keep phase-1 dims if the probe already set them.
+            // Fallback only: keep dims if register/probe already set them.
             if (thumb.width && thumb.height) {
               setDims((cur) => cur ?? { w: thumb.width, h: thumb.height });
             }

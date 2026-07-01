@@ -9,3 +9,4 @@ pub(crate) mod media;
 pub(crate) mod runtime;
 pub(crate) mod shell;
 pub(crate) mod tasks;
+pub(crate) mod video;

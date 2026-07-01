@@ -60,4 +60,10 @@ rusty_ffmpeg = { version = "0.17", default-features = false, features = ["ffmpeg
 zune-jpeg = "0.5"
 zune-core = "0.5"
 tiff = "0.11"
+# Pure-Rust colour management for the ICC CMYK -> sRGB transform on the enhance
+# fast path (R3 CMYK step c2). Applies the embedded CMYK profile's A2B LUT the
+# same way the Python bridge does via littleCMS (`ImageCms.profileToProfile`),
+# with a naive PIL-formula fallback when no profile is present. Used by
+# `studio/cmyk_transform.rs`.
+moxcms = "0.8.1"
 hgripe-api = { path = "../../../crates/hgripe-api" }

@@ -23,6 +23,7 @@ mod crop;
 mod detail_watchdog;
 mod edge_refine;
 mod exec;
+mod frame_cache;
 mod graph;
 mod history;
 mod image_enhance;
@@ -38,6 +39,8 @@ mod subject_model;
 mod subject_sam2;
 mod subject_segment;
 pub(crate) mod torch_worker;
+pub(crate) mod video_engine;
+pub(crate) mod video_worker;
 
 // Glob re-exports so the original `crate::studio::*` command paths keep
 // resolving from `main.rs`'s `generate_handler!`. A plain `use exec::cmd` only

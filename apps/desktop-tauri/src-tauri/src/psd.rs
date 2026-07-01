@@ -1466,6 +1466,65 @@ pub(crate) fn video_probe(
     }
     let dir = resolve_project_dir(&dir)?;
     let python = project_python(&dir);
+
+    let ts = timestamp.unwrap_or(0.0).max(0.0);
+    let poster_path = poster_cache_path(trimmed, ts)?;
+
+    // Prefer the long-lived PyAV worker (the ffmpeg container stays open across
+    // calls); fall back to the one-shot `video_probe_cli.py` if the worker is
+    // unavailable or errors, so behaviour is identical to the pre-worker path.
+    match video_probe_worker(&python, &dir, video, ts, &poster_path) {
+        Ok(result) => Ok(result),
+        Err(_) => video_probe_oneshot(&python, &dir, video, ts, &poster_path),
+    }
+}
+
+/// The cached poster PNG path for a `(video, timestamp)` pair, under the project
+/// output dir's `.posters` cache (created on demand). Keyed by `path + ts` so
+/// re-probing the same frame reuses the file.
+fn poster_cache_path(video_path: &str, ts: f64) -> Result<PathBuf, String> {
+    let poster_dir = crate::runtime_paths()?.output_dir.join(".posters");
+    fs::create_dir_all(&poster_dir)
+        .map_err(|err| format!("failed to create {}: {err}", poster_dir.display()))?;
+    let key = format!("{video_path}|{}", (ts * 1000.0).round() as i64);
+    let mut hasher = std::collections::hash_map::DefaultHasher::new();
+    std::hash::Hash::hash(&key, &mut hasher);
+    Ok(poster_dir.join(format!("{:016x}.png", std::hash::Hasher::finish(&hasher))))
+}
+
+/// Worker-backed probe: read metadata and decode the poster through the warm
+/// PyAV worker (open container reused across calls), building the card result.
+fn video_probe_worker(
+    python: &Path,
+    dir: &Path,
+    video: &Path,
+    ts: f64,
+    poster_path: &Path,
+) -> Result<VideoProbeResult, String> {
+    use crate::studio::video_engine::{FrameSource, PyAvFrameSource};
+    let mut source = PyAvFrameSource::new(python.to_path_buf(), dir.to_path_buf());
+    let meta = source.probe(video)?;
+    source.decode_frame(video, ts, poster_path)?;
+    Ok(VideoProbeResult {
+        width: meta.width,
+        height: meta.height,
+        duration_sec: meta.duration_sec,
+        fps: meta.fps,
+        codec: meta.codec,
+        poster_path: poster_path.to_string_lossy().to_string(),
+    })
+}
+
+/// One-shot fallback: the original per-call `video_probe_cli.py` subprocess that
+/// reads metadata and decodes one poster frame. Behaviour is unchanged from the
+/// pre-worker path.
+fn video_probe_oneshot(
+    python: &Path,
+    dir: &Path,
+    video: &Path,
+    ts: f64,
+    poster_path: &Path,
+) -> Result<VideoProbeResult, String> {
     let script = dir
         .join("python")
         .join("bridge")
@@ -1473,31 +1532,16 @@ pub(crate) fn video_probe(
     if !script.is_file() {
         return Err(format!("video_probe_cli.py not found at {}", script.display()));
     }
-
-    let ts = timestamp.unwrap_or(0.0).max(0.0);
-    let poster_dir = crate::runtime_paths()?.output_dir.join(".posters");
-    fs::create_dir_all(&poster_dir)
-        .map_err(|err| format!("failed to create {}: {err}", poster_dir.display()))?;
-    let key = format!("{trimmed}|{}", (ts * 1000.0).round() as i64);
-    let mut hasher = std::collections::hash_map::DefaultHasher::new();
-    std::hash::Hash::hash(&key, &mut hasher);
-    let poster_path = poster_dir.join(format!("{:016x}.png", std::hash::Hasher::finish(&hasher)));
-
-    let mut cmd = std::process::Command::new(&python);
+    let mut cmd = std::process::Command::new(python);
     cmd.arg(&script)
         .arg("--video")
         .arg(video)
         .arg("--poster-out")
-        .arg(&poster_path)
+        .arg(poster_path)
         .arg("--timestamp")
         .arg(format!("{ts}"))
-        .current_dir(&dir);
-    #[cfg(windows)]
-    {
-        use std::os::windows::process::CommandExt;
-        // CREATE_NO_WINDOW: don't pop a console window for the child.
-        cmd.creation_flags(0x0800_0000);
-    }
+        .current_dir(dir);
+    no_window(&mut cmd);
     let output = cmd
         .output()
         .map_err(|err| format!("failed to launch {}: {err}", python.display()))?;
@@ -1508,7 +1552,6 @@ pub(crate) fn video_probe(
     let stdout = String::from_utf8_lossy(&output.stdout);
     let parsed: VideoProbeCli = serde_json::from_str(stdout.trim())
         .map_err(|err| format!("could not parse video probe: {err} (raw: {})", stdout.trim()))?;
-
     Ok(VideoProbeResult {
         width: parsed.width,
         height: parsed.height,
@@ -1517,6 +1560,42 @@ pub(crate) fn video_probe(
         codec: parsed.codec,
         poster_path: poster_path.to_string_lossy().to_string(),
     })
+}
+
+/// Scrub to `timestamp` in a video and return the decoded frame's poster path,
+/// reusing the media engine's dedicated decode thread + warm frame cache
+/// ([`crate::studio::video_engine`]) so repeated seeks over the same
+/// neighbourhood are cache hits rather than re-decodes. Falls back to a one-shot
+/// poster extraction when the engine/worker is unavailable. This backs the
+/// manual clip editor's timeline scrubbing (Media lane, step 5).
+#[tauri::command]
+pub(crate) fn video_scrub(
+    path: String,
+    timestamp: f64,
+    dir: Option<String>,
+) -> Result<String, String> {
+    let trimmed = path.trim();
+    if trimmed.is_empty() {
+        return Err("path is empty".to_string());
+    }
+    let video = Path::new(trimmed);
+    if !video.is_file() {
+        return Err(format!("file does not exist: {trimmed}"));
+    }
+    let dir = resolve_project_dir(&dir)?;
+    let python = project_python(&dir);
+    let ts = timestamp.max(0.0);
+    let poster_dir = crate::runtime_paths()?.output_dir.join(".posters");
+    fs::create_dir_all(&poster_dir)
+        .map_err(|err| format!("failed to create {}: {err}", poster_dir.display()))?;
+
+    match crate::studio::video_engine::scrub_frame(&python, &dir, &poster_dir, video, ts) {
+        Ok(frame) => Ok(frame.to_string_lossy().to_string()),
+        Err(_) => {
+            let poster_path = poster_cache_path(trimmed, ts)?;
+            video_probe_oneshot(&python, &dir, video, ts, &poster_path).map(|r| r.poster_path)
+        }
+    }
 }
 
 /// One issue region prepared for repaint: the padded crop + same-size inpaint

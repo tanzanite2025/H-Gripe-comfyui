@@ -31,6 +31,7 @@
 
 use image::{imageops::FilterType, GrayImage, Luma, RgbaImage};
 use ort::value::Tensor;
+use rayon::prelude::*;
 use std::path::Path;
 
 use super::onnx_pool::{cached_session, SharedSession};
@@ -265,18 +266,23 @@ impl AlphaMatter for BuiltinCpuMatter {
         };
 
         // Composite at full res: hard FG/BG from the trimap, guided alpha in the
-        // unknown band.
-        let mut out = GrayImage::from_pixel(width, height, Luma([0]));
-        for y in 0..height {
-            for x in 0..width {
-                let alpha = match trimap.get_pixel(x, y).0[0] {
+        // unknown band. Rows are independent, so fill the raw buffer in parallel.
+        let w = width as usize;
+        let trimap_buf = trimap.as_raw();
+        let soft_buf = soft.as_raw();
+        let mut out_buf = vec![0u8; w * height as usize];
+        out_buf.par_chunks_mut(w).enumerate().for_each(|(y, row)| {
+            let base = y * w;
+            for (x, slot) in row.iter_mut().enumerate() {
+                *slot = match trimap_buf[base + x] {
                     TRIMAP_FG => 255,
                     TRIMAP_BG => 0,
-                    _ => soft.get_pixel(x, y).0[0],
+                    _ => soft_buf[base + x],
                 };
-                out.put_pixel(x, y, Luma([alpha]));
             }
-        }
+        });
+        let out = GrayImage::from_raw(width, height, out_buf)
+            .expect("matte composite buffer matches dimensions");
         Ok(out)
     }
 }
@@ -324,20 +330,22 @@ fn box_filter(src: &[f32], width: usize, height: usize, radius: usize) -> Vec<f3
             integral[(y + 1) * stride + (x + 1)] = integral[y * stride + (x + 1)] + row;
         }
     }
+    // Output rows read the (already-built) integral image read-only, so each row
+    // is independent and the window sums run in parallel across CPU workers.
     let mut out = vec![0f32; width * height];
-    for y in 0..height {
+    out.par_chunks_mut(width).enumerate().for_each(|(y, row)| {
         let y0 = y.saturating_sub(radius);
         let y1 = (y + radius + 1).min(height);
-        for x in 0..width {
+        for (x, slot) in row.iter_mut().enumerate() {
             let x0 = x.saturating_sub(radius);
             let x1 = (x + radius + 1).min(width);
             let sum = integral[y1 * stride + x1] - integral[y0 * stride + x1]
                 - integral[y1 * stride + x0]
                 + integral[y0 * stride + x0];
             let count = ((y1 - y0) * (x1 - x0)) as f64;
-            out[y * width + x] = (sum / count) as f32;
+            *slot = (sum / count) as f32;
         }
-    }
+    });
     out
 }
 
@@ -392,6 +400,52 @@ mod tests {
             }
         }
         mask
+    }
+
+    /// Obvious serial box filter the parallel [`box_filter`] must match.
+    fn box_filter_serial(src: &[f32], width: usize, height: usize, radius: usize) -> Vec<f32> {
+        let mut out = vec![0f32; width * height];
+        for y in 0..height {
+            let y0 = y.saturating_sub(radius);
+            let y1 = (y + radius + 1).min(height);
+            for x in 0..width {
+                let x0 = x.saturating_sub(radius);
+                let x1 = (x + radius + 1).min(width);
+                let mut sum = 0f64;
+                let mut count = 0f64;
+                for yy in y0..y1 {
+                    for xx in x0..x1 {
+                        sum += src[yy * width + xx] as f64;
+                        count += 1.0;
+                    }
+                }
+                out[y * width + x] = (sum / count) as f32;
+            }
+        }
+        out
+    }
+
+    #[test]
+    fn parallel_box_filter_matches_serial_reference() {
+        // Deterministic LCG plane so the test needs no RNG dependency.
+        let mut state: u32 = 0x9e37_79b9;
+        let mut next = || {
+            state = state.wrapping_mul(1_664_525).wrapping_add(1_013_904_223);
+            (state >> 8) as f32 / (1u32 << 24) as f32
+        };
+        let (width, height) = (29, 17);
+        let src: Vec<f32> = (0..width * height).map(|_| next()).collect();
+        for radius in [1usize, 3, 8, 20] {
+            let got = box_filter(&src, width, height, radius);
+            let want = box_filter_serial(&src, width, height, radius);
+            assert_eq!(got.len(), want.len());
+            for (i, (g, w)) in got.iter().zip(&want).enumerate() {
+                assert!(
+                    (g - w).abs() <= 1e-4,
+                    "radius={radius} idx={i} parallel box_filter diverged: {g} vs {w}"
+                );
+            }
+        }
     }
 
     #[test]

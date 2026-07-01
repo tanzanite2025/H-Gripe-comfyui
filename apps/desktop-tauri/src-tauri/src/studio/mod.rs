@@ -9,6 +9,7 @@
 //! - [`psd_export`]: the `psdExport` node executor (PSD composition bridge).
 //! - [`studio_image`]: decode-guard + colour-space loaders shared by native
 //!   (`Compute`) Rust cards.
+//! - [`pixel_ops`]: unified crop/resize buffer seam shared by native Rust cards.
 //! - [`subject_mask`]: the `subjectMask` node executor (native-Rust matte).
 //! - [`subject_matte`]: continuous alpha matting (ViTMatte / trimap, Compute lane).
 //! - [`subject_sam2`]: SAM 2 interactive point-prompt segmenter (Compute lane).
@@ -31,6 +32,7 @@ mod history;
 mod image_enhance;
 mod onnx_pool;
 mod persist;
+mod pixel_ops;
 mod psd_analyze;
 mod psd_export;
 mod schedule;

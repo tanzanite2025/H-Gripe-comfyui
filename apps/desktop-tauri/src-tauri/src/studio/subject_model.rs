@@ -32,13 +32,13 @@
 //! 4. the in-repo `resources/models/` dir (dev runs from a checkout).
 
 use std::path::{Path, PathBuf};
-use std::sync::{Mutex, OnceLock};
+use std::sync::OnceLock;
 
 use image::{imageops::FilterType, GrayImage, Luma, RgbaImage};
-use ort::session::Session;
 use ort::value::Tensor;
 use serde_json::json;
 
+use super::onnx_pool::{cached_session, SharedSession};
 use super::subject_segment::{AutoMode, SegmentRequest, SegmentResult, SubjectSegmenter};
 
 const MASK_ON: u8 = 255;
@@ -156,23 +156,17 @@ pub(super) fn resolve_model_file(env_var: &str, file_name: &str) -> Option<PathB
 
 /// An ONNX salient-object / dichotomous-segmentation model run in-process.
 pub(super) struct ModelSegmenter {
-    // `ort::Session::run` takes `&mut self`; the card holds a single segmenter
-    // per execution, so a `Mutex` keeps the trait's `&self` signature.
-    session: Mutex<Session>,
+    // A warm session shared from the process-wide pool; `Session::run` takes
+    // `&mut self`, so the pool wraps it in a `Mutex` and inference serialises
+    // through the lock (keeping the trait's `&self` signature).
+    session: SharedSession,
     spec: ModelSpec,
 }
 
 impl ModelSegmenter {
     fn load(path: &Path, spec: ModelSpec) -> Result<Self, String> {
-        let bytes = std::fs::read(path)
-            .map_err(|err| format!("failed to read subject model {}: {err}", path.display()))?;
-        let session = Session::builder()
-            .and_then(|mut b| b.commit_from_memory(&bytes))
-            .map_err(|err| format!("failed to load subject model {}: {err}", path.display()))?;
-        Ok(Self {
-            session: Mutex::new(session),
-            spec,
-        })
+        let session = cached_session(path)?;
+        Ok(Self { session, spec })
     }
 }
 
@@ -462,5 +456,22 @@ mod tests {
     #[test]
     fn human_seg_inference_when_weight_present() {
         inference_smoke(U2NET_HUMAN);
+    }
+
+    #[test]
+    fn warm_pool_reuses_session_across_loads() {
+        // Two segmenters built from the same weight must share one warm
+        // session (the whole point of step 3: no per-call model reload).
+        // Skipped when the weight isn't resolvable, like the inference smokes.
+        let Some(path) = resolve_weight(&U2NETP) else {
+            eprintln!("skipping warm-pool reuse: no u2netp weight resolvable");
+            return;
+        };
+        let first = ModelSegmenter::load(&path, U2NETP).expect("load first");
+        let second = ModelSegmenter::load(&path, U2NETP).expect("load second");
+        assert!(
+            std::sync::Arc::ptr_eq(&first.session, &second.session),
+            "the same weight path must hand back the same warm session"
+        );
     }
 }

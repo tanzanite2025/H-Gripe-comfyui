@@ -30,11 +30,10 @@
 //! sha256 check.
 
 use image::{imageops::FilterType, GrayImage, Luma, RgbaImage};
-use ort::session::Session;
 use ort::value::Tensor;
 use std::path::Path;
-use std::sync::Mutex;
 
+use super::onnx_pool::{cached_session, SharedSession};
 use super::subject_model::resolve_model_file;
 
 /// Trimap level for *definite foreground* (kept fully opaque).
@@ -114,23 +113,18 @@ pub(super) fn trimap_from_mask(mask: &GrayImage, band: u32) -> GrayImage {
     trimap
 }
 
-/// ViTMatte matting transformer run in-process via `ort`. `ort::Session::run`
-/// takes `&mut self`, so the session is `Mutex`-wrapped to keep the trait's
-/// `&self`.
+/// ViTMatte matting transformer run in-process via `ort`. The session is a warm
+/// handle shared from the process-wide pool; `Session::run` takes `&mut self`,
+/// so the pool wraps it in a `Mutex` and inference serialises through the lock
+/// (keeping the trait's `&self` signature).
 pub(super) struct VitMatteMatter {
-    session: Mutex<Session>,
+    session: SharedSession,
 }
 
 impl VitMatteMatter {
     fn load(path: &Path) -> Result<Self, String> {
-        let bytes = std::fs::read(path)
-            .map_err(|err| format!("failed to read ViTMatte model {}: {err}", path.display()))?;
-        let session = Session::builder()
-            .and_then(|mut b| b.commit_from_memory(&bytes))
-            .map_err(|err| format!("failed to load ViTMatte model {}: {err}", path.display()))?;
-        Ok(Self {
-            session: Mutex::new(session),
-        })
+        let session = cached_session(path)?;
+        Ok(Self { session })
     }
 }
 

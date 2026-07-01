@@ -23,14 +23,12 @@
 //! them with a sha256 check.
 
 use std::cmp::Ordering;
-use std::path::Path;
-use std::sync::Mutex;
 
 use image::{imageops::FilterType, GrayImage, Luma, RgbaImage};
-use ort::session::Session;
 use ort::value::Tensor;
 use serde_json::json;
 
+use super::onnx_pool::{cached_session, SharedSession};
 use super::subject_model::{
     constrain_to_placeholder, coverage, resolve_model_file, selection_bbox,
 };
@@ -58,37 +56,28 @@ const DECODER_FILE: &str = "sam2_tiny.decoder.onnx";
 const ENCODER_ENV: &str = "HGRIPE_SAM2_ENCODER";
 const DECODER_ENV: &str = "HGRIPE_SAM2_DECODER";
 
-/// SAM 2 image encoder + mask decoder held together; `ort::Session::run` takes
-/// `&mut self`, so each session is `Mutex`-wrapped to keep the trait's `&self`.
+/// SAM 2 image encoder + mask decoder held together. Both are warm sessions
+/// shared from the process-wide pool; `Session::run` takes `&mut self`, so the
+/// pool wraps each in a `Mutex` and inference serialises through the lock
+/// (keeping the trait's `&self` signature).
 pub(super) struct Sam2Segmenter {
-    encoder: Mutex<Session>,
-    decoder: Mutex<Session>,
+    encoder: SharedSession,
+    decoder: SharedSession,
 }
 
 impl Sam2Segmenter {
     /// Build a SAM 2 segmenter when *both* the encoder and decoder weights
     /// resolve; `None` otherwise (the caller falls through to the salient /
-    /// builtin pipeline).
+    /// builtin pipeline). Both sessions come from the warm pool, so repeated
+    /// runs reuse the parsed weights instead of reloading ~150 MB each time.
     pub(super) fn resolve_and_load() -> Option<Self> {
         let encoder = resolve_model_file(ENCODER_ENV, ENCODER_FILE)?;
         let decoder = resolve_model_file(DECODER_ENV, DECODER_FILE)?;
-        Self::load(&encoder, &decoder).ok()
-    }
-
-    fn load(encoder: &Path, decoder: &Path) -> Result<Self, String> {
-        Ok(Self {
-            encoder: Mutex::new(load_session(encoder)?),
-            decoder: Mutex::new(load_session(decoder)?),
+        Some(Self {
+            encoder: cached_session(&encoder).ok()?,
+            decoder: cached_session(&decoder).ok()?,
         })
     }
-}
-
-fn load_session(path: &Path) -> Result<Session, String> {
-    let bytes = std::fs::read(path)
-        .map_err(|err| format!("failed to read SAM2 model {}: {err}", path.display()))?;
-    Session::builder()
-        .and_then(|mut b| b.commit_from_memory(&bytes))
-        .map_err(|err| format!("failed to load SAM2 model {}: {err}", path.display()))
 }
 
 impl SubjectSegmenter for Sam2Segmenter {

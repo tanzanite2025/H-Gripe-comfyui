@@ -349,14 +349,21 @@ fn materialize(entry: &Entry) {
     if let Some(parent) = path.parent() {
         let _ = std::fs::create_dir_all(parent);
     }
-    let _ = match &entry.image {
-        DecodedImage::Rgba { image, .. } => image.save(path),
-        // Behaviour-preserving for P4a: the on-disk format the readers expect is
-        // still 8-bit sRGB PNG, so a deferred Working surface materialises via
-        // the egress. (The 16-bit file encoders arrive in a later P4 stage.)
-        DecodedImage::Working { image, .. } => image.to_srgb_rgba8().save(path),
-        DecodedImage::Gray(image) => image.save(path),
-    };
+    match &entry.image {
+        DecodedImage::Rgba { image, .. } => {
+            let _ = image.save(path);
+        }
+        // Same encoder the producing card would have used on a direct write:
+        // an Srgb surface lands as the exact 8-bit narrow, a ProPhoto surface
+        // as 16-bit PNG with the ProPhoto profile embedded, so a deferred
+        // output materialises byte-identical to its non-deferred twin.
+        DecodedImage::Working { image, .. } => {
+            let _ = super::studio_image::write_working_png(path, image);
+        }
+        DecodedImage::Gray(image) => {
+            let _ = image.save(path);
+        }
+    }
 }
 
 /// Look up a published RGBA surface for `path`, or `None` (a miss) when it was
@@ -683,8 +690,8 @@ mod tests {
         for entry in &lru.insert("filler".to_string(), filler) {
             materialize(entry);
         }
-        // The evicted 16-bit surface lands on disk as the egressed 8-bit sRGB
-        // PNG a disk reader still expects in P4a.
+        // An evicted Srgb-space surface lands on disk as the exact 8-bit
+        // narrow, same as the producing card's direct write.
         let reloaded = image::open(&path).expect("materialised png decodes").to_rgba8();
         assert_eq!(reloaded, work.to_srgb_rgba8());
         let _ = std::fs::remove_file(&path);

@@ -17,7 +17,7 @@ use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 use std::time::Instant;
 
-use image::{GrayImage, RgbaImage};
+use image::GrayImage;
 use serde::Serialize;
 use serde_json::{json, Value};
 
@@ -87,9 +87,13 @@ pub(super) fn execute_studio_crop(
         }
     };
 
-    let loaded = studio_image::load_rgba(Path::new(image_path.trim()), max_decode_pixels)?;
+    // Crop is pure geometry, so it walks the 16-bit canonical surface: a
+    // wide-gamut input (or an upstream manual card's published surface) is
+    // cropped and re-emitted at full precision. Only the auto-subject
+    // segmenter — a model ingress — sees the 8-bit sRGB egress.
+    let loaded = studio_image::load_working(Path::new(image_path.trim()), max_decode_pixels)?;
     let image = loaded.image;
-    let (width, height) = image.dimensions();
+    let (width, height) = (image.width, image.height);
     if width == 0 || height == 0 {
         return Err("Crop needs a non-empty image".to_string());
     }
@@ -104,8 +108,9 @@ pub(super) fn execute_studio_crop(
     let mut bbox = if mode == "auto_subject" {
         let auto = AutoMode::from_mode("auto_subject").unwrap_or(AutoMode::Subject);
         let segmenter = segmenter_for_mode(auto, &[]);
+        let srgb = image.to_srgb_rgba8();
         let result = segmenter.segment(&SegmentRequest {
-            image: &image,
+            image: &srgb,
             mode: auto,
             placeholder: None,
             prompt: None,
@@ -137,7 +142,7 @@ pub(super) fn execute_studio_crop(
     }
     operations.push(json!({ "type": "crop", "box": [x, y, w, h] }));
 
-    let cropped: RgbaImage = pixel_ops::crop_rgba(&image, x, y, w, h);
+    let cropped = pixel_ops::crop_working(&image, x, y, w, h);
 
     let output_dir = {
         let configured = studio_value_to_string(node.params.get("output_dir"));
@@ -174,15 +179,13 @@ pub(super) fn execute_studio_crop(
     // suppressed if a file already exists at the path, so a stale output can
     // never linger behind the buffer.
     if skip_write_ports.contains("image") && !out_path.exists() {
-        image_buffer::publish_rgba_deferred(&out_path, &cropped, studio_image::png_output_meta());
+        image_buffer::publish_working_deferred(&out_path, &cropped, studio_image::png_output_meta());
     } else {
-        cropped
-            .save(&out_path)
-            .map_err(|err| format!("failed to write {}: {err}", out_path.display()))?;
+        studio_image::write_working_png(&out_path, &cropped)?;
         // Hand the decoded crop to the next compute card in memory so it skips
         // the PNG re-decode; the file on disk stays the source of truth for
         // everyone else (preview, Python-bridge cards, export).
-        image_buffer::publish_rgba(&out_path, &cropped, studio_image::png_output_meta());
+        image_buffer::publish_working(&out_path, &cropped, studio_image::png_output_meta());
     }
 
     let report = CropReport {
@@ -330,7 +333,7 @@ fn clamp_box(bbox: (i64, i64, i64, i64), width: u32, height: u32) -> (u32, u32, 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use image::{Luma, Rgba};
+    use image::{Luma, Rgba, RgbaImage};
     use serde_json::json;
     use std::collections::HashSet;
 
@@ -465,5 +468,75 @@ mod tests {
         assert_eq!(loaded.image.dimensions(), (10, 8));
 
         let _ = std::fs::remove_file(&src);
+    }
+
+    #[test]
+    fn a_wide_gamut_source_crops_to_a_16bit_prophoto_output() {
+        use super::super::working_image::{self, WorkingImage, WorkingSpace};
+
+        let dir = std::env::temp_dir().join(format!(
+            "hgripe_crop_prophoto_{}_{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        std::fs::create_dir_all(&dir).unwrap();
+
+        // A 6x4 ProPhoto source with per-pixel-distinct 16-bit samples, written
+        // through the manual-output encoder (as an upstream card would).
+        let src = dir.join("wide_src.png");
+        let source = WorkingImage {
+            width: 6,
+            height: 4,
+            pixels: (0..6 * 4 * 4)
+                .map(|i| (i as u16).wrapping_mul(2_741).wrapping_add(11))
+                .collect(),
+            space: WorkingSpace::ProPhoto,
+            icc: Some(working_image::prophoto_icc().to_vec()),
+        };
+        studio_image::write_working_png(&src, &source).unwrap();
+
+        let node = StudioGraphNode {
+            id: "crop-wide".to_string(),
+            kind: "crop".to_string(),
+            params: BTreeMap::from([
+                ("mode".to_string(), json!("manual")),
+                ("crop_box".to_string(), json!([1, 1, 3, 2])),
+                ("output_dir".to_string(), json!(dir.to_string_lossy())),
+                ("output_name".to_string(), json!("wide_out")),
+            ]),
+        };
+        let inputs = BTreeMap::from([("image".to_string(), json!(src.to_string_lossy()))]);
+        let out = execute_studio_crop(&node, &inputs, &HashSet::new()).unwrap();
+        let report = out.get("crop_report").unwrap();
+        assert_eq!(report["output_size"], json!([3, 2]));
+
+        // The file on disk is a 16-bit RGBA PNG carrying the ProPhoto profile.
+        let out_path = dir.join("wide_out.png");
+        let decoder = png::Decoder::new(std::fs::File::open(&out_path).unwrap());
+        let reader = decoder.read_info().unwrap();
+        let info = reader.info();
+        assert_eq!(info.bit_depth, png::BitDepth::Sixteen);
+        assert_eq!(
+            info.icc_profile.as_deref(),
+            Some(working_image::prophoto_icc())
+        );
+
+        // The next manual card reads back the exact 16-bit crop window: for
+        // each pixel of the 3x2 window at (1,1), all four channels match the
+        // source samples — no 8-bit round-trip anywhere in the chain.
+        let loaded = studio_image::load_working(&out_path, 0).unwrap();
+        assert_eq!(loaded.image.space, WorkingSpace::ProPhoto);
+        let mut expected = Vec::new();
+        for y in 1..3usize {
+            let start = (y * 6 + 1) * 4;
+            expected.extend_from_slice(&source.pixels[start..start + 3 * 4]);
+        }
+        assert_eq!(loaded.image.pixels, expected);
+
+        let _ = std::fs::remove_file(&src);
+        let _ = std::fs::remove_file(&out_path);
     }
 }

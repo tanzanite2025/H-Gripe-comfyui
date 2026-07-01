@@ -470,4 +470,55 @@ mod tests {
             }
         }
     }
+
+    #[test]
+    fn cmyk_transform_stage_prophoto16_is_golden() {
+        // Stage-isolated golden for the CMYK -> ProPhoto16 *transform* alone,
+        // asserting the wide 16-bit samples directly (no egress in the loop).
+        // Paired with `prophoto16_egress_is_golden_per_stage`, this bisects the
+        // pipeline: if the profiled end-to-end test reddens, whichever of these
+        // two stage tests fails names the culprit instead of leaving a single
+        // end-to-end threshold to guess from. This is also where the moxcms
+        // `High`-weight collapse surfaces first — at the transform, before egress
+        // can mask it.
+        let Some(icc) = swop_profile_or_skip() else {
+            return;
+        };
+
+        // white, cyan, magenta, yellow, full-K.
+        let patches: [[u8; 4]; 5] = [
+            [0, 0, 0, 0],
+            [255, 0, 0, 0],
+            [0, 255, 0, 0],
+            [0, 0, 255, 0],
+            [0, 0, 0, 255],
+        ];
+        let n = patches.len();
+        let samples: Vec<u8> = patches.iter().flatten().copied().collect();
+        let wide = cmyk_to_prophoto16(&raw(n as u32, samples, Some(icc)))
+            .expect("profiled CMYK must reach ProPhoto");
+        assert_eq!(wide.len(), n * 3);
+
+        let patch = |i: usize| &wide[i * 3..i * 3 + 3];
+        let is_white16 = |px: &[u16]| px.iter().all(|&v| v >= 55_000);
+
+        // Regression guard at the transform stage: under the moxcms `High` bug
+        // every patch collapsed to white *here*, before egress. Exactly one
+        // patch (no-ink) may be white in ProPhoto's own encoding.
+        let whites = (0..n).filter(|&i| is_white16(patch(i))).count();
+        assert_eq!(whites, 1, "only no-ink may be white in ProPhoto, got {whites}");
+        assert!(is_white16(patch(0)), "no-ink must be white in ProPhoto");
+        assert!(patch(4).iter().all(|&v| v <= 12_000), "full-K must be near black in ProPhoto");
+
+        // The three primaries must be genuinely distinct wide colours (a collapse
+        // or a channel-swap would make them coincide). Compare pairwise on the
+        // full 3-vector.
+        let dist = |a: &[u16], b: &[u16]| {
+            (0..3).map(|c| (i32::from(a[c]) - i32::from(b[c])).abs()).max().unwrap()
+        };
+        let (c, m, y) = (patch(1), patch(2), patch(3));
+        for (na, a, nb, b) in [("cyan", c, "magenta", m), ("cyan", c, "yellow", y), ("magenta", m, "yellow", y)] {
+            assert!(dist(a, b) > 3_000, "{na} and {nb} must be distinct in ProPhoto: {a:?} vs {b:?}");
+        }
+    }
 }

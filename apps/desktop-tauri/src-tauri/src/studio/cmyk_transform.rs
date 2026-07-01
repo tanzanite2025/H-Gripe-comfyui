@@ -167,6 +167,29 @@ mod tests {
 
     const SWOP_ICC: &str = r"C:\Windows\System32\spool\drivers\color\RSWOP.icm";
 
+    /// Loads the OS SWOP CMYK profile the profiled colour tests transform through.
+    ///
+    /// The LUT-based CMYK path can only be exercised with a real CMYK profile, so
+    /// these tests need one on disk. On Windows the profile ships with the OS and
+    /// the gated `tauri (cargo test)` CI lane runs there, so a *missing* profile is
+    /// a hard error, not a silent skip: that keeps a green run honest (the LUT path
+    /// was really asserted) instead of letting the colour tests quietly no-op into
+    /// a false green. On other platforms (e.g. Linux CI, which has no system CMYK
+    /// profile) they skip by returning `None`.
+    fn swop_profile_or_skip() -> Option<Vec<u8>> {
+        match std::fs::read(SWOP_ICC) {
+            Ok(bytes) => Some(bytes),
+            Err(err) => {
+                assert!(
+                    !cfg!(windows),
+                    "SWOP CMYK profile missing at {SWOP_ICC}: {err}; the colour \
+                     tests must actually run on the Windows CI lane, not skip"
+                );
+                None
+            }
+        }
+    }
+
     fn raw(width: u32, samples: Vec<u8>, icc: Option<Vec<u8>>) -> RawCmyk {
         RawCmyk {
             width,
@@ -245,10 +268,8 @@ mod tests {
 
     #[test]
     fn cmyk_to_prophoto16_profiled_egresses_near_srgb_reference() {
-        // Needs a system CMYK profile; skipped on runners without one (Linux CI).
-        let icc = match std::fs::read(SWOP_ICC) {
-            Ok(bytes) => bytes,
-            Err(_) => return,
+        let Some(icc) = swop_profile_or_skip() else {
+            return;
         };
 
         let patches: [[u8; 4]; 7] = [
@@ -307,11 +328,72 @@ mod tests {
     }
 
     #[test]
+    fn cmyk_primaries_are_golden_on_both_paths() {
+        // Single golden fixture pinning white / C / M / Y / full-K on BOTH colour
+        // paths at once: the 8-bit sRGB egress and the 16-bit ProPhoto working
+        // surface (egressed to sRGB for a like-for-like compare). moxcms 0.8.1's
+        // 16-bit LUT `High` barycentric weights are broken and collapse *every*
+        // CMYK input to white, while the 8-bit path is fine — so a depth-specific
+        // config drift (e.g. copying `High` into the 16-bit path) is invisible to
+        // any single-depth test. Asserting both here, with an explicit "only
+        // no-ink may be white" guard, makes that regression fail loudly.
+        let Some(icc) = swop_profile_or_skip() else {
+            return;
+        };
+
+        // white, cyan, magenta, yellow, full-K.
+        let patches: [[u8; 4]; 5] = [
+            [0, 0, 0, 0],
+            [255, 0, 0, 0],
+            [0, 255, 0, 0],
+            [0, 0, 255, 0],
+            [0, 0, 0, 255],
+        ];
+        let n = patches.len();
+        let samples: Vec<u8> = patches.iter().flatten().copied().collect();
+
+        let srgb8 = cmyk_to_rgb8(&raw(n as u32, samples.clone(), Some(icc.clone())));
+        let wide = cmyk_to_prophoto16(&raw(n as u32, samples, Some(icc)))
+            .expect("profiled CMYK must reach ProPhoto");
+        let pp_srgb = crate::studio::working_image::prophoto16_rgb_to_srgb8(&wide, n)
+            .expect("ProPhoto -> sRGB egress");
+
+        let is_white = |px: &[u8]| px.iter().all(|&v| v >= 245);
+        let is_black = |px: &[u8]| px.iter().all(|&v| v <= 45);
+
+        for (path, rgb) in [("srgb8", &srgb8), ("prophoto16", &pp_srgb)] {
+            assert_eq!(rgb.len(), n * 3, "{path}: unexpected length");
+            // Regression guard: under the moxcms `High` bug all five patches came
+            // back white. Exactly one patch (no-ink) may be white.
+            let whites = (0..n).filter(|&i| is_white(&rgb[i * 3..i * 3 + 3])).count();
+            assert_eq!(whites, 1, "{path}: only no-ink may be white, got {whites} white patches");
+            assert!(is_white(&rgb[0..3]), "{path}: no-ink must be white");
+            assert!(is_black(&rgb[4 * 3..5 * 3]), "{path}: full-K must be near black");
+        }
+
+        // Primaries must be distinct hues on the known-good 8-bit reference path.
+        assert!(srgb8[3] < 120 && srgb8[5] > 150, "cyan should read blue-green: {:?}", &srgb8[3..6]);
+        assert!(srgb8[7] < 120, "magenta should be low-green: {:?}", &srgb8[6..9]);
+        assert!(srgb8[9] > 150 && srgb8[11] < 120, "yellow should be red-heavy: {:?}", &srgb8[9..12]);
+
+        // Bind the 16-bit ProPhoto path to that known-good 8-bit path: the double
+        // transform widens tolerance, but the two must not diverge structurally
+        // (a collapse to white would blow far past this).
+        const CROSS_TOL: i32 = 70;
+        for i in 0..n * 3 {
+            let a = srgb8[i] as i32;
+            let b = pp_srgb[i] as i32;
+            assert!(
+                (a - b).abs() <= CROSS_TOL,
+                "paths diverge at byte {i}: srgb8 {a} vs prophoto-egress {b} exceeds ±{CROSS_TOL}"
+            );
+        }
+    }
+
+    #[test]
     fn icc_transform_matches_littlecms_reference() {
-        // Skip when the OS SWOP CMYK profile isn't installed (non-Windows CI).
-        let icc = match std::fs::read(SWOP_ICC) {
-            Ok(bytes) => bytes,
-            Err(_) => return,
+        let Some(icc) = swop_profile_or_skip() else {
+            return;
         };
 
         // (C, M, Y, K) patches and the sRGB `ImageCms.profileToProfile` produces

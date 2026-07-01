@@ -187,7 +187,7 @@ assertions rather than manual inspection.
 ## Engines
 
 The `engine` param is the **local-card backend seam** from
-`docs/card-executor-split-and-psd-chain-hardening.md` (§2.5 / §3.4): adding an
+`docs/design/executor-split-and-psd-chain-hardening.md` (§2.5 / §3.4): adding an
 engine extends the registry + the CLI only, with no dispatch changes.
 
 | Engine | Deps | Weight | Behaviour |

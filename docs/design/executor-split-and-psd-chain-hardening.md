@@ -226,7 +226,7 @@ declared complete until its row is green in CI.
 
 ### 3.4 image_enhance / super-res  (`imageEnhance` -> `image_enhance_cli.py`)
 - Today: CPU resize/sharpen/denoise (Lanczos3). Phase 2 target: SupIR/CCSR/
-  Real-ESRGAN (see `docs/phase2-algorithm-roadmap.md`).
+  Real-ESRGAN (see `docs/design/phase2-algorithm-roadmap.md`).
 - Make scale factor, sharpen, denoise explicit + bounded; cap max output pixels.
 - `engine` enum is the seam: `cpu` now; adding `supir`/`ccsr` later changes only
   the CLI + enum, not dispatch.

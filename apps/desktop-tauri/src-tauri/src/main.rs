@@ -401,9 +401,6 @@ fn generate_thumbnail_inner(
         return Err("path is empty".to_string());
     }
     let src = Path::new(trimmed);
-    if !src.is_file() {
-        return Err(format!("file does not exist: {trimmed}"));
-    }
 
     // Target edge in physical pixels, clamped to a sane range.
     let dpr = dpr.unwrap_or(1.0);
@@ -432,6 +429,20 @@ fn generate_thumbnail_inner(
         }
     }
 
+    // Buffer fast path: a compute card published this output's decoded surface,
+    // so resize it directly — no re-read, no PNG re-decode. This is the display
+    // half of the in-process buffer handoff (item 5, option 2): a compute
+    // output's thumbnail comes from the buffer the card already produced, and it
+    // works even if the file is absent (groundwork for dropping the producer
+    // PNG write). The file is still written today, so a miss (never published /
+    // evicted / stale) falls through to the disk decode below.
+    if let Some(decoded) = studio::image_buffer::lookup_dynamic(src) {
+        return finish_thumbnail_from_decoded(decoded, target, mem_key);
+    }
+
+    if !src.is_file() {
+        return Err(format!("file does not exist: {trimmed}"));
+    }
     let bytes = fs::read(src).map_err(|err| format!("failed to read {}: {err}", src.display()))?;
     let source_hash = fnv1a_hex(&bytes);
 
@@ -464,6 +475,60 @@ fn generate_thumbnail_inner(
         (data_url, thumb.width(), thumb.height())
     };
 
+    let cache_path = cache_path.to_string_lossy().to_string();
+    let mime = "image/png".to_string();
+
+    if let Some(key) = mem_key {
+        thumb_cache::put(
+            key,
+            thumb_cache::CachedThumb {
+                data_url: data_url.clone(),
+                cache_path: cache_path.clone(),
+                width,
+                height,
+                source_hash: source_hash.clone(),
+                mime: mime.clone(),
+            },
+        );
+    }
+
+    Ok(ThumbnailResult {
+        data_url,
+        cache_path,
+        width,
+        height,
+        source_hash,
+        mime,
+    })
+}
+
+/// Finish a thumbnail from an already-decoded surface (the buffer fast path in
+/// [`generate_thumbnail_inner`]): resize, encode PNG, warm the disk + memory
+/// caches, and build the [`ThumbnailResult`]. No source file is read, so the
+/// disk cache is keyed by the thumbnail's own content hash rather than the
+/// source file hash.
+fn finish_thumbnail_from_decoded(
+    decoded: image::DynamicImage,
+    target: u32,
+    mem_key: Option<String>,
+) -> Result<ThumbnailResult, String> {
+    // `resize` preserves aspect ratio, fitting within target x target.
+    let thumb = decoded.resize(target, target, image::imageops::FilterType::Lanczos3);
+    let mut png: Vec<u8> = Vec::new();
+    thumb
+        .write_to(&mut std::io::Cursor::new(&mut png), image::ImageFormat::Png)
+        .map_err(|err| format!("failed to encode thumbnail: {err}"))?;
+    let source_hash = fnv1a_hex(&png);
+
+    let cache_dir = runtime_paths()?.output_dir.join(".thumbnails");
+    fs::create_dir_all(&cache_dir)
+        .map_err(|err| format!("failed to create {}: {err}", cache_dir.display()))?;
+    let cache_path = cache_dir.join(format!("{source_hash}_{target}.png"));
+    // Best-effort cache write; a failure here should not fail the request.
+    let _ = fs::write(&cache_path, &png);
+
+    let data_url = format!("data:image/png;base64,{}", base64_encode(&png));
+    let (width, height) = (thumb.width(), thumb.height());
     let cache_path = cache_path.to_string_lossy().to_string();
     let mime = "image/png".to_string();
 

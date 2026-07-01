@@ -32,7 +32,7 @@ mod ffmpeg_native;
 mod frame_cache;
 mod graph;
 mod history;
-mod image_buffer;
+pub(crate) mod image_buffer;
 mod image_enhance;
 mod onnx_pool;
 mod persist;

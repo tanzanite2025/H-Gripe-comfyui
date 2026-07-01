@@ -94,8 +94,12 @@ impl FrameSource for PyAvFrameSource {
     fn probe(&mut self, video: &Path) -> Result<VideoMeta, String> {
         let args = json!({ "video": video.to_string_lossy() });
         let stdout = super::video_worker::run(&self.python, &self.dir, "probe", &args)?;
-        serde_json::from_str::<VideoMeta>(stdout.trim())
-            .map_err(|err| format!("could not parse video probe: {err} (raw: {})", stdout.trim()))
+        serde_json::from_str::<VideoMeta>(stdout.trim()).map_err(|err| {
+            format!(
+                "could not parse video probe: {err} (raw: {})",
+                stdout.trim()
+            )
+        })
     }
 
     fn decode_frame(
@@ -110,8 +114,12 @@ impl FrameSource for PyAvFrameSource {
             "poster_out": poster_out.to_string_lossy(),
         });
         let stdout = super::video_worker::run(&self.python, &self.dir, "frame", &args)?;
-        let payload: FramePayload = serde_json::from_str(stdout.trim())
-            .map_err(|err| format!("could not parse video frame: {err} (raw: {})", stdout.trim()))?;
+        let payload: FramePayload = serde_json::from_str(stdout.trim()).map_err(|err| {
+            format!(
+                "could not parse video frame: {err} (raw: {})",
+                stdout.trim()
+            )
+        })?;
         if payload.poster_path.is_empty() {
             return Ok(poster_out.to_path_buf());
         }
@@ -135,7 +143,10 @@ pub(crate) fn make_frame_source(python: &Path, dir: &Path) -> Box<dyn FrameSourc
     }
     #[cfg(not(feature = "native-ffmpeg"))]
     {
-        Box::new(PyAvFrameSource::new(python.to_path_buf(), dir.to_path_buf()))
+        Box::new(PyAvFrameSource::new(
+            python.to_path_buf(),
+            dir.to_path_buf(),
+        ))
     }
 }
 
@@ -180,7 +191,9 @@ fn coalesce_latest(first: ScrubRequest, rx: &Receiver<ScrubRequest>) -> ScrubReq
     let mut newest = first;
     while let Ok(next) = rx.try_recv() {
         let stale = std::mem::replace(&mut newest, next);
-        let _ = stale.reply.send(Err("superseded by a newer seek".to_string()));
+        let _ = stale
+            .reply
+            .send(Err("superseded by a newer seek".to_string()));
     }
     newest
 }
@@ -397,12 +410,8 @@ mod tests {
         let source = Box::new(MockSource {
             decodes: decodes.clone(),
         });
-        let engine = PlaybackEngine::spawn(
-            source,
-            8,
-            PathBuf::from("python"),
-            PathBuf::from("/proj"),
-        );
+        let engine =
+            PlaybackEngine::spawn(source, 8, PathBuf::from("python"), PathBuf::from("/proj"));
         let video = PathBuf::from("clip.mp4");
         let posters = PathBuf::from("/posters");
 
@@ -415,9 +424,7 @@ mod tests {
         assert_eq!(p1, p2);
         assert_eq!(decodes.load(Ordering::SeqCst), 1);
 
-        engine
-            .scrub_blocking(video, 5.0, posters)
-            .unwrap();
+        engine.scrub_blocking(video, 5.0, posters).unwrap();
         assert_eq!(decodes.load(Ordering::SeqCst), 2);
     }
 

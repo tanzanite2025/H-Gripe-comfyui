@@ -466,7 +466,11 @@ mod tests {
                 mode: AutoMode::Subject,
                 placeholder: None,
                 prompt: None,
-                points: &[PointPrompt { x: 10, y: 3, positive: true }],
+                points: &[PointPrompt {
+                    x: 10,
+                    y: 3,
+                    positive: true,
+                }],
             })
             .unwrap();
         assert_eq!(result.mask.get_pixel(10, 3).0[0], MASK_ON);
@@ -485,8 +489,16 @@ mod tests {
                 placeholder: None,
                 prompt: None,
                 points: &[
-                    PointPrompt { x: 2, y: 3, positive: true },
-                    PointPrompt { x: 10, y: 3, positive: false },
+                    PointPrompt {
+                        x: 2,
+                        y: 3,
+                        positive: true,
+                    },
+                    PointPrompt {
+                        x: 10,
+                        y: 3,
+                        positive: false,
+                    },
                 ],
             })
             .unwrap();
@@ -498,7 +510,11 @@ mod tests {
     fn negative_only_points_do_not_route_to_sam2() {
         // A purely-negative point set has no subject seed; routing must not
         // prefer SAM 2 (it would have nothing to segment toward).
-        let negatives = [PointPrompt { x: 5, y: 5, positive: false }];
+        let negatives = [PointPrompt {
+            x: 5,
+            y: 5,
+            positive: false,
+        }];
         let seg = segmenter_for_mode(AutoMode::Subject, &negatives);
         assert_eq!(seg.provider(), "builtin-cpu");
     }

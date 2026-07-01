@@ -683,8 +683,9 @@ fn parse_edit_paths(value: Option<&Value>) -> Option<Value> {
 /// The object echoed onto the `edit_paths` output / written to disk: the parsed
 /// input when present, else an empty versioned envelope.
 fn normalise_edit_paths(value: Option<&Value>) -> Value {
-    parse_edit_paths(value)
-        .unwrap_or_else(|| json!({ "version": 1, "paths": [], "brush_strokes": [], "matte_strokes": [] }))
+    parse_edit_paths(value).unwrap_or_else(
+        || json!({ "version": 1, "paths": [], "brush_strokes": [], "matte_strokes": [] }),
+    )
 }
 
 /// Optional point prompts for the auto-subject segmenter, read from a top-level
@@ -1045,10 +1046,26 @@ mod tests {
         assert_eq!(
             points,
             vec![
-                PointPrompt { x: 10, y: 20, positive: true },
-                PointPrompt { x: 30, y: 40, positive: false },
-                PointPrompt { x: 5, y: 6, positive: true },
-                PointPrompt { x: 7, y: 8, positive: true },
+                PointPrompt {
+                    x: 10,
+                    y: 20,
+                    positive: true
+                },
+                PointPrompt {
+                    x: 30,
+                    y: 40,
+                    positive: false
+                },
+                PointPrompt {
+                    x: 5,
+                    y: 6,
+                    positive: true
+                },
+                PointPrompt {
+                    x: 7,
+                    y: 8,
+                    positive: true
+                },
             ]
         );
     }
@@ -1263,8 +1280,10 @@ mod tests {
             .duration_since(std::time::UNIX_EPOCH)
             .unwrap()
             .as_nanos();
-        let root =
-            std::env::temp_dir().join(format!("hgripe_subject_skip_{}_{nanos}", std::process::id()));
+        let root = std::env::temp_dir().join(format!(
+            "hgripe_subject_skip_{}_{nanos}",
+            std::process::id()
+        ));
         std::fs::create_dir_all(&root).unwrap();
         let image_path = root.join("scene.png");
         RgbaImage::from_pixel(6, 6, Rgba([100, 100, 100, 255]))

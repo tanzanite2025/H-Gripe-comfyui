@@ -94,11 +94,19 @@ mod tests {
         let id = id_for("/reg/refresh.png");
         put(
             &id,
-            ResourceEntry { path: "/reg/refresh.png".to_string(), width: Some(10), height: Some(10) },
+            ResourceEntry {
+                path: "/reg/refresh.png".to_string(),
+                width: Some(10),
+                height: Some(10),
+            },
         );
         put(
             &id,
-            ResourceEntry { path: "/reg/refresh.png".to_string(), width: Some(20), height: Some(30) },
+            ResourceEntry {
+                path: "/reg/refresh.png".to_string(),
+                width: Some(20),
+                height: Some(30),
+            },
         );
         let got = get(&id).expect("entry present");
         assert_eq!((got.width, got.height), (Some(20), Some(30)));

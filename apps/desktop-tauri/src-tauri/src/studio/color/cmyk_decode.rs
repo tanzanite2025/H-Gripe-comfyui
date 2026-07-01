@@ -313,7 +313,9 @@ fn decode_cmyk_tiff(bytes: &[u8], max_pixels: u64) -> Result<Option<RawCmyk>, St
 
     // Drop the alpha channel when present so downstream always sees 4-channel CMYK.
     let samples = if channels == 5 {
-        flat.chunks_exact(5).flat_map(|px| px[..4].to_vec()).collect()
+        flat.chunks_exact(5)
+            .flat_map(|px| px[..4].to_vec())
+            .collect()
     } else {
         flat
     };
@@ -669,7 +671,12 @@ mod tests {
         // A plain baseline RGB (YCbCr) JPEG is not, and neither is a non-JPEG.
         let mut rgb_jpeg = Vec::new();
         image::codecs::jpeg::JpegEncoder::new(&mut rgb_jpeg)
-            .encode(&[10, 20, 30, 40, 50, 60], 2, 1, image::ExtendedColorType::Rgb8)
+            .encode(
+                &[10, 20, 30, 40, 50, 60],
+                2,
+                1,
+                image::ExtendedColorType::Rgb8,
+            )
             .unwrap();
         assert!(!is_cmyk_family_jpeg(&rgb_jpeg));
         assert!(!is_cmyk_family_jpeg(b"not a jpeg"));

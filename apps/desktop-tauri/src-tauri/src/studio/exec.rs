@@ -816,8 +816,7 @@ fn studio_consumer_permits_write_skip(
     match studio_executor_for_kind(consumer.kind.as_str()) {
         Some(StudioExecutor::Compute) => true,
         _ => {
-            consumer.kind == "preview"
-                && !graph.edges.iter().any(|edge| edge.source == consumer.id)
+            consumer.kind == "preview" && !graph.edges.iter().any(|edge| edge.source == consumer.id)
         }
     }
 }
@@ -1366,8 +1365,9 @@ mod tests {
         // path, and a python-bridge kind must never run through compute.
         let err = execute_studio_local_node(&node_with_kind("subjectMask"), &inputs).unwrap_err();
         assert!(err.contains("not a local node"), "{err}");
-        let err = execute_studio_compute_node(&node_with_kind("psdExport"), &inputs, &HashSet::new())
-            .unwrap_err();
+        let err =
+            execute_studio_compute_node(&node_with_kind("psdExport"), &inputs, &HashSet::new())
+                .unwrap_err();
         assert!(err.contains("not a compute node"), "{err}");
         // A genuine graph node still resolves through its own handler.
         assert!(execute_studio_graph_node(&node_with_kind("prompt"), &inputs).is_ok());

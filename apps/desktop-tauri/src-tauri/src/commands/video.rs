@@ -127,12 +127,12 @@ fn video_probe_oneshot(
     ts: f64,
     poster_path: &Path,
 ) -> Result<VideoProbeResult, String> {
-    let script = dir
-        .join("python")
-        .join("bridge")
-        .join("video_probe_cli.py");
+    let script = dir.join("python").join("bridge").join("video_probe_cli.py");
     if !script.is_file() {
-        return Err(format!("video_probe_cli.py not found at {}", script.display()));
+        return Err(format!(
+            "video_probe_cli.py not found at {}",
+            script.display()
+        ));
     }
     let mut cmd = std::process::Command::new(python);
     cmd.arg(&script)
@@ -152,8 +152,12 @@ fn video_probe_oneshot(
         return Err(format!("video probe failed: {}", stderr.trim()));
     }
     let stdout = String::from_utf8_lossy(&output.stdout);
-    let parsed: VideoProbeCli = serde_json::from_str(stdout.trim())
-        .map_err(|err| format!("could not parse video probe: {err} (raw: {})", stdout.trim()))?;
+    let parsed: VideoProbeCli = serde_json::from_str(stdout.trim()).map_err(|err| {
+        format!(
+            "could not parse video probe: {err} (raw: {})",
+            stdout.trim()
+        )
+    })?;
     Ok(VideoProbeResult {
         width: parsed.width,
         height: parsed.height,

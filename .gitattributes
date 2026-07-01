@@ -1,3 +1,11 @@
+# Normalise every text file to LF in the repository (binaries are auto-detected
+# and left alone), so checkouts and diffs are identical across platforms and
+# reviews never drown in CRLF/LF churn. Windows batch files are carved out
+# below: cmd.exe requires CRLF.
+* text=auto eol=lf
+*.bat text eol=crlf
+*.cmd text eol=crlf
+
 /web/assets/** linguist-generated
 /web/** linguist-vendored
 comfy_api_nodes/apis/__init__.py linguist-generated

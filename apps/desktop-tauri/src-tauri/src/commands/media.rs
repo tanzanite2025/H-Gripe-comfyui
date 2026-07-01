@@ -147,7 +147,10 @@ fn thumb_mem_key(src: &Path, target: u32) -> Option<String> {
         .map(|d| d.as_nanos())
         .unwrap_or(0);
     let canon = std::fs::canonicalize(src).unwrap_or_else(|_| src.to_path_buf());
-    Some(format!("{}|{target}|{mtime}|{len}", canon.to_string_lossy()))
+    Some(format!(
+        "{}|{target}|{mtime}|{len}",
+        canon.to_string_lossy()
+    ))
 }
 
 /// FNV-1a 64-bit hash, used to key the thumbnail cache by source content.
@@ -571,8 +574,7 @@ mod tests {
             .duration_since(std::time::UNIX_EPOCH)
             .unwrap()
             .as_nanos();
-        let dir =
-            std::env::temp_dir().join(format!("hgripe_{tag}_{}_{nanos}", std::process::id()));
+        let dir = std::env::temp_dir().join(format!("hgripe_{tag}_{}_{nanos}", std::process::id()));
         std::fs::create_dir_all(&dir).unwrap();
         dir
     }
@@ -589,7 +591,10 @@ mod tests {
         let url = read_image_data_url(path.to_string_lossy().to_string()).unwrap();
         assert!(url.starts_with("data:image/png;base64,"), "{url}");
         // A browser-native format is passed through byte-for-byte (no transcode).
-        assert_eq!(url, format!("data:image/png;base64,{}", base64_encode(&raw)));
+        assert_eq!(
+            url,
+            format!("data:image/png;base64,{}", base64_encode(&raw))
+        );
 
         let _ = std::fs::remove_dir_all(&dir);
     }

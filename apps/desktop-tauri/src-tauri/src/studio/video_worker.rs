@@ -79,8 +79,12 @@ impl Worker {
         if read == 0 {
             return Err("video worker closed its stdout".to_string());
         }
-        serde_json::from_str::<WorkerResponse>(resp_line.trim())
-            .map_err(|err| format!("video worker sent invalid json: {err} (raw: {})", resp_line.trim()))
+        serde_json::from_str::<WorkerResponse>(resp_line.trim()).map_err(|err| {
+            format!(
+                "video worker sent invalid json: {err} (raw: {})",
+                resp_line.trim()
+            )
+        })
     }
 }
 

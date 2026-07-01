@@ -267,14 +267,21 @@ mod tests {
             RenderingIntent::AbsoluteColorimetric,
         ] {
             let out = cmyk_to_rgb8_with_intent(&raw(1, samples.clone(), None), intent);
-            assert_eq!(out, base, "intent {intent:?} must not affect the naive path");
+            assert_eq!(
+                out, base,
+                "intent {intent:?} must not affect the naive path"
+            );
         }
     }
 
     #[test]
     fn invalid_profile_falls_back_to_naive() {
         let samples = vec![200, 100, 50, 25];
-        let out = cmyk_to_rgb8(&raw(1, samples.clone(), Some(b"not an icc profile".to_vec())));
+        let out = cmyk_to_rgb8(&raw(
+            1,
+            samples.clone(),
+            Some(b"not an icc profile".to_vec()),
+        ));
         assert_eq!(out, naive_cmyk_to_rgb(&samples));
     }
 
@@ -389,15 +396,33 @@ mod tests {
             // Regression guard: under the moxcms `High` bug all five patches came
             // back white. Exactly one patch (no-ink) may be white.
             let whites = (0..n).filter(|&i| is_white(&rgb[i * 3..i * 3 + 3])).count();
-            assert_eq!(whites, 1, "{path}: only no-ink may be white, got {whites} white patches");
+            assert_eq!(
+                whites, 1,
+                "{path}: only no-ink may be white, got {whites} white patches"
+            );
             assert!(is_white(&rgb[0..3]), "{path}: no-ink must be white");
-            assert!(is_black(&rgb[4 * 3..5 * 3]), "{path}: full-K must be near black");
+            assert!(
+                is_black(&rgb[4 * 3..5 * 3]),
+                "{path}: full-K must be near black"
+            );
         }
 
         // Primaries must be distinct hues on the known-good 8-bit reference path.
-        assert!(srgb8[3] < 120 && srgb8[5] > 150, "cyan should read blue-green: {:?}", &srgb8[3..6]);
-        assert!(srgb8[7] < 120, "magenta should be low-green: {:?}", &srgb8[6..9]);
-        assert!(srgb8[9] > 150 && srgb8[11] < 120, "yellow should be red-heavy: {:?}", &srgb8[9..12]);
+        assert!(
+            srgb8[3] < 120 && srgb8[5] > 150,
+            "cyan should read blue-green: {:?}",
+            &srgb8[3..6]
+        );
+        assert!(
+            srgb8[7] < 120,
+            "magenta should be low-green: {:?}",
+            &srgb8[6..9]
+        );
+        assert!(
+            srgb8[9] > 150 && srgb8[11] < 120,
+            "yellow should be red-heavy: {:?}",
+            &srgb8[9..12]
+        );
 
         // Bind the 16-bit ProPhoto path to that known-good 8-bit path: the double
         // transform widens tolerance, but the two must not diverge structurally
@@ -450,9 +475,15 @@ mod tests {
         assert_ne!(out, naive, "ICC path unexpectedly fell back to naive");
 
         // Engine-independent structural checks.
-        assert!(out[0] >= 250 && out[1] >= 250 && out[2] >= 250, "no-ink must stay white");
+        assert!(
+            out[0] >= 250 && out[1] >= 250 && out[2] >= 250,
+            "no-ink must stay white"
+        );
         let black = &out[4 * 3..5 * 3];
-        assert!(black.iter().all(|&v| v <= 45), "full-K must stay near black");
+        assert!(
+            black.iter().all(|&v| v <= 45),
+            "full-K must stay near black"
+        );
 
         // Loose parity with the littleCMS reference: moxcms is not byte-identical
         // to littleCMS, so the ICC path is bounded by a ΔE tolerance rather than
@@ -506,19 +537,35 @@ mod tests {
         // every patch collapsed to white *here*, before egress. Exactly one
         // patch (no-ink) may be white in ProPhoto's own encoding.
         let whites = (0..n).filter(|&i| is_white16(patch(i))).count();
-        assert_eq!(whites, 1, "only no-ink may be white in ProPhoto, got {whites}");
+        assert_eq!(
+            whites, 1,
+            "only no-ink may be white in ProPhoto, got {whites}"
+        );
         assert!(is_white16(patch(0)), "no-ink must be white in ProPhoto");
-        assert!(patch(4).iter().all(|&v| v <= 12_000), "full-K must be near black in ProPhoto");
+        assert!(
+            patch(4).iter().all(|&v| v <= 12_000),
+            "full-K must be near black in ProPhoto"
+        );
 
         // The three primaries must be genuinely distinct wide colours (a collapse
         // or a channel-swap would make them coincide). Compare pairwise on the
         // full 3-vector.
         let dist = |a: &[u16], b: &[u16]| {
-            (0..3).map(|c| (i32::from(a[c]) - i32::from(b[c])).abs()).max().unwrap()
+            (0..3)
+                .map(|c| (i32::from(a[c]) - i32::from(b[c])).abs())
+                .max()
+                .unwrap()
         };
         let (c, m, y) = (patch(1), patch(2), patch(3));
-        for (na, a, nb, b) in [("cyan", c, "magenta", m), ("cyan", c, "yellow", y), ("magenta", m, "yellow", y)] {
-            assert!(dist(a, b) > 3_000, "{na} and {nb} must be distinct in ProPhoto: {a:?} vs {b:?}");
+        for (na, a, nb, b) in [
+            ("cyan", c, "magenta", m),
+            ("cyan", c, "yellow", y),
+            ("magenta", m, "yellow", y),
+        ] {
+            assert!(
+                dist(a, b) > 3_000,
+                "{na} and {nb} must be distinct in ProPhoto: {a:?} vs {b:?}"
+            );
         }
     }
 }

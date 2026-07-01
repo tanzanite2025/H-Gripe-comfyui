@@ -149,7 +149,10 @@ fn run_device_probe(python: &Path, dir: &Path) -> Result<DeviceProbe, String> {
         .join("bridge")
         .join("device_probe_cli.py");
     if !script.is_file() {
-        return Err(format!("device_probe_cli.py not found at {}", script.display()));
+        return Err(format!(
+            "device_probe_cli.py not found at {}",
+            script.display()
+        ));
     }
     let mut cmd = std::process::Command::new(python);
     cmd.arg(&script).current_dir(dir);
@@ -167,8 +170,12 @@ fn run_device_probe(python: &Path, dir: &Path) -> Result<DeviceProbe, String> {
         return Err(format!("device probe failed: {}", stderr.trim()));
     }
     let stdout = String::from_utf8_lossy(&output.stdout);
-    serde_json::from_str::<DeviceProbe>(stdout.trim())
-        .map_err(|err| format!("could not parse device probe: {err} (raw: {})", stdout.trim()))
+    serde_json::from_str::<DeviceProbe>(stdout.trim()).map_err(|err| {
+        format!(
+            "could not parse device probe: {err} (raw: {})",
+            stdout.trim()
+        )
+    })
 }
 
 /// Run one card CLI's `--probe-engines` and parse its JSON.
@@ -196,11 +203,18 @@ fn run_engine_probe(python: &Path, dir: &Path, cli_name: &str) -> Result<CliEngi
         .map_err(|err| format!("failed to launch {}: {err}", python.display()))?;
     if !output.status.success() {
         let stderr = String::from_utf8_lossy(&output.stderr);
-        return Err(format!("{cli_name} --probe-engines failed: {}", stderr.trim()));
+        return Err(format!(
+            "{cli_name} --probe-engines failed: {}",
+            stderr.trim()
+        ));
     }
     let stdout = String::from_utf8_lossy(&output.stdout);
-    serde_json::from_str::<CliEngineProbe>(stdout.trim())
-        .map_err(|err| format!("could not parse {cli_name} probe: {err} (raw: {})", stdout.trim()))
+    serde_json::from_str::<CliEngineProbe>(stdout.trim()).map_err(|err| {
+        format!(
+            "could not parse {cli_name} probe: {err} (raw: {})",
+            stdout.trim()
+        )
+    })
 }
 
 /// Probe the opt-in ML `engine` seams across the local cards (the `doctor`

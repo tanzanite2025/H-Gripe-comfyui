@@ -67,10 +67,18 @@ jobs:
         run: npm --prefix studio-ui ci && npm --prefix studio-ui run build
 
       - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt
 
       - uses: Swatinem/rust-cache@v2
         with:
           workspaces: apps/desktop-tauri/src-tauri
+
+      # Formatting gate: keeps the tree rustfmt-clean so functional diffs never
+      # drown in whitespace churn. Runs before the (much slower) test build.
+      - name: cargo fmt --check
+        working-directory: apps/desktop-tauri/src-tauri
+        run: cargo fmt --all -- --check
 
       - name: cargo test
         working-directory: apps/desktop-tauri/src-tauri

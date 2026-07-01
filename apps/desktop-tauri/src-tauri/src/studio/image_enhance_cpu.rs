@@ -34,9 +34,7 @@ use std::path::Path;
 use std::time::Instant;
 
 use image::imageops::{self, FilterType};
-use image::{
-    ExtendedColorType, GrayImage, ImageBuffer, Luma, Rgb, RgbImage, Rgba, RgbaImage,
-};
+use image::{ExtendedColorType, GrayImage, ImageBuffer, Luma, Rgb, RgbImage, Rgba, RgbaImage};
 
 use super::studio_image::{self, DEFAULT_MAX_DECODE_PIXELS};
 use crate::psd::{reject_unsafe_output_name, EnhanceImageResult, EnhanceReport};
@@ -138,14 +136,8 @@ pub(super) fn try_enhance(p: &CpuEnhanceParams) -> Result<Option<EnhanceImageRes
         return Ok(None);
     }
 
-    let (scale, clamped) = resolve_scale(
-        src_w,
-        src_h,
-        target_w,
-        target_h,
-        fallback_scale,
-        max_pixels,
-    );
+    let (scale, clamped) =
+        resolve_scale(src_w, src_h, target_w, target_h, fallback_scale, max_pixels);
     let out_w = (f64::from(src_w) * scale).round().max(1.0) as u32;
     let out_h = (f64::from(src_h) * scale).round().max(1.0) as u32;
     let downscaling = out_w < src_w || out_h < src_h;
@@ -259,10 +251,11 @@ fn prepare_source(
     }
 
     if is_single_channel_highbit(color) {
-        let (dynimg, _meta, _icc) = match studio_image::load_dynamic(path, DEFAULT_MAX_DECODE_PIXELS) {
-            Ok(loaded) => loaded,
-            Err(_) => return Ok(None),
-        };
+        let (dynimg, _meta, _icc) =
+            match studio_image::load_dynamic(path, DEFAULT_MAX_DECODE_PIXELS) {
+                Ok(loaded) => loaded,
+                Err(_) => return Ok(None),
+            };
         let gray16 = dynimg.into_luma16();
         let (w, h) = gray16.dimensions();
         if w == 0 || h == 0 {
@@ -310,8 +303,8 @@ fn write_output_png(
     icc: Option<&[u8]>,
     dpi: u32,
 ) -> Result<(), String> {
-    let file = File::create(path)
-        .map_err(|err| format!("failed to create {}: {err}", path.display()))?;
+    let file =
+        File::create(path).map_err(|err| format!("failed to create {}: {err}", path.display()))?;
     let writer = BufWriter::new(file);
     let (width, height) = img.dimensions();
     // png has no `Encoder::set_icc_profile`; the ICC profile is carried on the

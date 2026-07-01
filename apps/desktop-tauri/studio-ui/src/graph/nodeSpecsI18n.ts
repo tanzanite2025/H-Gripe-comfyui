@@ -221,8 +221,12 @@ export const NODE_ZH: Record<string, NodeSpecZh> = {
         label: "主体边距 %",
         hint: "在检测出的主体周围保留的内边距（仅 auto_subject 模式）",
       },
+      format: {
+        label: "输出格式",
+        hint: "png（默认）或 16-bit tiff；宽色域源两者都保留 16-bit + ICC",
+      },
       output_dir: { label: "输出目录", hint: OUTPUT_DIR_HINT },
-      output_name: { label: "输出名", hint: "裁剪后 PNG 的基础名（空 = <image>_crop）" },
+      output_name: { label: "输出名", hint: "裁剪后文件的基础名（空 = <image>_crop）" },
     },
     ports: {
       image: "图像",

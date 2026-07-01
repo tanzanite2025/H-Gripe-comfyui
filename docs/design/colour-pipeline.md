@@ -144,9 +144,23 @@ Design-first; each phase is an independently reviewable, CI-gated PR.
   wide-gamut sources pay the round-trip and the byte-exact naive contract holds.
   Shipped together because switching the space without the egress would
   mis-colour every card output. TRC stays gamma-encoded (linear-light deferred).
-- **P4 — manual-path file output.** 16-bit PNG / TIFF encoders that embed the
-  ICC for the manual outputs (`icc_preserved: true`), consuming the ProPhoto
-  surface directly.
+- **P4 — manual-path 16-bit chain + file output.** Decided (乙): the manual
+  chain carries the 16-bit `WorkingImage` end-to-end — `image_buffer` caches the
+  canonical surface and 16-bit PNG / TIFF encoders embed the ICC on the manual
+  outputs (`icc_preserved: true`) — while the preview / Python-bridge / API
+  boundaries keep the 8-bit sRGB egress. Staged as independently reviewable PRs:
+  - **P4a (landed):** `image_buffer` gains a `WorkingImage` carrier —
+    `publish_working` / `lookup_working` serve the native 16-bit surface to the
+    manual chain (`load_working` consults the cache), while `lookup_rgba` /
+    `lookup_dynamic` / eviction-materialisation egress it to 8-bit sRGB so every
+    existing consumer is unchanged. Purely additive; nothing publishes a
+    16-bit surface yet.
+  - **P4b:** crop operates on / publishes the 16-bit surface and writes 16-bit
+    PNG with embedded ICC.
+  - **P4c:** 16-bit TIFF (with ICC) encoder.
+  - **P4d:** subject-mask / matte / edge-refine chain (16-bit cutouts; masks
+    stay 8-bit gray; model ingress keeps the sRGB egress).
+  - **P4e:** remaining manual cards + docs close-out.
 - **P5 — Python-bridge parity.** Reconcile / retire the Python path's 8-bit
   sRGB behaviour so the two engines agree on the new contract.
 

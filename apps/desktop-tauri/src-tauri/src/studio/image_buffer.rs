@@ -38,15 +38,26 @@ use std::time::SystemTime;
 
 use image::{DynamicImage, GrayImage, RgbaImage};
 
-use super::studio_image::{LoadMeta, LoadedRgba};
+use super::studio_image::{LoadMeta, LoadedRgba, LoadedWorking};
+use super::working_image::WorkingImage;
 
-/// A decoded surface kept resident. RGBA carries its [`LoadMeta`] so a hit
-/// reproduces the same provenance a disk decode would report; a single-channel
-/// mask has no surfaced provenance (mirroring [`super::studio_image::load_mask`]).
+/// A decoded surface kept resident. RGBA / [`WorkingImage`] carry their
+/// [`LoadMeta`] so a hit reproduces the same provenance a disk decode would
+/// report; a single-channel mask has no surfaced provenance (mirroring
+/// [`super::studio_image::load_mask`]).
 #[derive(Clone)]
 enum DecodedImage {
     Rgba {
         image: Arc<RgbaImage>,
+        meta: LoadMeta,
+    },
+    /// A 16-bit canonical [`WorkingImage`] (space-tagged, ICC-carrying). The
+    /// manual chain publishes this so wide-gamut pixels survive card-to-card
+    /// without a lossy 8-bit round-trip; 8-bit consumers ([`lookup_rgba`],
+    /// [`lookup_dynamic`], disk materialisation) get [`WorkingImage::to_srgb_rgba8`]
+    /// egress so their contract is unchanged.
+    Working {
+        image: Arc<WorkingImage>,
         meta: LoadMeta,
     },
     Gray(Arc<GrayImage>),
@@ -231,6 +242,46 @@ pub(crate) fn publish_rgba_deferred(path: &Path, image: &RgbaImage, meta: LoadMe
     );
 }
 
+/// Publish a freshly-written 16-bit [`WorkingImage`] output so the next manual
+/// card that loads this path via [`super::studio_image::load_working`] gets the
+/// wide-gamut surface straight from memory (no 8-bit round-trip). 8-bit readers
+/// of the same path still get the egressed sRGB surface. `meta` is the
+/// provenance a reload would report.
+pub(crate) fn publish_working(path: &Path, image: &WorkingImage, meta: LoadMeta) {
+    if let Some((id, mtime, len)) = key_for(path) {
+        store(
+            id,
+            Entry {
+                image: DecodedImage::Working {
+                    image: Arc::new(image.clone()),
+                    meta,
+                },
+                freshness: Freshness::File { mtime, len },
+            },
+        );
+    }
+}
+
+/// Publish a 16-bit [`WorkingImage`] whose file was **not** written (the
+/// write-skip analogue of [`publish_rgba_deferred`] for the manual chain).
+/// Keyed by the raw output path and materialised (egressed to 8-bit) on
+/// eviction; callers must only use this when the file does not already exist.
+pub(crate) fn publish_working_deferred(path: &Path, image: &WorkingImage, meta: LoadMeta) {
+    let id = crate::resource::id_for(&path.to_string_lossy());
+    store(
+        id,
+        Entry {
+            image: DecodedImage::Working {
+                image: Arc::new(image.clone()),
+                meta,
+            },
+            freshness: Freshness::Deferred {
+                path: path.to_path_buf(),
+            },
+        },
+    );
+}
+
 /// Publish a freshly-written single-channel output (mask / trimap).
 pub(crate) fn publish_gray(path: &Path, image: &GrayImage) {
     if let Some((id, mtime, len)) = key_for(path) {
@@ -300,6 +351,10 @@ fn materialize(entry: &Entry) {
     }
     let _ = match &entry.image {
         DecodedImage::Rgba { image, .. } => image.save(path),
+        // Behaviour-preserving for P4a: the on-disk format the readers expect is
+        // still 8-bit sRGB PNG, so a deferred Working surface materialises via
+        // the egress. (The 16-bit file encoders arrive in a later P4 stage.)
+        DecodedImage::Working { image, .. } => image.to_srgb_rgba8().save(path),
         DecodedImage::Gray(image) => image.save(path),
     };
 }
@@ -320,7 +375,40 @@ pub(crate) fn lookup_rgba(path: &Path, max_pixels: u64) -> Option<LoadedRgba> {
                 meta,
             })
         }
+        // A published 16-bit surface serves 8-bit consumers via the egress, so
+        // `load_rgba` still gets an sRGB surface identical to a disk decode.
+        DecodedImage::Working { image, meta } => {
+            if exceeds_budget(image.width, image.height, max_pixels) {
+                return None;
+            }
+            Some(LoadedRgba {
+                image: image.to_srgb_rgba8(),
+                meta,
+            })
+        }
         DecodedImage::Gray(_) => None,
+    }
+}
+
+/// Look up a published 16-bit [`WorkingImage`] for `path`, or `None` on a miss /
+/// stale entry / budget overflow / wrong-kind entry. The native half of the
+/// manual-chain handoff: a manual card that published its wide-gamut surface is
+/// re-read at full precision by the next manual card. An 8-bit `Rgba` entry is
+/// deliberately *not* widened here — only a genuine `Working` publish carries a
+/// space tag + ICC, so a plain RGBA output falls back to a disk decode.
+pub(crate) fn lookup_working(path: &Path, max_pixels: u64) -> Option<LoadedWorking> {
+    let entry = fetch_fresh(path)?;
+    match entry.image {
+        DecodedImage::Working { image, meta } => {
+            if exceeds_budget(image.width, image.height, max_pixels) {
+                return None;
+            }
+            Some(LoadedWorking {
+                image: (*image).clone(),
+                meta,
+            })
+        }
+        DecodedImage::Rgba { .. } | DecodedImage::Gray(_) => None,
     }
 }
 
@@ -349,6 +437,7 @@ pub(crate) fn lookup_dynamic(path: &Path) -> Option<DynamicImage> {
     let entry = fetch_fresh(path)?;
     Some(match entry.image {
         DecodedImage::Rgba { image, .. } => DynamicImage::ImageRgba8((*image).clone()),
+        DecodedImage::Working { image, .. } => DynamicImage::ImageRgba8(image.to_srgb_rgba8()),
         DecodedImage::Gray(image) => DynamicImage::ImageLuma8((*image).clone()),
     })
 }
@@ -509,6 +598,96 @@ mod tests {
         assert_eq!(hit.get_pixel(0, 0).0, [200]);
         let _ = std::fs::remove_file(&rgba_path);
         let _ = std::fs::remove_file(&gray_path);
+    }
+
+    #[test]
+    fn a_published_working_surface_serves_both_precisions() {
+        use super::super::working_image::{WorkingImage, WorkingSpace};
+
+        let path = unique_tmp("working.png");
+        // On disk: an unrelated 8-bit PNG (proves hits come from the buffer).
+        RgbaImage::from_pixel(2, 2, Rgba([1, 1, 1, 255]))
+            .save(&path)
+            .unwrap();
+
+        // Publish a 16-bit Srgb working surface whose low bytes differ from any
+        // 8-bit rounding, so a native 16-bit hit is distinguishable.
+        let mut work = WorkingImage::from_rgba8(
+            &RgbaImage::from_pixel(2, 2, Rgba([10, 20, 30, 255])),
+            WorkingSpace::Srgb,
+            Some(vec![1, 2, 3, 4]),
+        );
+        work.pixels[0] = 12_345; // an odd 16-bit R that is not `widen(any u8)`
+        publish_working(&path, &work, rgba_meta());
+
+        // Native half: the manual chain gets the exact 16-bit pixels + ICC back.
+        let native = lookup_working(&path, 0).expect("working hit");
+        assert_eq!(native.image.pixels[0], 12_345);
+        assert_eq!(native.image.space, WorkingSpace::Srgb);
+        assert_eq!(native.image.icc.as_deref(), Some(&[1u8, 2, 3, 4][..]));
+        assert_eq!(native.meta.source_mode, "RGBA");
+
+        // 8-bit half: lookup_rgba / lookup_dynamic egress to sRGB, identical to
+        // what a disk decode of the materialised file would yield.
+        let expected = work.to_srgb_rgba8();
+        let egressed = lookup_rgba(&path, 0).expect("rgba egress hit");
+        assert_eq!(egressed.image, expected);
+        match lookup_dynamic(&path).expect("dynamic egress hit") {
+            DynamicImage::ImageRgba8(img) => assert_eq!(img, expected),
+            other => panic!("expected ImageRgba8, got {other:?}"),
+        }
+
+        // Cross-kind: a working entry is not a mask hit.
+        assert!(lookup_gray(&path, 0).is_none());
+        let _ = std::fs::remove_file(&path);
+    }
+
+    #[test]
+    fn an_rgba_entry_is_not_a_working_hit() {
+        let path = unique_tmp("rgba_not_working.png");
+        let img = RgbaImage::from_pixel(2, 2, Rgba([4, 5, 6, 255]));
+        img.save(&path).unwrap();
+        publish_rgba(&path, &img, rgba_meta());
+        // Only a genuine Working publish carries a space tag + ICC, so a plain
+        // 8-bit output is never silently widened into the 16-bit lookup.
+        assert!(lookup_working(&path, 0).is_none());
+        assert!(lookup_rgba(&path, 0).is_some());
+        let _ = std::fs::remove_file(&path);
+    }
+
+    #[test]
+    fn a_deferred_working_surface_materialises_as_srgb_png() {
+        use super::super::working_image::{WorkingImage, WorkingSpace};
+
+        let mut lru = Lru::new(1);
+        let path = unique_tmp("working_evict.png");
+        let work = WorkingImage::from_rgba8(
+            &RgbaImage::from_pixel(3, 3, Rgba([40, 80, 120, 255])),
+            WorkingSpace::Srgb,
+            None,
+        );
+        let deferred = Entry {
+            image: DecodedImage::Working {
+                image: Arc::new(work.clone()),
+                meta: rgba_meta(),
+            },
+            freshness: Freshness::Deferred { path: path.clone() },
+        };
+        assert!(lru.insert("w".to_string(), deferred).is_empty());
+        assert!(!path.exists());
+
+        let filler = Entry {
+            image: DecodedImage::Gray(Arc::new(GrayImage::from_pixel(1, 1, Luma([0])))),
+            freshness: Freshness::File { mtime: None, len: 0 },
+        };
+        for entry in &lru.insert("filler".to_string(), filler) {
+            materialize(entry);
+        }
+        // The evicted 16-bit surface lands on disk as the egressed 8-bit sRGB
+        // PNG a disk reader still expects in P4a.
+        let reloaded = image::open(&path).expect("materialised png decodes").to_rgba8();
+        assert_eq!(reloaded, work.to_srgb_rgba8());
+        let _ = std::fs::remove_file(&path);
     }
 
     #[test]

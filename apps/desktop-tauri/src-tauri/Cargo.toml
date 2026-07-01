@@ -65,5 +65,7 @@ tiff = "0.11"
 # same way the Python bridge does via littleCMS (`ImageCms.profileToProfile`),
 # with a naive PIL-formula fallback when no profile is present. Used by
 # `studio/cmyk_transform.rs`.
-moxcms = "0.8.1"
+# `options` enables the tetrahedral LUT interpolation used below to match
+# littleCMS / lcms2 (moxcms defaults to quadlinear for CMYK).
+moxcms = { version = "0.8.1", features = ["options"] }
 hgripe-api = { path = "../../../crates/hgripe-api" }

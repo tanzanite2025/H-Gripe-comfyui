@@ -7,6 +7,13 @@
 //! - **With an embedded ICC profile** — run a real profile-to-profile transform
 //!   (`moxcms`, the CMYK profile's A2B LUT into sRGB, perceptual intent), mirroring
 //!   the CLI's `ImageCms.profileToProfile(img, src, sRGB, outputMode="RGB")`.
+//!   The LUT is walked with **tetrahedral** interpolation and high-precision
+//!   barycentric weights so the result tracks littleCMS/lcms2 (which uses
+//!   tetrahedral) more closely than moxcms's default quadlinear. The intent is
+//!   configurable via [`cmyk_to_rgb8_with_intent`] but defaults to Perceptual to
+//!   match Pillow's `profileToProfile` default; there is no black-point
+//!   compensation, matching Pillow's default `flags=0` (and moxcms 0.8.1 does not
+//!   expose BPC).
 //! - **Without a profile** (or if the transform fails for any reason) — fall back
 //!   to PIL's naive CMYK->RGB, byte-for-byte: for each channel
 //!   `out = (255 - K) - muldiv255(255 - K, ink)`, where `muldiv255(a, b)` is
@@ -24,18 +31,26 @@
 //! in the profile's device direction (0 = no ink).
 
 use moxcms::{
-    ColorProfile, DataColorSpace, Layout, RenderingIntent, TransformExecutor, TransformOptions,
+    BarycentricWeightScale, ColorProfile, DataColorSpace, InterpolationMethod, Layout,
+    RenderingIntent, TransformExecutor, TransformOptions,
 };
 
 use super::cmyk_decode::RawCmyk;
 
-/// Convert raw CMYK samples to packed 8-bit sRGB (`width * height * 3` bytes, RGB).
+/// Convert raw CMYK samples to packed 8-bit sRGB (`width * height * 3` bytes, RGB)
+/// at the default Perceptual intent (mirroring Pillow's `profileToProfile`).
 ///
 /// Infallible: an embedded profile is used when present and usable, otherwise
 /// (and on any transform error) the naive PIL formula is applied.
 pub(crate) fn cmyk_to_rgb8(raw: &RawCmyk) -> Vec<u8> {
+    cmyk_to_rgb8_with_intent(raw, RenderingIntent::Perceptual)
+}
+
+/// Like [`cmyk_to_rgb8`] but with a caller-chosen ICC rendering intent. Only the
+/// profile path honours the intent; the naive fallback has no notion of one.
+pub(crate) fn cmyk_to_rgb8_with_intent(raw: &RawCmyk, intent: RenderingIntent) -> Vec<u8> {
     if let Some(icc) = raw.icc.as_deref() {
-        if let Some(rgb) = icc_cmyk_to_rgb(raw, icc) {
+        if let Some(rgb) = icc_cmyk_to_rgb(raw, icc, intent) {
             return rgb;
         }
     }
@@ -45,15 +60,21 @@ pub(crate) fn cmyk_to_rgb8(raw: &RawCmyk) -> Vec<u8> {
 /// Apply the embedded CMYK ICC profile to reach sRGB. Returns `None` (so the
 /// caller falls back to the naive formula) if the profile is not CMYK, cannot be
 /// parsed, or the transform fails.
-fn icc_cmyk_to_rgb(raw: &RawCmyk, icc: &[u8]) -> Option<Vec<u8>> {
+fn icc_cmyk_to_rgb(raw: &RawCmyk, icc: &[u8], intent: RenderingIntent) -> Option<Vec<u8>> {
     let src = ColorProfile::new_from_slice(icc).ok()?;
     if src.color_space != DataColorSpace::Cmyk {
         return None;
     }
     let dst = ColorProfile::new_srgb();
     let options = TransformOptions {
-        // Match the CLI's `ImageCms.profileToProfile` default (INTENT_PERCEPTUAL).
-        rendering_intent: RenderingIntent::Perceptual,
+        rendering_intent: intent,
+        // littleCMS/lcms2 walk the CMYK A2B LUT with tetrahedral interpolation;
+        // moxcms defaults to quadlinear, so pin tetrahedral + high-precision
+        // barycentric weights to track the Python (littleCMS) reference. There
+        // is no black-point compensation: Pillow's `profileToProfile` default is
+        // `flags=0` (BPC off) and moxcms 0.8.1 does not expose it.
+        interpolation_method: InterpolationMethod::Tetrahedral,
+        barycentric_weight_scale: BarycentricWeightScale::High,
         ..TransformOptions::default()
     };
     // A CMYK 4-channel buffer uses the same packed layout as RGBA; the source
@@ -135,6 +156,23 @@ mod tests {
         let samples = vec![128, 64, 32, 16];
         let out = cmyk_to_rgb8(&raw(1, samples.clone(), None));
         assert_eq!(out, naive_cmyk_to_rgb(&samples));
+    }
+
+    #[test]
+    fn intent_is_ignored_without_a_profile() {
+        // The naive fallback has no rendering intent, so every intent collapses
+        // to the same PIL bytes when no usable profile is present.
+        let samples = vec![200, 100, 50, 25];
+        let base = naive_cmyk_to_rgb(&samples);
+        for intent in [
+            RenderingIntent::Perceptual,
+            RenderingIntent::RelativeColorimetric,
+            RenderingIntent::Saturation,
+            RenderingIntent::AbsoluteColorimetric,
+        ] {
+            let out = cmyk_to_rgb8_with_intent(&raw(1, samples.clone(), None), intent);
+            assert_eq!(out, base, "intent {intent:?} must not affect the naive path");
+        }
     }
 
     #[test]

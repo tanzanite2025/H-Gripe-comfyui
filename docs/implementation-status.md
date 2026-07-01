@@ -102,11 +102,8 @@ The full staged rollout of the editor compute/threading model has **landed**.
 
 ## 8. Out of scope (explicit product-direction decisions)
 
-These appear in early vision/research notes
-([`API_FIRST_DESKTOP_PLAN.md`](../API_FIRST_DESKTOP_PLAN.md),
-[`PSD_AI_PRODUCTION_WORKFLOW_RESEARCH.md`](../PSD_AI_PRODUCTION_WORKFLOW_RESEARCH.md))
-but are **not** committed work. The product today is PSD-first, single-image,
-CPU bridge.
+These were floated in early vision/research notes but are **not** committed
+work. The product today is PSD-first, single-image, CPU bridge.
 
 | Item | Status | Notes |
 | --- | --- | --- |

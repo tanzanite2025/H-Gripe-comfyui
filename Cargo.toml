@@ -5,3 +5,8 @@ members = [
 ]
 resolver = "2"
 
+[patch.crates-io]
+# H-Gripe owns its colour-management fork. Keep the dependency version pinned
+# in the app crate, but resolve `moxcms` from this vendored copy so ProPhoto /
+# CMYK / ICC behaviour cannot drift with upstream releases.
+moxcms = { path = "third_party/moxcms" }

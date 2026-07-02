@@ -1,9 +1,10 @@
 # Colour pipeline: working space, bit depth, and the manual / model split
 
-**Status:** Decided (architecture). **Landed (P1–P4):** the canonical
+**Status:** Decided (architecture). **Landed (P1–P5):** the canonical
 surface is 16-bit ProPhoto for wide-gamut sources with a colour-managed sRGB
-egress, and the native manual chain (crop, subject-mask) carries it end-to-end
-with 16-bit PNG/TIFF-with-ICC output; P5 (Python parity) remains. See
+egress, the native manual chain (crop, subject-mask) carries it end-to-end
+with 16-bit PNG/TIFF-with-ICC output, and the Python bridge reads those
+products through the same colour-managed contract. See
 *Current state* below. This document is the **single source of truth** for
 colour space, bit depth, and ICC handling across every card. Where a per-card
 spec still describes colour behaviour, it describes the 8-bit sRGB the cards
@@ -124,7 +125,10 @@ this document:
 CMYK **decode coverage** is complete (16-bit + alpha TIFF #183, shared-loader
 routing #184, tetrahedral ICC #185, unmarked CMYK JPEG #186). The **wide-gamut
 working space** (P1–P3) and the manual-path 16-bit chain (P4a–P4e) have now
-landed; what remains is P5 (Python-bridge parity).
+landed, and P5 (Python-bridge parity) closed the loop: every bridge CLI
+colour-manages ProPhoto-tagged manual products to sRGB at ingress, and
+neither engine carries the stale profile onto its sRGB outputs. The only
+remaining items are the explicitly deferred *Open decisions* below.
 
 ## Phased implementation plan
 
@@ -205,6 +209,15 @@ Design-first; each phase is an independently reviewable, CI-gated PR.
     `tests/test_wide_gamut.py` against a fixture written by
     `write_working_png` itself, asserted to the same goldens as the Rust
     egress stage test (lcms vs moxcms within ±4).
+  - **P5b (landed): no stale profile on enhance output.** The Rust
+    `imageEnhance` cpu fast path colour-manages a ProPhoto input to sRGB at
+    load but still re-embedded the source profile on its output — sRGB pixels
+    labelled ProPhoto. It now filters `is_prophoto_icc` out of the preserved
+    profile, matching the Python side (which drops the profile on
+    conversion); both engines are pinned to the same mid-grey golden.
+    Bridge card outputs stay 8-bit sRGB by design — they sit at the
+    model/preview boundary (P3) — so with ingress and profile handling
+    reconciled, P5 is complete.
 
 ## Open decisions
 

@@ -3,7 +3,7 @@ import type { Node } from "@xyflow/react";
 import { nodeSpec } from "../graph/nodeSpecs";
 import { localizeSpec } from "../graph/nodeSpecsI18n";
 import { LangContext, useT } from "../i18n";
-import { probeEngines, type EngineProbeReport } from "../bridge/psd";
+import { probeEngines, type EngineProbeReport } from "../bridge/engineProbe";
 import { ParamField } from "./ParamField";
 import { ProfilePicker } from "./ProfilePicker";
 import { OutputPicker } from "./OutputPicker";

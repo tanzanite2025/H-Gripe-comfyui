@@ -3,7 +3,7 @@
 import { useCallback, useEffect, useState } from "react";
 
 import { commands, pretty, type PathInfo, type RuntimeInfo } from "../bridge/desktop";
-import { probeEngines, type EngineProbeReport } from "../bridge/psd";
+import { probeEngines, type EngineProbeReport } from "../bridge/engineProbe";
 import { useT } from "../i18n";
 
 function PathCard({ label, info }: { label: string; info: PathInfo }) {

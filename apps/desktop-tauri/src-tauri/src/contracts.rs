@@ -153,6 +153,10 @@ pub(crate) struct RepaintRegionResult {
     /// Seam feather radius actually applied (only for `repainted`).
     #[serde(default)]
     pub(crate) feather_px: Option<f64>,
+    /// Seam blend actually applied (`feather` | `poisson`); a `poisson`
+    /// request degrades to `feather` on a too-small region.
+    #[serde(default)]
+    pub(crate) blend: Option<String>,
 }
 
 /// Per-region outcome of the **Detail Repaint** node: which issue regions were
@@ -174,6 +178,9 @@ pub(crate) struct RepaintReport {
     /// `[width, height]` of the fixed image.
     #[serde(default)]
     pub(crate) image_size: [i64; 2],
+    /// Seam blend mode the composite ran (`feather` | `poisson`).
+    #[serde(default)]
+    pub(crate) blend: String,
     /// Pillow mode of the decoded candidate before normalising to 8-bit RGBA.
     #[serde(default)]
     pub(crate) source_mode: String,

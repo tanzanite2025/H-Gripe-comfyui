@@ -292,6 +292,96 @@ def test_composite_reports_hardening_fields(tmp_path: Path) -> None:
     assert rep["max_decode_pixels"] == cli._DEFAULT_MAX_DECODE_PIXELS
 
 
+def test_composite_default_blend_is_feather(tmp_path: Path) -> None:
+    img, manifest, repainted = _prepare_then_patch(tmp_path, (240, 30, 30))
+    out = _run_composite(img, tmp_path, manifest=manifest, repainted=repainted)
+    rep = out["repaint_report"]
+    assert rep["blend"] == "feather"
+    assert rep["regions"][0]["blend"] == "feather"
+    assert rep["regions"][0]["feather_px"] > 0
+
+
+def test_composite_poisson_blend_hides_offset_seam(tmp_path: Path) -> None:
+    # A patch that is the base plus a flat colour offset has zero extra
+    # gradient, so the Poisson solve must diffuse the offset away entirely and
+    # reproduce the base (the classic seamless-clone property).
+    img, manifest, repainted = _prepare_then_patch(tmp_path, (140, 180, 255))
+    out = _run_composite(img, tmp_path, manifest=manifest, repainted=repainted, blend="poisson")
+    rep = out["repaint_report"]
+    assert rep["blend"] == "poisson"
+    assert rep["regions"][0]["blend"] == "poisson"
+    assert "feather_px" not in rep["regions"][0]
+    res = np.asarray(Image.open(out["fixed_image"]).convert("RGBA"), dtype=np.float32)
+    # Flat base + flat patch -> the solved core equals the base colour.
+    assert abs(res[32, 32, 0] - 80.0) <= 1.0
+    assert abs(res[32, 32, 2] - 200.0) <= 1.0
+
+
+def test_composite_poisson_preserves_patch_gradients(tmp_path: Path) -> None:
+    # A patch with real structure must keep its gradients inside the core.
+    img = _rgba(tmp_path / "base.png", size=64, color=(80, 120, 200))
+    prep = _run_prepare(img, tmp_path, quality_report=_report(_issue([16, 16, 48, 48])), padding=8)
+    region = prep["regions"][0]
+    cw, ch = region["size"]
+    patch = np.zeros((ch, cw, 4), dtype=np.uint8)
+    patch[..., :3] = 60
+    patch[:, cw // 2 :, :3] = 200  # a hard vertical step inside the core
+    patch[..., 3] = 255
+    patch_path = tmp_path / "patch.png"
+    Image.fromarray(patch, "RGBA").save(patch_path)
+    out = _run_composite(
+        img, tmp_path,
+        manifest=json.dumps({"regions": prep["regions"]}),
+        repainted=json.dumps([{"index": region["index"], "path": str(patch_path)}]),
+        blend="poisson",
+    )
+    res = np.asarray(Image.open(out["fixed_image"]).convert("RGBA"), dtype=np.float32)
+    # The step edge survives the blend (gradient preserved across the middle).
+    assert res[32, 34, 0] - res[32, 30, 0] > 60.0
+
+
+def test_composite_poisson_preserves_original_alpha(tmp_path: Path) -> None:
+    base = np.zeros((64, 64, 4), dtype=np.uint8)
+    base[..., :3] = (80, 120, 200)
+    base[..., 3] = 255
+    base[26:38, 26:38, 3] = 0
+    img = tmp_path / "cutout.png"
+    Image.fromarray(base, "RGBA").save(img)
+    prep = _run_prepare(img, tmp_path, quality_report=_report(_issue([16, 16, 48, 48])), padding=8)
+    region = prep["regions"][0]
+    cw, ch = region["size"]
+    patch = np.zeros((ch, cw, 4), dtype=np.uint8)
+    patch[..., :3] = (240, 30, 30)
+    patch[..., 3] = 255
+    patch_path = tmp_path / "patch.png"
+    Image.fromarray(patch, "RGBA").save(patch_path)
+    out = _run_composite(
+        img, tmp_path,
+        manifest=json.dumps({"regions": prep["regions"]}),
+        repainted=json.dumps([{"index": region["index"], "path": str(patch_path)}]),
+        blend="poisson",
+    )
+    res = np.asarray(Image.open(out["fixed_image"]).convert("RGBA"), dtype=np.uint8)
+    assert res[32, 32, 3] == 0
+
+
+def test_composite_poisson_falls_back_to_feather_on_tiny_region(tmp_path: Path) -> None:
+    img, manifest, repainted = _prepare_then_patch(tmp_path, (240, 30, 30), bbox=(30, 30, 32, 32))
+    out = _run_composite(img, tmp_path, manifest=manifest, repainted=repainted, blend="poisson")
+    rep = out["repaint_report"]
+    assert rep["blend"] == "poisson"
+    region = rep["regions"][0]
+    assert region["status"] == "repainted"
+    assert region["blend"] == "feather"
+    assert region["feather_px"] > 0
+
+
+def test_composite_unknown_blend_raises(tmp_path: Path) -> None:
+    img, manifest, repainted = _prepare_then_patch(tmp_path, (240, 30, 30))
+    with pytest.raises(ValueError, match="unknown blend mode"):
+        _run_composite(img, tmp_path, manifest=manifest, repainted=repainted, blend="magic")
+
+
 def test_composite_missing_image_raises(tmp_path: Path) -> None:
     with pytest.raises(FileNotFoundError):
         _run_composite(tmp_path / "nope.png", tmp_path, manifest="{}", repainted="[]")

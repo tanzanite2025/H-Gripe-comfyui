@@ -1265,8 +1265,17 @@ export const NODE_SPECS: Record<string, NodeSpec> = {
         label: "Feather px",
         control: "number",
         defaultValue: 0,
-        hint: "seam feather radius (0 = auto from the issue size)",
+        hint: "seam feather radius (0 = auto from the issue size); ignored by the poisson blend",
         inline: true,
+      },
+      {
+        key: "blend",
+        label: "Seam blend",
+        control: "select",
+        options: ["feather", "poisson"],
+        defaultValue: "feather",
+        inline: true,
+        hint: "feather = soft alpha falloff at the patch seam (default); poisson = gradient-domain seamless clone for harder seams (falls back to feather on a too-small region)",
       },
       {
         key: "output_dir",

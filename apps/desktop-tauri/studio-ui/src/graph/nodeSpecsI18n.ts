@@ -403,7 +403,11 @@ export const NODE_ZH: Record<string, NodeSpecZh> = {
       min_confidence: { label: "最小置信度", hint: "仅重绘置信度达到/高于此值的问题（0..1）" },
       region_padding: { label: "区域边距", hint: "在每个问题框周围添加的上下文边距（px）" },
       max_regions: { label: "最大区域数", hint: "限制重绘的区域数量（优先置信度最高的）" },
-      feather_px: { label: "羽化 px", hint: "接缝羽化半径（0 = 按问题尺寸自动）" },
+      feather_px: { label: "羽化 px", hint: "接缝羽化半径（0 = 按问题尺寸自动）；poisson 混合忽略此项" },
+      blend: {
+        label: "接缝混合",
+        hint: "feather = 补丁接缝处的软 alpha 过渡（默认）；poisson = 梯度域无缝克隆，适合更难的接缝（区域过小时回落 feather）",
+      },
       output_dir: { label: "输出目录", hint: OUTPUT_DIR_HINT },
       output_name: { label: "输出名", hint: "修复图像的基础名（空 = <image>_repainted）" },
     },

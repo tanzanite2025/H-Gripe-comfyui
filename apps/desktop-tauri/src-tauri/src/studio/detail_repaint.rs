@@ -80,6 +80,15 @@ pub(super) async fn execute_studio_detail_repaint(
     let padding = studio_param_i64(node, "region_padding");
     let max_regions = studio_param_i64(node, "max_regions");
     let feather_px = studio_param_f64(node, "feather_px");
+    let blend = {
+        let configured = studio_value_to_string(node.params.get("blend"));
+        let trimmed = configured.trim();
+        if trimmed.is_empty() {
+            None
+        } else {
+            Some(trimmed.to_string())
+        }
+    };
 
     let prepared = prepare_repaint_regions(
         None,
@@ -165,6 +174,7 @@ pub(super) async fn execute_studio_detail_repaint(
                         | "region_padding"
                         | "max_regions"
                         | "feather_px"
+                        | "blend"
                         | "output_dir"
                         | "output_name"
                 ) {
@@ -236,6 +246,7 @@ pub(super) async fn execute_studio_detail_repaint(
         manifest,
         repainted_json,
         feather_px,
+        blend,
         Some(output_dir),
         output_name,
     )?;

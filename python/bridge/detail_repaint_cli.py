@@ -228,6 +228,84 @@ def _feather_mask(shape: tuple[int, int], inner: list[int], feather_px: float) -
     return np.asarray(img, dtype=np.float32) / 255.0
 
 
+def _dst1(arr: "np.ndarray", axis: int) -> "np.ndarray":
+    """Type-I discrete sine transform along ``axis`` (via an odd-extended FFT).
+
+    DST-I diagonalises the Dirichlet discrete Laplacian on a rectangle, which is
+    what lets the Poisson blend solve the seam equation exactly in one pass
+    instead of iterating. Self-inverse up to a factor of ``2 / (n + 1)``.
+    """
+    n = arr.shape[axis]
+    shape = list(arr.shape)
+    shape[axis] = 2 * n + 2
+    ext = np.zeros(shape, dtype=np.float64)
+    sl: list[Any] = [slice(None)] * arr.ndim
+    sl[axis] = slice(1, n + 1)
+    ext[tuple(sl)] = arr
+    sl[axis] = slice(n + 2, 2 * n + 2)
+    ext[tuple(sl)] = -np.flip(arr, axis=axis)
+    sl[axis] = slice(1, n + 1)
+    return -np.fft.fft(ext, axis=axis).imag[tuple(sl)] / 2.0
+
+
+def _poisson_solve(rhs: "np.ndarray") -> "np.ndarray":
+    """Solve ``(4u - sum of 4-neighbours) = rhs`` with zero Dirichlet boundary.
+
+    ``rhs`` is (H,W); the known boundary values must already be folded into it.
+    The rectangular domain lets the 5-point Poisson system be solved exactly by
+    a 2-D DST-I eigen-decomposition (no iterative solver needed).
+    """
+    height, width = rhs.shape
+    transformed = _dst1(_dst1(rhs, 0), 1)
+    lam_i = 2.0 - 2.0 * np.cos(np.pi * np.arange(1, height + 1) / (height + 1))
+    lam_j = 2.0 - 2.0 * np.cos(np.pi * np.arange(1, width + 1) / (width + 1))
+    transformed /= lam_i[:, None] + lam_j[None, :]
+    return _dst1(_dst1(transformed, 0), 1) * (4.0 / ((height + 1) * (width + 1)))
+
+
+def _poisson_blend_rgb(window: "np.ndarray", patch: "np.ndarray", inner: list[int]) -> bool:
+    """Gradient-domain (Poisson) clone of the patch RGB into ``window``.
+
+    Seamless-clone formulation: inside the issue core the result keeps the
+    repainted patch's *gradients* while its boundary is pinned to the
+    surrounding candidate pixels, so illumination/colour offsets at the seam
+    diffuse away instead of showing as a visible edge. Only the RGB channels of
+    ``window`` (a float32 view into the candidate) are written — the alpha
+    isolation contract is untouched. Returns ``False`` (caller falls back to
+    the feathered blend) when the core is too small to solve.
+    """
+    crop_h, crop_w = window.shape[:2]
+    x1, y1, x2, y2 = inner
+    x1 = max(0, min(x1, crop_w))
+    y1 = max(0, min(y1, crop_h))
+    x2 = max(x1, min(x2, crop_w))
+    y2 = max(y1, min(y2, crop_h))
+    core_h, core_w = y2 - y1, x2 - x1
+    if core_h < 3 or core_w < 3:
+        return False
+
+    # Pad by one replicated pixel so the boundary ring exists even when the
+    # issue core touches the crop edge; (y, x) maps to padded (y + 1, x + 1).
+    base_pad = np.pad(window[..., :3], ((1, 1), (1, 1), (0, 0)), mode="edge").astype(np.float64)
+    patch_pad = np.pad(patch[..., :3], ((1, 1), (1, 1), (0, 0)), mode="edge").astype(np.float64)
+    bound = base_pad[y1 : y2 + 2, x1 : x2 + 2]
+    guide = patch_pad[y1 : y2 + 2, x1 : x2 + 2]
+
+    for channel in range(3):
+        g = guide[..., channel]
+        # Discrete Laplacian of the patch over the core (the guidance field).
+        rhs = 4.0 * g[1:-1, 1:-1] - g[:-2, 1:-1] - g[2:, 1:-1] - g[1:-1, :-2] - g[1:-1, 2:]
+        # Fold the known Dirichlet boundary (candidate pixels) into the RHS.
+        b = bound[..., channel]
+        rhs[0, :] += b[0, 1:-1]
+        rhs[-1, :] += b[-1, 1:-1]
+        rhs[:, 0] += b[1:-1, 0]
+        rhs[:, -1] += b[1:-1, -1]
+        solved = _poisson_solve(rhs)
+        window[y1:y2, x1:x2, channel] = np.clip(solved, 0.0, 255.0).astype(np.float32)
+    return True
+
+
 def _auto_feather(inner: list[int]) -> float:
     """A feather radius scaled to the issue core (~6% of its short side)."""
     x1, y1, x2, y2 = inner
@@ -369,6 +447,10 @@ def composite(args: argparse.Namespace) -> dict[str, Any]:
 
     from PIL import Image
 
+    blend = (getattr(args, "blend", "") or "feather").strip().lower() or "feather"
+    if blend not in ("feather", "poisson"):
+        raise ValueError(f"unknown blend mode {blend!r} (expected feather | poisson)")
+
     max_decode_pixels = int(max(0, getattr(args, "max_decode_pixels", _DEFAULT_MAX_DECODE_PIXELS)))
     base_u8, source_mode, exif_transposed = _load_rgba(image_path, max_decode_pixels)
     base = base_u8.astype(np.float32)
@@ -410,16 +492,22 @@ def composite(args: argparse.Namespace) -> dict[str, Any]:
             patch = patch.resize((crop_w, crop_h), resample)
         patch_arr = np.asarray(patch, dtype=np.float32)
 
-        feather = float(args.feather_px) if args.feather_px > 0 else _auto_feather([int(v) for v in inner])
-        alpha = _feather_mask((crop_h, crop_w), [int(v) for v in inner], feather)[..., None]
-
         # Alpha isolation (Method A): blend only RGB; keep the candidate's own
         # alpha so a cut-out subject's matte is never softened or haloed.
         window = base[cy1:cy2, cx1:cx2]
-        window[..., :3] = window[..., :3] * (1.0 - alpha) + patch_arr[..., :3] * alpha
+        blended_poisson = False
+        if blend == "poisson":
+            blended_poisson = _poisson_blend_rgb(window, patch_arr, [int(v) for v in inner])
+        if blended_poisson:
+            result["blend"] = "poisson"
+        else:
+            feather = float(args.feather_px) if args.feather_px > 0 else _auto_feather([int(v) for v in inner])
+            alpha = _feather_mask((crop_h, crop_w), [int(v) for v in inner], feather)[..., None]
+            window[..., :3] = window[..., :3] * (1.0 - alpha) + patch_arr[..., :3] * alpha
+            result["blend"] = "feather"
+            result["feather_px"] = round(feather, 2)
         repainted_count += 1
         result["status"] = "repainted"
-        result["feather_px"] = round(feather, 2)
         region_results.append(result)
 
     if repainted_count == 0:
@@ -445,6 +533,7 @@ def composite(args: argparse.Namespace) -> dict[str, Any]:
             "repainted_count": repainted_count,
             "requested_count": len(regions),
             "image_size": [width, height],
+            "blend": blend,
             "source_mode": source_mode,
             "exif_transposed": exif_transposed,
             "max_decode_pixels": max_decode_pixels,
@@ -696,6 +785,14 @@ def build_parser() -> argparse.ArgumentParser:
         type=float,
         default=0.0,
         help="seam feather radius (0 = auto from the issue size)",
+    )
+    comp.add_argument(
+        "--blend",
+        default="feather",
+        help=(
+            "seam blend mode: feather (default) | poisson (gradient-domain "
+            "seamless clone; falls back to feather on a too-small region)"
+        ),
     )
     comp.add_argument(
         "--max-decode-pixels",

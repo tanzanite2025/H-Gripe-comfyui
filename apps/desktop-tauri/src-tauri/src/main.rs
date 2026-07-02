@@ -106,6 +106,8 @@ fn main() {
             studio::read_studio_recents,
             studio::write_studio_recents,
             studio::cancel_studio_run,
+            studio::list_studio_media_index,
+            studio::clear_studio_media_index,
             commands::tasks::rerun_task,
             commands::shell::open_url,
             commands::shell::pick_file,

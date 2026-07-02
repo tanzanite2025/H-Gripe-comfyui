@@ -68,4 +68,7 @@ tiff = "0.11"
 # `options` enables the tetrahedral LUT interpolation used below to match
 # littleCMS / lcms2 (moxcms defaults to quadlinear for CMYK).
 moxcms = { version = "0.8.1", features = ["options"] }
+# Stable content hash for the media index/cache fingerprints (studio/media_index.rs).
+# Already in the tree via hgripe-api.
+sha2 = "0.10"
 hgripe-api = { path = "../../../crates/hgripe-api" }

@@ -25,3 +25,10 @@ filtered-openapi.yaml
 uv.lock
 .comfy_environment
 target/
+
+# Cargo vendor snapshots must keep crate-internal files even when their names
+# look like local development artifacts. Cargo verifies them against each
+# crate's .cargo-checksum.json in offline CI.
+!third_party/cargo-vendor/
+!third_party/cargo-vendor/**/
+!third_party/cargo-vendor/**

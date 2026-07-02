@@ -84,6 +84,13 @@ plus `log` progress lines from executors), filtered by `run_id` in the webview
 so repeated or batch runs do not cross-talk. Failed API nodes carry structured
 `error_detail` (error code, retryability, provider/operation, provider request
 id) alongside the flat error string, and the run log renders that context.
+The runner also keeps a persistent media index/cache (`.media-index/` under the
+output dir): a node whose kind/params/inputs and upstream media files are
+unchanged is served from the previous run's outputs and reported as `cached`.
+Compute and python-bridge nodes always participate; API nodes only when pinned
+by an explicit `seed` (an unseeded generation is a deliberate re-roll), and a
+boolean `cache` param overrides either way. `list_studio_media_index` /
+`clear_studio_media_index` expose and reset the index.
 The toolbar's **Cancel** button calls `cancel_studio_run`; cancellation stops
 before the next node starts and passes a cancellation token down into the Rust
 broker/provider layer for `generate` nodes. `custom_http async_job` can call a
@@ -92,8 +99,8 @@ configured provider-native `cancel_url` / `cancel_url_path` / `urls.cancel`, and
 provider/API remote job control, not an H-Gripe account/cloud system. Durable
 workflow save/load beyond autosave now exists (explicit Save/Open + project
 folder, above). Before the Node Editor becomes the primary production surface,
-the backend runner still needs a media index/cache, more provider-native
-cancellation adapters, and FFmpeg-backed video assembly/export.
+the backend runner still needs more provider-native cancellation adapters and
+FFmpeg-backed video assembly/export.
 
 The desktop shell intentionally has no Credentials / Profiles account-management
 tabs. Provider profiles and credential refs are local API config files consumed

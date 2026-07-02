@@ -23,6 +23,7 @@ use super::graph::{
     studio_value_to_string, StudioGraphEdge, StudioGraphNode, StudioWorkflowGraph,
 };
 use super::image_enhance::execute_studio_image_enhance;
+use super::media_index::{media_index_key, media_index_lookup, media_index_store};
 use super::psd_analyze::execute_studio_psd_context_analyze;
 use super::psd_export::execute_studio_psd_export;
 use super::schedule::{category_for_kind, JobCategory, StudioScheduler};
@@ -1328,6 +1329,31 @@ pub(crate) async fn run_studio_graph(
         );
         let started_at = Instant::now();
         let inputs = studio_node_inputs(&node.id, &graph, &outputs);
+        // Media index/cache: an unchanged node (same kind/params/inputs and
+        // untouched upstream + output media files) is served from the previous
+        // run's result instead of executing again.
+        let cache_key = media_index_key(node, &inputs);
+        if let Some(key) = cache_key.as_deref() {
+            if let Some(cached_outputs) = media_index_lookup(key) {
+                let duration_ms = started_at.elapsed().as_millis();
+                logger.node(node, "served from media index (inputs unchanged)");
+                outputs.insert(node.id.clone(), cached_outputs);
+                statuses.insert(node.id.clone(), "cached".to_string());
+                emit_studio_run_event(
+                    &app,
+                    studio_node_event(&run_id, node, "cached", Some(duration_ms), None, None),
+                );
+                node_runs.push(StudioNodeRun {
+                    node_id: node.id.clone(),
+                    kind: node.kind.clone(),
+                    status: "cached".to_string(),
+                    duration_ms: Some(duration_ms),
+                    error: None,
+                    error_detail: None,
+                });
+                continue;
+            }
+        }
         // Hold the lane permit for the node's resource category across its
         // execution: `Gpu` work is serialised by the `Semaphore(1)`, `CpuBound`
         // work by the bounded CPU pool; `CpuLight`/`Network` are ungated. The
@@ -1344,6 +1370,9 @@ pub(crate) async fn run_studio_graph(
         {
             Ok(node_outputs) => {
                 let duration_ms = started_at.elapsed().as_millis();
+                if let Some(key) = cache_key.as_deref() {
+                    media_index_store(key, &node.kind, &node_outputs);
+                }
                 outputs.insert(node.id.clone(), node_outputs);
                 statuses.insert(node.id.clone(), "succeeded".to_string());
                 emit_studio_run_event(

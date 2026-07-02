@@ -22,6 +22,8 @@
 //! - [`image_buffer`]: process-global decoded-buffer cache (keyed by
 //!   `ResourceId`) so a compute card's output feeds the next one from memory
 //!   instead of a PNG re-decode.
+//! - [`media_index`]: persistent index/cache of node results so an unchanged
+//!   node is served from the previous run's media instead of re-executing.
 //! - [`subject_mask`]: the `subjectMask` node executor (native-Rust matte).
 //! - [`subject_matte`]: continuous alpha matting (ViTMatte / trimap, Compute lane).
 //! - [`subject_sam2`]: SAM 2 interactive point-prompt segmenter (Compute lane).
@@ -45,6 +47,7 @@ mod history;
 pub(crate) mod image_buffer;
 mod image_enhance;
 mod image_enhance_cpu;
+mod media_index;
 mod node_registry;
 mod onnx_pool;
 mod persist;
@@ -73,6 +76,7 @@ pub(crate) use color::{cmyk_decode, cmyk_transform, linear, working_image};
 // command macro generates beside it; the glob carries both.
 pub(crate) use exec::*;
 pub(crate) use history::*;
+pub(crate) use media_index::*;
 pub(crate) use persist::*;
 pub(crate) use schedule::StudioScheduler;
 pub(crate) use subject_model::set_resource_dir as set_subject_model_resource_dir;

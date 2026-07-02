@@ -4,7 +4,18 @@
 //!   16-bit working surface / sRGB egress (`working_image`). All moxcms
 //!   transforms are constructed inside this submodule.
 //! - [`graph`]: the workflow graph schema + shared value-coercion helpers.
-//! - [`exec`]: the topological execution engine, run events, and cancellation.
+//! - [`exec`]: the topological execution engine and lane dispatch.
+//! - [`run_events`]: run-event emission, structured node error details, and
+//!   the node-scoped run logger.
+//! - [`run_cancel`]: per-run cancellation token state.
+//! - [`api_call`]: shared broker-call plumbing for API-lane executors
+//!   (cancellable execute + task history, task ids, numeric param readers).
+//! - [`write_skip`]: PNG write-skip analysis for compute-node outputs.
+//! - [`generate`]: the `generate` node executor (provider image call).
+//! - [`detail_repaint`]: the `detailRepaint` node executor (issue-region
+//!   repaint via provider `image.edit`).
+//! - [`prompt_optimize`]: the `promptOptimize` node executor (local
+//!   normalise/dedupe pass or provider `text.generate`).
 //! - [`node_registry`]: single source of truth mapping a node `kind` to its
 //!   executor + resource lane (`studio_executor_for_kind` / `category_for_kind`).
 //! - [`psd_analyze`]: the `psdContextAnalyze` node executor (PSD context bridge).
@@ -35,15 +46,18 @@
 //! The Tauri commands keep their original `crate::studio::*` paths via the
 //! re-exports below, so `main.rs`'s `invoke_handler` registration is unchanged.
 
+mod api_call;
 mod color;
 mod color_match;
 mod crop;
+mod detail_repaint;
 mod detail_watchdog;
 mod edge_refine;
 mod exec;
 #[cfg(feature = "native-ffmpeg")]
 mod ffmpeg_native;
 mod frame_cache;
+mod generate;
 mod graph;
 mod history;
 pub(crate) mod image_buffer;
@@ -54,8 +68,11 @@ mod node_registry;
 mod onnx_pool;
 mod persist;
 mod pixel_ops;
+mod prompt_optimize;
 mod psd_analyze;
 mod psd_export;
+mod run_cancel;
+mod run_events;
 mod schedule;
 pub(crate) mod studio_image;
 mod subject_mask;
@@ -67,6 +84,7 @@ pub(crate) mod torch_worker;
 mod video_assemble;
 pub(crate) mod video_engine;
 pub(crate) mod video_worker;
+mod write_skip;
 
 // The colour layers keep their original `crate::studio::<layer>` paths so the
 // many call sites (and their docs) stay stable while the files live together

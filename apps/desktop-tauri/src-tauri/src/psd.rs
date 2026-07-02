@@ -14,11 +14,13 @@ use crate::studio::studio_reject_unsafe_basename;
 mod cards;
 mod compose;
 mod engines;
+mod model_paths;
 mod repaint;
 
 pub(crate) use cards::*;
 pub(crate) use compose::*;
 pub(crate) use engines::*;
+pub(crate) use model_paths::*;
 pub(crate) use repaint::*;
 /// The Tauri resource directory captured at startup (see `set_resource_dir`).
 /// When the installer bundles the `h-gripe.project.json` marker together with
@@ -156,6 +158,7 @@ pub(crate) fn run_bridge_oneshot(
         cmd.arg(arg);
     }
     cmd.current_dir(dir);
+    model_paths::apply_model_env(&mut cmd);
     no_window(&mut cmd);
 
     let output = cmd

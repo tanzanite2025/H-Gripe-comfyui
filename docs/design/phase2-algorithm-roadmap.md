@@ -319,8 +319,10 @@ real-inference CI is gated like ViTMatte.
   `fp32` on a CPU run, the backends bind `torch.half()` accordingly, and the
   enhance / repaint reports record `precision_requested` + the `precision` the
   run *actually* used. The ONNX engines keep no `precision` knob (their
-  precision is fixed at export). ⛔ still: the "local model manager" surface
-  (`weights_path` management).
+  precision is fixed at export). The "local model manager" surface has landed:
+  the Dashboard **Local models** panel persists per-engine `weights_path`
+  overrides + the shared cache dir (`model_paths.json`), applied as env vars on
+  every bridge subprocess with real env vars still winning.
 - **Determinism & safety:** seedable backends; keep the text/logo guards; require
   rule+ML agreement before any *automatic* (non-user-confirmed) repaint.
 - **Contracts are stable:** every Phase 2 backend emits the existing

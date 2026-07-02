@@ -129,6 +129,8 @@ fn main() {
             psd::enhance_image,
             psd::detect_quality_issues,
             psd::probe_engines,
+            psd::get_model_paths,
+            psd::set_model_paths,
             commands::video::video_probe,
             commands::video::video_scrub,
             psd::prepare_repaint_regions,

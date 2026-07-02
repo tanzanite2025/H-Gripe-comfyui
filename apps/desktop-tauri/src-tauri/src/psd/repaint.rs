@@ -7,7 +7,7 @@ use serde::{Deserialize, Serialize};
 use crate::contracts::RepaintReport;
 
 use super::{
-    detail_repaint_script, no_window, project_python, reject_unsafe_output_name,
+    apply_model_env, detail_repaint_script, no_window, project_python, reject_unsafe_output_name,
     resolve_project_dir, run_bridge_oneshot, run_torch_cli,
 };
 /// One issue region prepared for repaint: the padded crop + same-size inpaint
@@ -132,6 +132,7 @@ pub(crate) fn prepare_repaint_regions(
     if invert_mask.unwrap_or(false) {
         cmd.arg("--invert-mask");
     }
+    apply_model_env(&mut cmd);
     no_window(&mut cmd);
 
     let output = cmd
@@ -191,6 +192,7 @@ pub(crate) fn composite_repaint(
         .arg("--output-name")
         .arg(output_name.as_deref().unwrap_or(""))
         .current_dir(&dir);
+    apply_model_env(&mut cmd);
     no_window(&mut cmd);
 
     let output = cmd

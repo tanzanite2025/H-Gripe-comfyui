@@ -151,6 +151,28 @@ export const messages = {
   "dashboard.computeNotInstalled": { en: "not installed", zh: "未安装" },
   "dashboard.weightCached": { en: "weight cached", zh: "权重已缓存" },
   "dashboard.weightMissing": { en: "weight not downloaded", zh: "权重未下载" },
+  "dashboard.models": { en: "Local models", zh: "本地模型" },
+  "dashboard.modelsDesc": {
+    en: "Point an opt-in ML engine at a downloaded weight. Blank fields use the default resolution (shared cache dir, then bundled models). A value set as a real environment variable wins over this config.",
+    zh: "为可选 ML 引擎指定已下载的权重路径。留空则使用默认解析顺序（共享缓存目录，其次内置模型）。真实环境变量的值优先于此配置。",
+  },
+  "dashboard.modelsCacheDir": { en: "shared weight cache dir", zh: "共享权重缓存目录" },
+  "dashboard.modelsCachePlaceholder": {
+    en: "default (bundled resources/models)",
+    zh: "默认（内置 resources/models）",
+  },
+  "dashboard.modelsPathPlaceholder": {
+    en: "default (resolve from cache dir)",
+    zh: "默认（从缓存目录解析）",
+  },
+  "dashboard.modelsEnvActive": {
+    en: "(set by environment variable; config ignored)",
+    zh: "（由环境变量设定；忽略此配置）",
+  },
+  "dashboard.modelsPathFound": { en: "path exists", zh: "路径存在" },
+  "dashboard.modelsPathMissing": { en: "path not found", zh: "路径不存在" },
+  "dashboard.modelsSave": { en: "Save model paths", zh: "保存模型路径" },
+  "dashboard.modelsConfigFile": { en: "config file:", zh: "配置文件：" },
   "btn.refresh": { en: "Refresh", zh: "刷新" },
   "btn.validate": { en: "Validate", zh: "校验" },
   "btn.reload": { en: "Reload", zh: "重新加载" },

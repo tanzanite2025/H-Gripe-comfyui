@@ -3,6 +3,7 @@ import { describe, expect, it } from "vitest";
 import {
   appendLog,
   describeNodeStatus,
+  formatErrorDetail,
   formatLogText,
   formatTime,
   levelForStatus,
@@ -55,6 +56,38 @@ describe("describeNodeStatus", () => {
   it("includes the error for failed nodes", () => {
     expect(describeNodeStatus("failed", { error: "boom" })).toBe("failed: boom");
     expect(describeNodeStatus("failed")).toBe("failed: unknown error");
+  });
+
+  it("appends structured error context for failed nodes", () => {
+    expect(
+      describeNodeStatus("failed", {
+        error: "server exploded",
+        detail: {
+          message: "server exploded",
+          code: "http_500",
+          retryable: true,
+          provider: "openai_compatible",
+          operation: "image.generate",
+          provider_request_id: "req-42",
+        },
+      }),
+    ).toBe(
+      "failed: server exploded [provider=openai_compatible op=image.generate code=http_500 request=req-42 retryable]",
+    );
+  });
+});
+
+describe("formatErrorDetail", () => {
+  it("is empty for missing or message-only details", () => {
+    expect(formatErrorDetail(null)).toBe("");
+    expect(formatErrorDetail(undefined)).toBe("");
+    expect(formatErrorDetail({ message: "boom" })).toBe("");
+  });
+
+  it("emits only the fields that are present", () => {
+    expect(formatErrorDetail({ message: "m", code: "poll_timeout", task_id: "studio-n1-1" })).toBe(
+      "code=poll_timeout task=studio-n1-1",
+    );
   });
 });
 

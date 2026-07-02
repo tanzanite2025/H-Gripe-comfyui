@@ -37,6 +37,88 @@ const STUDIO_GRAPH_RUN_EVENT: &str = "studio:graph-run";
 #[derive(Default)]
 pub(crate) struct StudioRunCancels(Mutex<HashMap<String, CancellationToken>>);
 
+/// Structured error details for a failed Studio node. The flat `message`
+/// remains the always-present human-readable line (and is what the legacy
+/// `error` string carries); the optional fields surface provider/broker
+/// context (error code, retryability, provider request id) when the failure
+/// came from an API call, so the run log and node card can show more than an
+/// opaque string.
+#[derive(Debug, Clone, Default, PartialEq, Serialize)]
+pub(crate) struct StudioNodeErrorDetail {
+    pub message: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub code: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub retryable: Option<bool>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub provider: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub operation: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub provider_request_id: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub task_id: Option<String>,
+}
+
+impl From<String> for StudioNodeErrorDetail {
+    fn from(message: String) -> Self {
+        Self {
+            message,
+            ..Self::default()
+        }
+    }
+}
+
+/// Build the structured detail for a non-success [`ApiResult`], carrying the
+/// broker's error code/retryability plus the provider/operation/request ids
+/// of the task that failed.
+fn studio_api_error_detail(task: &ApiTask, result: &ApiResult) -> StudioNodeErrorDetail {
+    let (message, code, retryable) = match result.error.as_ref() {
+        Some(error) => (
+            error.message.clone(),
+            Some(error.code.clone()),
+            Some(error.retryable),
+        ),
+        None => ("provider call failed".to_string(), None, None),
+    };
+    StudioNodeErrorDetail {
+        message,
+        code,
+        retryable,
+        provider: Some(task.provider.clone()),
+        operation: Some(task.operation.clone()),
+        provider_request_id: result.provider_request_id.clone(),
+        task_id: Some(task.id.clone()),
+    }
+}
+
+/// Emits node-scoped `status: "log"` progress lines on the shared
+/// `studio:graph-run` channel, so executors can stream context (which
+/// provider/operation is being called, per-region repaint progress, output
+/// summaries) into the webview's run log without changing a node's status.
+pub(crate) struct StudioRunLogger<'a> {
+    app: &'a tauri::AppHandle,
+    run_id: &'a str,
+}
+
+impl StudioRunLogger<'_> {
+    fn node(&self, node: &StudioGraphNode, message: impl Into<String>) {
+        emit_studio_run_event(
+            self.app,
+            StudioGraphRunEvent {
+                run_id: self.run_id.to_string(),
+                node_id: Some(node.id.clone()),
+                kind: Some(node.kind.clone()),
+                status: "log".to_string(),
+                duration_ms: None,
+                error: None,
+                error_detail: None,
+                message: Some(message.into()),
+            },
+        );
+    }
+}
+
 async fn execute_and_record_cancellable(
     task: ApiTask,
     cancels: &tauri::State<'_, StudioRunCancels>,
@@ -93,6 +175,8 @@ struct StudioNodeRun {
     status: String,
     duration_ms: Option<u128>,
     error: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    error_detail: Option<StudioNodeErrorDetail>,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -103,6 +187,8 @@ struct StudioGraphRunEvent {
     status: String,
     duration_ms: Option<u128>,
     error: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    error_detail: Option<StudioNodeErrorDetail>,
     message: Option<String>,
 }
 
@@ -116,6 +202,7 @@ fn studio_node_event(
     status: &str,
     duration_ms: Option<u128>,
     error: Option<String>,
+    error_detail: Option<StudioNodeErrorDetail>,
 ) -> StudioGraphRunEvent {
     StudioGraphRunEvent {
         run_id: run_id.to_string(),
@@ -124,6 +211,7 @@ fn studio_node_event(
         status: status.to_string(),
         duration_ms,
         error,
+        error_detail,
         message: None,
     }
 }
@@ -136,6 +224,7 @@ fn studio_graph_event(run_id: &str, status: &str, message: Option<String>) -> St
         status: status.to_string(),
         duration_ms: None,
         error: None,
+        error_detail: None,
         message,
     }
 }
@@ -313,7 +402,8 @@ async fn execute_studio_generate(
     inputs: &BTreeMap<String, Value>,
     cancels: &tauri::State<'_, StudioRunCancels>,
     run_id: &str,
-) -> Result<BTreeMap<String, Value>, String> {
+    logger: &StudioRunLogger<'_>,
+) -> Result<BTreeMap<String, Value>, StudioNodeErrorDetail> {
     let mut task = ApiTask::new(
         studio_value_to_string(node.params.get("provider"))
             .trim()
@@ -362,22 +452,41 @@ async fn execute_studio_generate(
         task.credentials_ref = Some(credentials_ref);
     }
 
-    let result = execute_and_record_cancellable(task, cancels, run_id).await?;
+    logger.node(
+        node,
+        format!(
+            "calling {} {} (task {})",
+            task.provider, task.operation, task.id
+        ),
+    );
+    let task_for_detail = task.clone();
+    let result = execute_and_record_cancellable(task, cancels, run_id)
+        .await
+        .map_err(|message| StudioNodeErrorDetail {
+            provider: Some(task_for_detail.provider.clone()),
+            operation: Some(task_for_detail.operation.clone()),
+            task_id: Some(task_for_detail.id.clone()),
+            ..StudioNodeErrorDetail::from(message)
+        })?;
     if !matches!(result.status, ApiStatus::Succeeded | ApiStatus::Cached) {
-        let message = result
-            .error
-            .as_ref()
-            .map(|error| error.message.clone())
-            .unwrap_or_else(|| "generation failed".to_string());
-        return Err(message);
+        return Err(studio_api_error_detail(&task_for_detail, &result));
     }
+    logger.node(
+        node,
+        format!(
+            "{} output file(s) in {} ms{}",
+            result.output_files.len(),
+            result.duration_ms,
+            if result.cache_hit { " (cache hit)" } else { "" }
+        ),
+    );
     let image = result
         .output_files
         .first()
         .map(|file| json!(file.path.clone()))
         .unwrap_or(Value::Null);
-    let result_json =
-        serde_json::to_value(result).map_err(|err| format!("failed to encode ApiResult: {err}"))?;
+    let result_json = serde_json::to_value(result)
+        .map_err(|err| StudioNodeErrorDetail::from(format!("failed to encode ApiResult: {err}")))?;
     Ok(studio_output_map([
         ("image", image),
         ("result", result_json),
@@ -400,10 +509,13 @@ async fn execute_studio_detail_repaint(
     inputs: &BTreeMap<String, Value>,
     cancels: &tauri::State<'_, StudioRunCancels>,
     run_id: &str,
-) -> Result<BTreeMap<String, Value>, String> {
+    logger: &StudioRunLogger<'_>,
+) -> Result<BTreeMap<String, Value>, StudioNodeErrorDetail> {
     let image = studio_value_to_string(inputs.get("image"));
     if image.trim().is_empty() {
-        return Err("Detail Repaint needs a connected image input".to_string());
+        return Err("Detail Repaint needs a connected image input"
+            .to_string()
+            .into());
     }
 
     // The QualityReport from Detail Watchdog, forwarded to the CLI as JSON.
@@ -489,7 +601,12 @@ async fn execute_studio_detail_repaint(
     let provider_can_edit = !provider.is_empty() && provider != "mock";
     let mut repainted: Vec<Value> = Vec::new();
     if provider_can_edit {
-        for region in &prepared.regions {
+        let region_count = prepared.regions.len();
+        logger.node(
+            node,
+            format!("repainting {region_count} region(s) via {provider} {operation}"),
+        );
+        for (region_index, region) in prepared.regions.iter().enumerate() {
             let mut task = ApiTask::new(provider.clone(), operation.clone());
             task.id = studio_task_id(&node.id);
             task.output_type = OutputType::Image;
@@ -542,15 +659,54 @@ async fn execute_studio_detail_repaint(
                 task.credentials_ref = Some(credentials_ref.clone());
             }
 
-            let result = execute_and_record_cancellable(task, cancels, run_id).await?;
+            logger.node(
+                node,
+                format!(
+                    "region {}/{}: calling {} {} (task {})",
+                    region_index + 1,
+                    region_count,
+                    task.provider,
+                    task.operation,
+                    task.id
+                ),
+            );
+            let task_for_detail = task.clone();
+            let result = execute_and_record_cancellable(task, cancels, run_id)
+                .await
+                .map_err(|message| StudioNodeErrorDetail {
+                    provider: Some(task_for_detail.provider.clone()),
+                    operation: Some(task_for_detail.operation.clone()),
+                    task_id: Some(task_for_detail.id.clone()),
+                    ..StudioNodeErrorDetail::from(message)
+                })?;
             if matches!(result.status, ApiStatus::Succeeded | ApiStatus::Cached) {
                 if let Some(file) = result.output_files.first() {
                     repainted.push(json!({ "index": region.index, "path": file.path.clone() }));
                 }
+            } else {
+                // A per-region provider failure leaves that region unrepainted
+                // rather than aborting the whole node.
+                let detail = studio_api_error_detail(&task_for_detail, &result);
+                logger.node(
+                    node,
+                    format!(
+                        "region {}/{} left unrepainted: {}{}",
+                        region_index + 1,
+                        region_count,
+                        detail.message,
+                        detail
+                            .code
+                            .as_deref()
+                            .map(|code| format!(" [{code}]"))
+                            .unwrap_or_default()
+                    ),
+                );
             }
-            // A per-region provider failure leaves that region unrepainted
-            // rather than aborting the whole node.
         }
+        logger.node(
+            node,
+            format!("{}/{} region(s) repainted", repainted.len(), region_count),
+        );
     }
 
     let repainted_json = serde_json::to_string(&repainted)
@@ -667,7 +823,8 @@ async fn execute_studio_prompt_optimize(
     inputs: &BTreeMap<String, Value>,
     cancels: &tauri::State<'_, StudioRunCancels>,
     run_id: &str,
-) -> Result<BTreeMap<String, Value>, String> {
+    logger: &StudioRunLogger<'_>,
+) -> Result<BTreeMap<String, Value>, StudioNodeErrorDetail> {
     let raw = if inputs.contains_key("text") {
         studio_value_to_string(inputs.get("text"))
     } else {
@@ -695,7 +852,8 @@ async fn execute_studio_prompt_optimize(
                 return Err(format!(
                     "Provider \"{provider}\" can't optimize prompts (no text.generate support). \
                      Pick an OpenAI-compatible chat profile, or switch mode to \"local\"/\"off\"."
-                ));
+                )
+                .into());
             }
             let mut task = ApiTask::new(provider, "text.generate".to_string());
             task.id = studio_task_id(&node.id);
@@ -734,14 +892,27 @@ async fn execute_studio_prompt_optimize(
                 task.credentials_ref = Some(credentials_ref);
             }
 
-            let result = execute_and_record_cancellable(task, cancels, run_id).await?;
+            logger.node(
+                node,
+                format!(
+                    "calling {} {} (task {})",
+                    task.provider, task.operation, task.id
+                ),
+            );
+            let task_for_detail = task.clone();
+            let result = execute_and_record_cancellable(task, cancels, run_id)
+                .await
+                .map_err(|message| StudioNodeErrorDetail {
+                    provider: Some(task_for_detail.provider.clone()),
+                    operation: Some(task_for_detail.operation.clone()),
+                    task_id: Some(task_for_detail.id.clone()),
+                    ..StudioNodeErrorDetail::from(message)
+                })?;
             if !matches!(result.status, ApiStatus::Succeeded | ApiStatus::Cached) {
-                let message = result
-                    .error
-                    .as_ref()
-                    .map(|error| error.message.clone())
-                    .unwrap_or_else(|| "prompt optimization failed".to_string());
-                return Err(message);
+                return Err(studio_api_error_detail(&task_for_detail, &result));
+            }
+            if result.cache_hit {
+                logger.node(node, "optimized prompt served from cache");
             }
             let optimized = result
                 .output_json
@@ -752,8 +923,9 @@ async fn execute_studio_prompt_optimize(
                 .filter(|text| !text.is_empty())
                 .map(str::to_string)
                 .unwrap_or_else(|| raw.clone());
-            let result_json = serde_json::to_value(result)
-                .map_err(|err| format!("failed to encode ApiResult: {err}"))?;
+            let result_json = serde_json::to_value(result).map_err(|err| {
+                StudioNodeErrorDetail::from(format!("failed to encode ApiResult: {err}"))
+            })?;
             Ok(studio_output_map([
                 ("text", json!(optimized)),
                 ("result", result_json),
@@ -872,21 +1044,24 @@ async fn execute_studio_node(
     cancels: &tauri::State<'_, StudioRunCancels>,
     run_id: &str,
     skip_write_ports: &HashSet<String>,
-) -> Result<BTreeMap<String, Value>, String> {
+    logger: &StudioRunLogger<'_>,
+) -> Result<BTreeMap<String, Value>, StudioNodeErrorDetail> {
     // Route on the executor first, then dispatch by kind inside that class.
     // Each class-handler only has access to the resources its executor is
     // allowed to use, so the local/API boundary is enforced structurally.
     match studio_executor_for_kind(node.kind.as_str()) {
-        Some(StudioExecutor::Graph) => execute_studio_graph_node(node, &inputs),
-        Some(StudioExecutor::Local) => execute_studio_local_node(node, &inputs),
+        Some(StudioExecutor::Graph) => execute_studio_graph_node(node, &inputs).map_err(Into::into),
+        Some(StudioExecutor::Local) => execute_studio_local_node(node, &inputs).map_err(Into::into),
         Some(StudioExecutor::Compute) => {
-            execute_studio_compute_node(node, &inputs, skip_write_ports)
+            execute_studio_compute_node(node, &inputs, skip_write_ports).map_err(Into::into)
         }
-        Some(StudioExecutor::Api) => execute_studio_api_node(node, &inputs, cancels, run_id).await,
+        Some(StudioExecutor::Api) => {
+            execute_studio_api_node(node, &inputs, cancels, run_id, logger).await
+        }
         Some(StudioExecutor::Hybrid) => {
-            execute_studio_prompt_optimize(node, &inputs, cancels, run_id).await
+            execute_studio_prompt_optimize(node, &inputs, cancels, run_id, logger).await
         }
-        None => Err(format!("unsupported Studio node kind: {}", node.kind)),
+        None => Err(format!("unsupported Studio node kind: {}", node.kind).into()),
     }
 }
 
@@ -1050,11 +1225,14 @@ async fn execute_studio_api_node(
     inputs: &BTreeMap<String, Value>,
     cancels: &tauri::State<'_, StudioRunCancels>,
     run_id: &str,
-) -> Result<BTreeMap<String, Value>, String> {
+    logger: &StudioRunLogger<'_>,
+) -> Result<BTreeMap<String, Value>, StudioNodeErrorDetail> {
     match node.kind.as_str() {
-        "generate" => execute_studio_generate(node, inputs, cancels, run_id).await,
-        "detailRepaint" => execute_studio_detail_repaint(node, inputs, cancels, run_id).await,
-        other => Err(format!("node kind is not an API node: {other}")),
+        "generate" => execute_studio_generate(node, inputs, cancels, run_id, logger).await,
+        "detailRepaint" => {
+            execute_studio_detail_repaint(node, inputs, cancels, run_id, logger).await
+        }
+        other => Err(format!("node kind is not an API node: {other}").into()),
     }
 }
 
@@ -1085,9 +1263,17 @@ pub(crate) async fn run_studio_graph(
     let mut node_runs: Vec<StudioNodeRun> = Vec::new();
     let mut pruned: HashSet<String> = HashSet::new();
 
+    let logger = StudioRunLogger {
+        app: &app,
+        run_id: &run_id,
+    };
+
     for node in &graph.nodes {
         statuses.insert(node.id.clone(), "queued".to_string());
-        emit_studio_run_event(&app, studio_node_event(&run_id, node, "queued", None, None));
+        emit_studio_run_event(
+            &app,
+            studio_node_event(&run_id, node, "queued", None, None, None),
+        );
     }
 
     for node_id in order {
@@ -1123,7 +1309,7 @@ pub(crate) async fn run_studio_graph(
             statuses.insert(node.id.clone(), "skipped".to_string());
             emit_studio_run_event(
                 &app,
-                studio_node_event(&run_id, node, "skipped", None, None),
+                studio_node_event(&run_id, node, "skipped", None, None, None),
             );
             node_runs.push(StudioNodeRun {
                 node_id: node.id.clone(),
@@ -1131,13 +1317,14 @@ pub(crate) async fn run_studio_graph(
                 status: "skipped".to_string(),
                 duration_ms: None,
                 error: None,
+                error_detail: None,
             });
             continue;
         }
         statuses.insert(node.id.clone(), "running".to_string());
         emit_studio_run_event(
             &app,
-            studio_node_event(&run_id, node, "running", None, None),
+            studio_node_event(&run_id, node, "running", None, None, None),
         );
         let started_at = Instant::now();
         let inputs = studio_node_inputs(&node.id, &graph, &outputs);
@@ -1153,14 +1340,15 @@ pub(crate) async fn run_studio_graph(
         // need a file on disk (the consumer loads them from the shared buffer),
         // so the producer may skip the PNG write for those ports.
         let skip_write_ports = studio_skippable_output_ports(node, &graph, &nodes_by_id);
-        match execute_studio_node(node, inputs, &cancels, &run_id, &skip_write_ports).await {
+        match execute_studio_node(node, inputs, &cancels, &run_id, &skip_write_ports, &logger).await
+        {
             Ok(node_outputs) => {
                 let duration_ms = started_at.elapsed().as_millis();
                 outputs.insert(node.id.clone(), node_outputs);
                 statuses.insert(node.id.clone(), "succeeded".to_string());
                 emit_studio_run_event(
                     &app,
-                    studio_node_event(&run_id, node, "succeeded", Some(duration_ms), None),
+                    studio_node_event(&run_id, node, "succeeded", Some(duration_ms), None, None),
                 );
                 node_runs.push(StudioNodeRun {
                     node_id: node.id.clone(),
@@ -1168,10 +1356,13 @@ pub(crate) async fn run_studio_graph(
                     status: "succeeded".to_string(),
                     duration_ms: Some(duration_ms),
                     error: None,
+                    error_detail: None,
                 });
             }
-            Err(error) => {
-                let cancelled = error.to_ascii_lowercase().contains("cancel");
+            Err(detail) => {
+                let error = detail.message.clone();
+                let cancelled = error.to_ascii_lowercase().contains("cancel")
+                    || detail.code.as_deref() == Some("cancelled");
                 let duration_ms = started_at.elapsed().as_millis();
                 let status = if cancelled { "cancelled" } else { "failed" };
                 statuses.insert(node.id.clone(), status.to_string());
@@ -1183,6 +1374,7 @@ pub(crate) async fn run_studio_graph(
                         status,
                         Some(duration_ms),
                         Some(error.clone()),
+                        Some(detail.clone()),
                     ),
                 );
                 emit_studio_run_event(
@@ -1200,6 +1392,7 @@ pub(crate) async fn run_studio_graph(
                     status: status.to_string(),
                     duration_ms: Some(duration_ms),
                     error: Some(error.clone()),
+                    error_detail: Some(detail),
                 });
                 return Err(if cancelled {
                     "Studio run cancelled".to_string()
@@ -1495,6 +1688,55 @@ mod tests {
         assert_eq!(studio_param_i64(&node, "seed"), Some(42));
         assert_eq!(studio_param_f64(&node, "blank"), None);
         assert_eq!(studio_param_f64(&node, "missing"), None);
+    }
+
+    #[test]
+    fn node_error_detail_from_string_is_message_only() {
+        let detail = StudioNodeErrorDetail::from("boom".to_string());
+        assert_eq!(detail.message, "boom");
+        assert_eq!(detail.code, None);
+        assert_eq!(detail.provider, None);
+        // Optional fields must not clutter the serialized event payload.
+        let value = serde_json::to_value(&detail).unwrap();
+        assert_eq!(value, json!({ "message": "boom" }));
+    }
+
+    #[test]
+    fn api_error_detail_carries_provider_context() {
+        let mut task = ApiTask::new(
+            "openai_compatible".to_string(),
+            "image.generate".to_string(),
+        );
+        task.id = "studio-n1-1".to_string();
+        let mut result = ApiResult::succeeded(task.id.clone(), None);
+        result.status = ApiStatus::Failed;
+        result.provider_request_id = Some("req-42".to_string());
+        result.error = Some(ApiErrorInfo {
+            code: "http_500".to_string(),
+            message: "server exploded".to_string(),
+            retryable: true,
+        });
+        let detail = studio_api_error_detail(&task, &result);
+        assert_eq!(detail.message, "server exploded");
+        assert_eq!(detail.code.as_deref(), Some("http_500"));
+        assert_eq!(detail.retryable, Some(true));
+        assert_eq!(detail.provider.as_deref(), Some("openai_compatible"));
+        assert_eq!(detail.operation.as_deref(), Some("image.generate"));
+        assert_eq!(detail.provider_request_id.as_deref(), Some("req-42"));
+        assert_eq!(detail.task_id.as_deref(), Some("studio-n1-1"));
+    }
+
+    #[test]
+    fn api_error_detail_without_error_info_still_identifies_the_task() {
+        let mut task = ApiTask::new("replicate".to_string(), "run".to_string());
+        task.id = "studio-n2-2".to_string();
+        let mut result = ApiResult::succeeded(task.id.clone(), None);
+        result.status = ApiStatus::Failed;
+        let detail = studio_api_error_detail(&task, &result);
+        assert_eq!(detail.message, "provider call failed");
+        assert_eq!(detail.code, None);
+        assert_eq!(detail.provider.as_deref(), Some("replicate"));
+        assert_eq!(detail.task_id.as_deref(), Some("studio-n2-2"));
     }
 
     #[test]

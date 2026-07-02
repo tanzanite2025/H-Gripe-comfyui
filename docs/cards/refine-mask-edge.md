@@ -133,6 +133,33 @@ there was no transitional edge to refine.
   mask precedence, the no-edge note, preset parsing, decode guard, CMYK source
   mode, invalid preset, missing image / background, output naming, and trimap
   unknown-band protection (the protected matte tracks the original soft alpha
-  where erosion would otherwise bite it away) (run: `pytest python/bridge/tests`).
+  where erosion would otherwise bite it away), plus the **engine seam**
+  (default `cpu`, unavailable / unknown-engine / no-trimap fallbacks,
+  `--probe-engines`) and the gated
+  `test_onnx_matting_real_inference_when_weight_present` e2e: the real trained
+  ViTMatte ONNX weight through the CLI, `engine == "onnx_matting"` with no
+  fallback. It skips without `onnxruntime` + the weight; the manual-dispatch
+  **`python bridge (vitmatte matting e2e)`** CI lane fetches the sha256-checked
+  weight (`scripts/fetch-vitmatte.sh`, the same file the Rust `subject_matte`
+  e2e uses) and runs it for real (run: `pytest python/bridge/tests`).
 - `src-tauri/src/studio/edge_refine.rs` — the connected-image-input guard and
   param defaults matching the Python bridge.
+
+## Verifying `onnx_matting` end-to-end
+
+Real inference needs `onnxruntime` + a matting weight, which the per-PR CI
+matrix does not install. Two verifiable paths exist:
+
+- **CI (opt-in):** manually dispatch the CI workflow — the
+  `python bridge (vitmatte matting e2e)` job installs `onnxruntime`, fetches
+  the sha256-checked ViTMatte weight via `scripts/fetch-vitmatte.sh`, and runs
+  the gated real-inference test (which skips on every normal run).
+- **Manually:**
+
+```
+pip install onnxruntime
+bash scripts/fetch-vitmatte.sh
+HGRIPE_MATTING_MODEL=apps/desktop-tauri/src-tauri/resources/models/vitmatte.onnx \
+python python/bridge/edge_refine_cli.py --image subject.png --trimap trimap.png \
+  --engine onnx_matting --output-dir out       # edge_report.engine == "onnx_matting"
+```

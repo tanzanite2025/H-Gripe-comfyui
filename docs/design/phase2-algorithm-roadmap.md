@@ -274,17 +274,26 @@ and semi-transparent edges the global guided filter flattens — while leaving t
 definite FG/BG regions to the deterministic heuristic clean-up.
 
 ### 5.3 Integration plan
-**Status: the seam + `onnx_matting` have landed** (the trained weight is the
-remaining piece). Mirroring the SR / Watchdog / Repaint / Match Light & Color
-seams:
+**Status: the seam + `onnx_matting` + real trained-weight inference CI have
+landed**. Mirroring the SR / Watchdog / Repaint / Match Light & Color seams:
 
 - A new **`engine` param** (`cpu` | `onnx_matting` | …); `cpu` stays the default
   and always-available heuristic baseline.
 - `python/bridge/matting_backends/` is the registry (`known_engines` / `resolve`
-  / `probe`); 🟡 `onnx_matting` is the first concrete backend: it runs an ONNX
+  / `probe`); ✅ `onnx_matting` is the first concrete backend: it runs an ONNX
   matting network (lazy `onnxruntime`, weight from `HGRIPE_MATTING_MODEL` /
   `HGRIPE_MODEL_CACHE`) over the subject + trimap and returns a refined alpha at
-  the source geometry.
+  the source geometry. It accepts both the two-input (`image` + `trimap`)
+  contract and the **ViTMatte export layout** (a single 4-channel
+  `pixel_values` input: RGB + trimap concatenated), so the same sha256-checked
+  ViTMatte ONNX weight the Rust `subject_matte` lane fetches
+  (`scripts/fetch-vitmatte.sh` / `.ps1`) works as a real trained matting
+  weight.
+- ✅ Real *trained-weight* inference CI (opt-in like ViTMatte): the
+  manual-dispatch **`python bridge (vitmatte matting e2e)`** lane installs
+  `onnxruntime`, fetches the ViTMatte weight and runs the gated
+  `test_onnx_matting_real_inference_when_weight_present` e2e through the CLI
+  (skips on every normal run).
 - The learned alpha **replaces the source matte only inside the protected
   (unknown) band**, so the definite regions still get the morphology/guided/
   feather clean-up and the geometry / report contract is unchanged (plus
@@ -296,10 +305,10 @@ seams:
   is missing. Missing dep/weight → graceful fallback to the heuristic.
 
 ### 5.4 Dependencies & risks
-`onnxruntime` + a matting weight (not bundled; the same family as the native
-ViTMatte path in `subject_matte.rs`). Risks: trimap quality dominates matting
-quality (the seam is gated on a connected trimap), and the weight is opt-in so
-real-inference CI is gated like ViTMatte.
+`onnxruntime` + a matting weight (not bundled; the same ViTMatte ONNX weight
+as the native path in `subject_matte.rs` works). Risks: trimap quality
+dominates matting quality (the seam is gated on a connected trimap), and the
+weight is opt-in so real-inference CI is gated like ViTMatte.
 
 ---
 

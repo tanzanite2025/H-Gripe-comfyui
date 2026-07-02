@@ -252,6 +252,8 @@ mod tests {
             [
                 "realesrgan",
                 "sd_inpaint",
+                "sdxl_inpaint",
+                "flux_fill",
                 "onnx_defect",
                 "onnx_harmonize",
                 "onnx_matting"

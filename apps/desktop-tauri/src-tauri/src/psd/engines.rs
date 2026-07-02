@@ -8,7 +8,7 @@ use std::path::Path;
 
 use serde::{Deserialize, Serialize};
 
-use super::{project_python, resolve_project_dir};
+use super::{apply_model_env, project_python, resolve_project_dir};
 /// Cached-weight inventory for one engine: the non-bundled weight it would load
 /// and whether it is already present on this box. Lets the UI show what is
 /// downloaded vs still missing instead of only "engine unavailable". A directory
@@ -156,6 +156,7 @@ fn run_device_probe(python: &Path, dir: &Path) -> Result<DeviceProbe, String> {
     }
     let mut cmd = std::process::Command::new(python);
     cmd.arg(&script).current_dir(dir);
+    apply_model_env(&mut cmd);
     #[cfg(windows)]
     {
         use std::os::windows::process::CommandExt;
@@ -192,6 +193,7 @@ fn run_engine_probe(python: &Path, dir: &Path, cli_name: &str) -> Result<CliEngi
         .arg("__engine_probe__")
         .arg("--probe-engines")
         .current_dir(dir);
+    apply_model_env(&mut cmd);
     #[cfg(windows)]
     {
         use std::os::windows::process::CommandExt;

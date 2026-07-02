@@ -4,6 +4,11 @@ import { useCallback, useEffect, useState } from "react";
 
 import { commands, pretty, type PathInfo, type RuntimeInfo } from "../bridge/desktop";
 import { probeEngines, type EngineProbeReport } from "../bridge/engineProbe";
+import {
+  getModelPaths,
+  setModelPaths,
+  type ModelPathsReport,
+} from "../bridge/modelPaths";
 import { useT } from "../i18n";
 
 function PathCard({ label, info }: { label: string; info: PathInfo }) {
@@ -19,12 +24,118 @@ function PathCard({ label, info }: { label: string; info: PathInfo }) {
   );
 }
 
+/** Editor for the persisted local-model weight paths (`weights_path`
+ * management): one row per opt-in ML engine plus the shared cache dir. A row
+ * whose env var is set on the process shows that value read-only instead,
+ * since the env override always wins. Saving re-runs the capability probe so
+ * the Engines section reflects the new paths. */
+function ModelManagerSection({
+  report,
+  onSaved,
+}: {
+  report: ModelPathsReport;
+  onSaved: () => void;
+}) {
+  const t = useT();
+  const [cacheDir, setCacheDir] = useState(report.config.model_cache_dir ?? "");
+  const [weights, setWeights] = useState<Record<string, string>>(() => {
+    const map: Record<string, string> = {};
+    for (const entry of report.entries) map[entry.engine] = entry.configured_path ?? "";
+    return map;
+  });
+  const [saving, setSaving] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+
+  const save = async () => {
+    setSaving(true);
+    setError(null);
+    try {
+      const cleaned: Record<string, string> = {};
+      for (const [engine, path] of Object.entries(weights)) {
+        if (path.trim()) cleaned[engine] = path.trim();
+      }
+      await setModelPaths({ model_cache_dir: cacheDir.trim() || null, weights: cleaned });
+      onSaved();
+    } catch (err) {
+      setError(String(err));
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  return (
+    <>
+      <h2>{t("dashboard.models")}</h2>
+      <p className="hint">{t("dashboard.modelsDesc")}</p>
+      <div className="cards">
+        <div className="card">
+          <div className="label">{t("dashboard.modelsCacheDir")} (HGRIPE_MODEL_CACHE)</div>
+          {report.cache_env_active ? (
+            <div className="value">
+              {report.cache_env_value}
+              <small className="hint"> {t("dashboard.modelsEnvActive")}</small>
+            </div>
+          ) : (
+            <input
+              type="text"
+              value={cacheDir}
+              placeholder={t("dashboard.modelsCachePlaceholder")}
+              onChange={(e) => setCacheDir(e.target.value)}
+            />
+          )}
+        </div>
+        {report.entries.map((entry) => (
+          <div className="card" key={entry.engine}>
+            <div className="label">
+              {entry.engine} ({entry.env_var})
+            </div>
+            {entry.env_active ? (
+              <div className="value">
+                {entry.env_value}
+                <small className="hint"> {t("dashboard.modelsEnvActive")}</small>
+              </div>
+            ) : (
+              <>
+                <input
+                  type="text"
+                  value={weights[entry.engine] ?? ""}
+                  placeholder={t("dashboard.modelsPathPlaceholder")}
+                  onChange={(e) =>
+                    setWeights((prev) => ({ ...prev, [entry.engine]: e.target.value }))
+                  }
+                />
+                {(entry.configured_path ?? "").trim() !== "" && (
+                  <small className={entry.configured_exists ? "hint ok" : "hint missing"}>
+                    {entry.configured_exists
+                      ? t("dashboard.modelsPathFound")
+                      : t("dashboard.modelsPathMissing")}
+                  </small>
+                )}
+              </>
+            )}
+          </div>
+        ))}
+      </div>
+      {error && <p className="hint missing">{error}</p>}
+      <div className="row">
+        <button onClick={() => void save()} disabled={saving}>
+          {saving ? t("common.loadingShort") : t("dashboard.modelsSave")}
+        </button>
+        <small className="hint">
+          {t("dashboard.modelsConfigFile")} {report.config_file}
+        </small>
+      </div>
+    </>
+  );
+}
+
 export function DashboardPanel() {
   const t = useT();
   const [info, setInfo] = useState<RuntimeInfo | null>(null);
   const [infoErr, setInfoErr] = useState<string | null>(null);
   const [doctor, setDoctor] = useState<string>(() => t("common.loading"));
   const [engines, setEngines] = useState<EngineProbeReport | null>(null);
+  const [modelPaths, setModelPathsReport] = useState<ModelPathsReport | null>(null);
 
   const load = useCallback(async () => {
     try {
@@ -43,6 +154,11 @@ export function DashboardPanel() {
       setEngines(await probeEngines());
     } catch {
       setEngines(null);
+    }
+    try {
+      setModelPathsReport(await getModelPaths());
+    } catch {
+      setModelPathsReport(null);
     }
   }, []);
 
@@ -144,6 +260,13 @@ export function DashboardPanel() {
             ))}
           </div>
         </>
+      )}
+      {modelPaths && (
+        <ModelManagerSection
+          key={JSON.stringify(modelPaths.config)}
+          report={modelPaths}
+          onSaved={() => void load()}
+        />
       )}
       <h2>{t("dashboard.doctor")}</h2>
       <pre className="json">{doctor}</pre>

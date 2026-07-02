@@ -7,8 +7,8 @@ use serde::{Deserialize, Serialize};
 use crate::contracts::QualityReport;
 
 use super::{
-    project_python, reject_unsafe_output_name, resolve_project_dir, run_bridge_oneshot,
-    run_torch_cli,
+    apply_model_env, project_python, reject_unsafe_output_name, resolve_project_dir,
+    run_bridge_oneshot, run_torch_cli,
 };
 /// Mean colour / colour temperature / contrast of the corrected region, before
 /// or after matching. Mirrors the Python bridge's `_appearance`.
@@ -172,6 +172,7 @@ pub(crate) fn match_light_color(
     if protect_brand_color.unwrap_or(false) {
         cmd.arg("--protect-brand-color");
     }
+    apply_model_env(&mut cmd);
     #[cfg(windows)]
     {
         use std::os::windows::process::CommandExt;
@@ -343,6 +344,7 @@ pub(crate) fn refine_mask_edge(
     if edge_decontaminate.unwrap_or(false) {
         cmd.arg("--edge-decontaminate");
     }
+    apply_model_env(&mut cmd);
     #[cfg(windows)]
     {
         use std::os::windows::process::CommandExt;
@@ -681,6 +683,7 @@ pub(crate) fn detect_quality_issues(
         .arg("--output-name")
         .arg(output_name.as_deref().unwrap_or(""))
         .current_dir(&dir);
+    apply_model_env(&mut cmd);
     #[cfg(windows)]
     {
         use std::os::windows::process::CommandExt;

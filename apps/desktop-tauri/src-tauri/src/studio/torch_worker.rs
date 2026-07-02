@@ -140,6 +140,7 @@ fn spawn(python: &Path, dir: &Path) -> Result<Worker, String> {
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
         .stderr(Stdio::null());
+    crate::psd::apply_model_env(&mut cmd);
     #[cfg(windows)]
     {
         use std::os::windows::process::CommandExt;
@@ -232,6 +233,15 @@ pub(crate) fn run_cli(
         }
     }
     Err(last_transport_err)
+}
+
+/// Stop and discard the warm worker (it respawns on the next call). Used when
+/// machine-level configuration the worker captured at spawn time changes, e.g.
+/// the persisted local-model weight paths.
+pub(crate) fn reset() {
+    if let Ok(mut guard) = worker_cell().lock() {
+        *guard = None;
+    }
 }
 
 #[cfg(test)]

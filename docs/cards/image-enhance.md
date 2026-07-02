@@ -264,7 +264,13 @@ Rules (`python/bridge/sr_backends/`):
   `cpu`, unknown-engine fallback, `realesrgan` unavailable fallback, downscale
   skip, a fake-backend dispatch + telemetry, `--probe-engines`, plus the gated
   `test_realesrgan_real_inference_when_stack_present` real-inference e2e that
-  skips without torch/realesrgan/the weight) — run: `pytest python/bridge/tests`.
+  skips without torch/realesrgan/the weight, and the gated
+  `test_diffusion_sr_real_inference_with_tiny_snapshot[ccsr|supir]` e2e that
+  synthesises a tiny random-weight img2img snapshot in diffusers format (no
+  download) and runs the real `DiffusionPipeline.from_pretrained` → denoise
+  loop → VAE decode; it skips without `torch`/`diffusers`/`transformers` and
+  runs on the manual-dispatch **`python bridge (diffusers inference)`** lane)
+  — run: `pytest python/bridge/tests`.
 - `python/bridge/tests/test_sr_backends.py` — registry `resolve`, capability
   `probe`, weight-path resolution, and the Real-ESRGAN / CCSR / SupIR
   unavailable/raise paths.

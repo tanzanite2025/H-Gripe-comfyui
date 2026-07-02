@@ -1,8 +1,9 @@
 # Colour pipeline: working space, bit depth, and the manual / model split
 
-**Status:** Decided (architecture). **Core landed (P1–P3):** the canonical
+**Status:** Decided (architecture). **Landed (P1–P4):** the canonical
 surface is 16-bit ProPhoto for wide-gamut sources with a colour-managed sRGB
-egress; P4 (manual 16-bit file output) and P5 (Python parity) remain. See
+egress, and the native manual chain (crop, subject-mask) carries it end-to-end
+with 16-bit PNG/TIFF-with-ICC output; P5 (Python parity) remains. See
 *Current state* below. This document is the **single source of truth** for
 colour space, bit depth, and ICC handling across every card. Where a per-card
 spec still describes colour behaviour, it describes the 8-bit sRGB the cards
@@ -122,8 +123,8 @@ this document:
 
 CMYK **decode coverage** is complete (16-bit + alpha TIFF #183, shared-loader
 routing #184, tetrahedral ICC #185, unmarked CMYK JPEG #186). The **wide-gamut
-working space** (P1–P3) has now landed; what remains is P4 (manual-path 16-bit
-file output) and P5 (Python-bridge parity).
+working space** (P1–P3) and the manual-path 16-bit chain (P4a–P4e) have now
+landed; what remains is P5 (Python-bridge parity).
 
 ## Phased implementation plan
 
@@ -183,7 +184,14 @@ Design-first; each phase is an independently reviewable, CI-gated PR.
     (auto segmenter, the matter, wand-select, morphology) keeps the 8-bit sRGB
     egress (`to_srgb_rgba8`), consistent with P3. `refineMaskEdge` is a
     Python-bridge card, so its pixel work is reconciled in P5, not here.
-  - **P4e:** remaining manual cards + docs close-out.
+  - **P4e (close-out):** no further native card work remained. The only
+    native-Rust manual pixel cards are crop (P4b/P4c) and subject-mask (P4d);
+    the other manual cards — `matchLightColor`, `detailWatchdog`,
+    `refineMaskEdge`, `imageEnhance` — are python-bridge cards whose pixel
+    work lives in the CLI, so their 16-bit contract is reconciled in **P5**.
+    The native `imageEnhance` cpu fast path is deliberately excluded too: its
+    contract is byte-identical parity with the Python cpu engine, so it must
+    move in lock-step with the bridge in P5, not ahead of it.
 - **P5 — Python-bridge parity.** Reconcile / retire the Python path's 8-bit
   sRGB behaviour so the two engines agree on the new contract.
 

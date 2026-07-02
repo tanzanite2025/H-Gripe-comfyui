@@ -113,15 +113,13 @@ card button (opens an editor), the algorithm-derived lane is a right-click entry
 
 ## Video card (`videoSource`, new) — separate track
 
-Video is **not** an image and gets its own card, editor set, and backend. It is
-scoped separately because it needs real video decoding the repo does not yet
-have:
-
-- `MediaViewer` today explicitly supports **images only** (non-image ⇒ "open
-  externally"); there is no `<video>` / frame extraction.
-- A video card needs a backend **poster-frame / thumbnail extraction** (ffmpeg
-  class) for the card thumbnail, and its edits (trim, frame-crop, …) are a
-  distinct op set.
+Video is **not** an image and gets its own card, editor set, and backend. It
+was scoped separately because it needed real video decoding — which has since
+landed as the **media engine** (`studio/video_engine.rs`: decoder seam +
+frame cache + latest-wins playback thread, with a PyAV backend and an opt-in
+vendored native-ffmpeg backend; `video_scrub` for timeline dragging — see
+`design/editor-resource-model.md` §Staged rollout). Encode/export is still
+missing, so video edits (trim, frame-crop, …) remain a distinct later op set.
 
 The **first version** of the video card is now implemented: dropping a video
 file creates a `videoSource` node whose `video_probe` Tauri command shells out

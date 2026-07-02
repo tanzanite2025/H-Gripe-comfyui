@@ -234,11 +234,15 @@ ignored by the manual lanes.
 
 > Working space / bit depth / ICC handling is defined once in
 > [`docs/design/colour-pipeline.md`](../design/colour-pipeline.md) (the source
-> of truth). Below is the **current** 8-bit sRGB behaviour; the decided target
-> (16-bit wide-gamut canonical + sRGB model egress) is not yet implemented.
+> of truth). That pipeline (P1–P5) has **landed** here (P4d, #194): the image
+> loads via `studio_image::load_working` into the 16-bit canonical
+> `WorkingImage`; the segmenters/matting models consume its 8-bit sRGB egress
+> (`to_srgb_rgba8`, consistent with P3); the cutout / alpha-image **RGBA
+> products** are written 16-bit with the ICC embedded (`write_working_png`)
+> when the canonical surface is wide-gamut, while **masks stay 8-bit gray**.
 
-The image is *currently* normalised to 8-bit RGBA via `studio_image::load_rgba`
-(and `source_mode` recorded):
+The model/heuristic entry consumes the 8-bit sRGB egress of that surface
+(and `source_mode` is recorded):
 
 | Source mode | Handling |
 | --- | --- |

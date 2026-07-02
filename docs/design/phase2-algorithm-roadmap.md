@@ -52,7 +52,7 @@ detail** while preserving identity and text:
 
 ### 1.3 Integration plan
 **Status: the seam + Real-ESRGAN have landed** (the rest of this section is the
-design it was built to; ⛔ items are CCSR/SupIR + real-inference CI + UI greying).
+design it was built to; ⛔ items are CCSR/SupIR + real-inference CI).
 The selector is the local card's **`engine` param** (`cpu` | `realesrgan` | …),
 not `--profile-ref` — `profile_ref` is the API-card credentials concept, and
 Image Enhance is a `local` card (see `executor-split-and-psd-chain-hardening.md`).
@@ -66,7 +66,9 @@ Image Enhance is a `local` card (see `executor-split-and-psd-chain-hardening.md`
   bundled in the installer (keeps the Tauri bundle small — see Issue #2).
 - ✅ Capability probe (`image_enhance_cli.py --probe-engines`) reports which
   engines are usable so the UI can grey out unavailable ones; any miss falls
-  back to CPU and records `engine_fallback_reason`. ⛔ The UI greying itself.
+  back to CPU and records `engine_fallback_reason`. ✅ The UI greying itself:
+  the inspector's `engine` select greys unavailable options from the
+  cross-card `probe_engines` report (see §6 Capability probing).
 - ✅ Contract impact: none. Output adds optional `engine` / `engine_requested` /
   `engine_fallback_reason` / `backend_model` telemetry fields.
 - ⛔ A real-inference CI job (opt-in like the ViTMatte e2e), since CI does not

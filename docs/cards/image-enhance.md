@@ -71,11 +71,15 @@ denoise/sharpen never bleed a halo across a matte edge.
 
 > **Source of truth:** the working space, bit depth, ICC handling, and the
 > manual/model split are defined in
-> [`docs/design/colour-pipeline.md`](../design/colour-pipeline.md). The table
-> below is the **current** behaviour (8-bit sRGB); the decided target (16-bit
-> wide-gamut canonical + sRGB model egress) is not yet implemented.
+> [`docs/design/colour-pipeline.md`](../design/colour-pipeline.md). That
+> pipeline (P1–P5) has **landed**: this card sits at the model/preview
+> boundary, so its 8-bit sRGB working space below is the *decided contract*,
+> not a gap. ProPhoto-tagged 16-bit manual products (the Rust chain's
+> outputs) are colour-managed to sRGB at ingress (shared `wide_gamut.py`,
+> #202; the cpu fast path drops the stale profile on output, #203), and the
+> colour resample runs in linear light on both engines (#205).
 
-The input is *currently* normalised to an 8-bit RGB working space and the
+The input is normalised to an 8-bit RGB working space and the
 original `source_mode` is recorded:
 
 | Source mode | Handling |

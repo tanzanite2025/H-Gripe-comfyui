@@ -127,8 +127,8 @@ routing #184, tetrahedral ICC #185, unmarked CMYK JPEG #186). The **wide-gamut
 working space** (P1–P3) and the manual-path 16-bit chain (P4a–P4e) have now
 landed, and P5 (Python-bridge parity) closed the loop: every bridge CLI
 colour-manages ProPhoto-tagged manual products to sRGB at ingress, and
-neither engine carries the stale profile onto its sRGB outputs. The only
-remaining items are the explicitly deferred *Open decisions* below.
+neither engine carries the stale profile onto its sRGB outputs. The *Open
+decisions* below are all closed too — the initiative is complete.
 
 ## Phased implementation plan
 

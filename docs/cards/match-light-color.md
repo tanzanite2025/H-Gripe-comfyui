@@ -68,10 +68,12 @@ saturated pixels.
 
 > Working space / bit depth / ICC handling is defined once in
 > [`docs/design/colour-pipeline.md`](../design/colour-pipeline.md) (the source
-> of truth). Below is the **current** 8-bit sRGB behaviour; the decided target
-> (16-bit wide-gamut canonical + sRGB model egress) is not yet implemented.
+> of truth). That pipeline (P1–P5) has **landed**: this card sits at the
+> model/preview boundary, so the 8-bit sRGB working space below is the
+> *decided contract*, not a gap. ProPhoto-tagged 16-bit manual products are
+> colour-managed to sRGB at ingress (shared `wide_gamut.py`, #202).
 
-Both inputs are *currently* normalised to an 8-bit RGB working space (the
+Both inputs are normalised to an 8-bit RGB working space (the
 matching Lab conversion uses Pillow's `LAB`); the subject's original mode is
 recorded as `source_mode`, the background's as `background_mode`:
 

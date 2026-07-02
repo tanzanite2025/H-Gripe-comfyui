@@ -79,10 +79,12 @@ alpha (hair / fur / glass) intact rather than eroding/feathering it as fringe.
 
 > Working space / bit depth / ICC handling is defined once in
 > [`docs/design/colour-pipeline.md`](../design/colour-pipeline.md) (the source
-> of truth). Below is the **current** 8-bit sRGB behaviour; the decided target
-> (16-bit wide-gamut canonical + sRGB model egress) is not yet implemented.
+> of truth). That pipeline (P1–P5) has **landed**: this card sits at the
+> model/preview boundary, so the 8-bit sRGB working space below is the
+> *decided contract*, not a gap. ProPhoto-tagged 16-bit manual products are
+> colour-managed to sRGB at ingress (shared `wide_gamut.py`, #202).
 
-Inputs are *currently* normalised to an 8-bit RGB working space so
+Inputs are normalised to an 8-bit RGB working space so
 decontamination and background blend sample honest colour; the subject's
 original mode is recorded as `source_mode`:
 

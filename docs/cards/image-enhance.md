@@ -22,7 +22,7 @@ in behind the `engine` param without changing this contract — see
 | Param | Type | Default | Range / values | Notes |
 | --- | --- | --- | --- | --- |
 | `mode` | enum | `conservative` | `conservative` \| `texture_rebuild` \| `print_ready` \| `custom` | Presets set denoise/texture; `custom` uses the sliders below. |
-| `engine` | enum | `cpu` | `cpu` \| `realesrgan` | Upscale backend. `cpu` is the built-in Lanczos+sharpen (always available); `realesrgan` is opt-in and **falls back to `cpu`** when its deps/weight are missing. See [Engines](#engines). |
+| `engine` | enum | `cpu` | `cpu` \| `realesrgan` \| `ccsr` \| `supir` | Upscale backend. `cpu` is the built-in Lanczos+sharpen (always available); the model engines are opt-in and each **falls back to `cpu`** when its deps/weight are missing. See [Engines](#engines). |
 | `target_width` | int px | `0` | `>= 0` (0 = auto) | Explicit target wins over `target_bounds`. |
 | `target_height` | int px | `0` | `>= 0` (0 = auto) | |
 | `target_dpi` | int | `300` | `>= 1` | Written into the output PNG metadata only. |
@@ -223,6 +223,8 @@ engine extends the registry + the CLI only, with no dispatch changes.
 | --- | --- | --- | --- |
 | `cpu` (default) | vendored Pillow + numpy | none | Lanczos resample + unsharp mask + edge-preserving median denoise. Always available; the fallback for every other engine. |
 | `realesrgan` | `torch` + `realesrgan` (optional, **not** bundled) | `RealESRGAN_x4plus.pth` in the model cache | Real-ESRGAN x4 in one pass (tiled), then Lanczos to the exact requested factor. CUDA when present, else CPU. |
+| `ccsr` | `torch` + `diffusers` (optional, **not** bundled) | diffusers-format snapshot dir `<model cache>/ccsr` (or `HGRIPE_CCSR_MODEL`) | Content-Consistent diffusion SR — more faithful / less hallucinated; the snapshot's declared pipeline runs once, then Lanczos to the exact requested factor. CUDA when present, else CPU. |
+| `supir` | `torch` + `diffusers` (optional, **not** bundled) | diffusers-format snapshot dir `<model cache>/supir` (or `HGRIPE_SUPIR_MODEL`) | SupIR diffusion SR — max perceptual quality, SDXL-scale (heavy); same shared pipeline path and warm cache as `ccsr`. |
 
 Rules (`python/bridge/sr_backends/`):
 
@@ -234,7 +236,10 @@ Rules (`python/bridge/sr_backends/`):
 - **Weights are not bundled.** `realesrgan` resolves its weight from
   `HGRIPE_REALESRGAN_MODEL` (explicit path) or `<model cache>/RealESRGAN_x4plus.pth`,
   where the cache dir is `HGRIPE_MODEL_CACHE` or the bundled `resources/models`
-  dir (same convention as the SAM 2 / ViTMatte weights).
+  dir (same convention as the SAM 2 / ViTMatte weights). `ccsr` / `supir`
+  resolve a diffusers-format snapshot *directory* the same way
+  (`HGRIPE_CCSR_MODEL` / `HGRIPE_SUPIR_MODEL`, else `<model cache>/ccsr` /
+  `<model cache>/supir`).
 - **Model replaces the CPU steps.** When a model engine runs it performs
   restoration + upscaling itself, so the CPU denoise/unsharp passes are skipped
   (`denoise_method` is the engine id, `texture_strength` reported as `0.0`).
@@ -260,7 +265,8 @@ Rules (`python/bridge/sr_backends/`):
   skip, a fake-backend dispatch + telemetry, `--probe-engines`) — run:
   `pytest python/bridge/tests`.
 - `python/bridge/tests/test_sr_backends.py` — registry `resolve`, capability
-  `probe`, weight-path resolution, and the Real-ESRGAN unavailable/raise paths.
+  `probe`, weight-path resolution, and the Real-ESRGAN / CCSR / SupIR
+  unavailable/raise paths.
 - `src-tauri/src/studio/image_enhance.rs` — the connected-image-input guard.
 
 ## Verifying `realesrgan` end-to-end

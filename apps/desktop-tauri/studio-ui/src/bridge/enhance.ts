@@ -73,7 +73,7 @@ export interface EnhanceImageRequest {
   textureStrength?: number;
   /** Cap sharpening so logos / packaging text are not mangled. */
   preserveTextLogo?: boolean;
-  /** Upscale engine: `cpu` (default) or `realesrgan` (opt-in, falls back to cpu). */
+  /** Upscale engine: `cpu` (default) or `realesrgan` / `ccsr` / `supir` (opt-in, falls back to cpu). */
   engine?: string;
   /** Compute device for the learned upscaler: `auto` (default) | `cpu` | `cuda`. */
   device?: string;

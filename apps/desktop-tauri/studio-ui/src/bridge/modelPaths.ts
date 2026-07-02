@@ -43,6 +43,8 @@ export interface ModelPathsReport {
 /** Engine -> env var rows the browser mock mirrors from the Rust backend. */
 const MOCK_ENGINE_ENV_VARS: [string, string][] = [
   ["realesrgan", "HGRIPE_REALESRGAN_MODEL"],
+  ["ccsr", "HGRIPE_CCSR_MODEL"],
+  ["supir", "HGRIPE_SUPIR_MODEL"],
   ["sd_inpaint", "HGRIPE_INPAINT_MODEL"],
   ["sdxl_inpaint", "HGRIPE_SDXL_INPAINT_MODEL"],
   ["flux_fill", "HGRIPE_FLUX_FILL_MODEL"],

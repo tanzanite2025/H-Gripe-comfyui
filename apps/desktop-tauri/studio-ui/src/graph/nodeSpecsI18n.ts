@@ -414,6 +414,28 @@ export const NODE_ZH: Record<string, NodeSpecZh> = {
       repaint_report: "重绘报告",
     },
   },
+  videoAssemble: {
+    title: "视频合成",
+    description:
+      "通过媒体引擎的 FFmpeg 后端（PyAV）将有序的帧图像序列编码为视频文件。连接帧列表（或在 frames 参数中每行填一个路径），选择帧率与编码器，即可在磁盘上得到 .mp4 及编码报告。",
+    params: {
+      frames: { label: "帧列表", hint: "帧图像路径，每行一个（连接的 frames 输入优先）" },
+      fps: { label: "帧率", hint: "输出帧率" },
+      codec: { label: "编码器", hint: "ffmpeg 编码器；libx264 兼容性最好" },
+      output_dir: { label: "输出目录", hint: OUTPUT_DIR_HINT },
+      output_name: {
+        label: "输出名",
+        hint: "输出文件名（空 = assembled-<时间戳>.mp4；缺省扩展名为 .mp4）",
+      },
+    },
+    ports: {
+      frames: "帧列表",
+      video: "视频",
+      frame_count: "帧数",
+      duration_sec: "时长（秒）",
+      assemble_report: "合成报告",
+    },
+  },
   psdExport: {
     title: "PSD 导出",
     description:

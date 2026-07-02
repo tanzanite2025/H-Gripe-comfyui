@@ -129,6 +129,84 @@ def _drop(path: str) -> None:
         decoder.close()
 
 
+def _assemble_frames(
+    frames: list[str], out_path: str, fps: float, codec: str
+) -> dict[str, Any]:
+    """Encode ``frames`` (image paths, in order) into ``out_path`` via PyAV.
+
+    Every frame is normalised to the first frame's size (rounded down to even
+    dimensions, as yuv420p requires) so a mixed-size sequence still encodes.
+    Returns the payload for the ``assemble`` response.
+    """
+    import av  # lazy: PyAV bundles ffmpeg and is only needed for a real encode
+    from fractions import Fraction
+
+    from PIL import Image
+
+    rate = Fraction(fps).limit_denominator(1001)
+    container = av.open(out_path, mode="w")
+    try:
+        stream = container.add_stream(codec, rate=rate)
+        stream.pix_fmt = "yuv420p"
+        width = height = 0
+        for path in frames:
+            with Image.open(path) as img:
+                rgb = img.convert("RGB")
+                if width == 0:
+                    width = max(2, rgb.width - (rgb.width % 2))
+                    height = max(2, rgb.height - (rgb.height % 2))
+                    stream.width = width
+                    stream.height = height
+                if (rgb.width, rgb.height) != (width, height):
+                    rgb = rgb.resize((width, height))
+                frame = av.VideoFrame.from_image(rgb)
+                for packet in stream.encode(frame):
+                    container.mux(packet)
+        for packet in stream.encode():
+            container.mux(packet)
+    finally:
+        container.close()
+    return {
+        "video_path": out_path,
+        "frame_count": len(frames),
+        "width": width,
+        "height": height,
+        "fps": float(rate),
+        "duration_sec": len(frames) / float(rate) if rate else None,
+        "codec": codec,
+    }
+
+
+def _do_assemble(args: dict[str, Any]) -> dict[str, Any]:
+    """Validate an ``assemble`` request and encode its frame list to a video."""
+    frames = args.get("frames")
+    if (
+        not isinstance(frames, list)
+        or not frames
+        or not all(isinstance(f, str) and f for f in frames)
+    ):
+        raise ValueError("args.frames must be a non-empty list of image paths")
+    out_path = args.get("out")
+    if not isinstance(out_path, str) or not out_path:
+        raise ValueError("args.out must be a non-empty string")
+    fps = args.get("fps", 24.0)
+    try:
+        fps = float(fps)
+    except (TypeError, ValueError):
+        raise ValueError("args.fps must be a number") from None
+    if fps <= 0:
+        raise ValueError("args.fps must be positive")
+    codec = args.get("codec", "libx264")
+    if not isinstance(codec, str) or not codec:
+        raise ValueError("args.codec must be a non-empty string")
+    return _ASSEMBLER(frames, out_path, fps, codec)
+
+
+#: Indirection so tests can inject a fake encoder (no ``av``/PIL needed).
+#: Production always uses :func:`_assemble_frames`.
+_ASSEMBLER: Callable[[list[str], str, float, str], dict[str, Any]] = _assemble_frames
+
+
 def _require_video(args: dict[str, Any]) -> str:
     video = args.get("video")
     if not isinstance(video, str) or not video:
@@ -165,6 +243,7 @@ def _do_frame(args: dict[str, Any]) -> dict[str, Any]:
 _COMMANDS: dict[str, Callable[[dict[str, Any]], dict[str, Any]]] = {
     "probe": _do_probe,
     "frame": _do_frame,
+    "assemble": _do_assemble,
 }
 
 

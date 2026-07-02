@@ -101,8 +101,10 @@ to cancel; there, cancellation aborts the in-flight HTTP request instead of
 waiting for the response. This is third-party
 provider/API remote job control, not an H-Gripe account/cloud system. Durable
 workflow save/load beyond autosave now exists (explicit Save/Open + project
-folder, above). Before the Node Editor becomes the primary production surface,
-the backend runner still needs FFmpeg-backed video assembly/export.
+folder, above). FFmpeg-backed video assembly/export exists as the
+**Video Assemble** output card: it encodes an ordered frame-image sequence into
+a video file (fps/codec/output params) through the media engine's PyAV worker
+`assemble` command.
 
 The desktop shell intentionally has no Credentials / Profiles account-management
 tabs. Provider profiles and credential refs are local API config files consumed

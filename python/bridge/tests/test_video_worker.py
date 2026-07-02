@@ -159,6 +159,61 @@ def test_decoder_error_yields_not_ok(monkeypatch):
     assert "corrupt moov atom" in resp["error"]
 
 
+def test_assemble_encodes_via_injected_assembler(monkeypatch):
+    calls: list[tuple[list[str], str, float, str]] = []
+
+    def fake_assembler(frames, out_path, fps, codec):
+        calls.append((frames, out_path, fps, codec))
+        return {"video_path": out_path, "frame_count": len(frames)}
+
+    monkeypatch.setattr(video_worker, "_ASSEMBLER", fake_assembler)
+    resp = video_worker.handle_request(
+        {
+            "id": 1,
+            "cmd": "assemble",
+            "args": {"frames": ["a.png", "b.png"], "out": "/tmp/out.mp4", "fps": 12, "codec": "libx264"},
+        }
+    )
+    assert resp["ok"] is True
+    payload = json.loads(resp["stdout"])
+    assert payload["video_path"] == "/tmp/out.mp4"
+    assert payload["frame_count"] == 2
+    assert calls == [(["a.png", "b.png"], "/tmp/out.mp4", 12.0, "libx264")]
+
+
+def test_assemble_defaults_fps_and_codec(monkeypatch):
+    seen: dict[str, object] = {}
+
+    def fake_assembler(frames, out_path, fps, codec):
+        seen.update(fps=fps, codec=codec)
+        return {"video_path": out_path, "frame_count": len(frames)}
+
+    monkeypatch.setattr(video_worker, "_ASSEMBLER", fake_assembler)
+    resp = video_worker.handle_request(
+        {"id": 2, "cmd": "assemble", "args": {"frames": ["a.png"], "out": "/tmp/out.mp4"}}
+    )
+    assert resp["ok"] is True
+    assert seen == {"fps": 24.0, "codec": "libx264"}
+
+
+@pytest.mark.parametrize(
+    ("args", "needle"),
+    [
+        ({"out": "/tmp/out.mp4"}, "frames"),
+        ({"frames": [], "out": "/tmp/out.mp4"}, "frames"),
+        ({"frames": ["a.png", 7], "out": "/tmp/out.mp4"}, "frames"),
+        ({"frames": ["a.png"]}, "out"),
+        ({"frames": ["a.png"], "out": "/tmp/out.mp4", "fps": "fast"}, "fps"),
+        ({"frames": ["a.png"], "out": "/tmp/out.mp4", "fps": 0}, "fps"),
+        ({"frames": ["a.png"], "out": "/tmp/out.mp4", "codec": ""}, "codec"),
+    ],
+)
+def test_assemble_rejects_bad_args(args, needle):
+    resp = video_worker.handle_request({"id": 3, "cmd": "assemble", "args": args})
+    assert resp["ok"] is False
+    assert needle in resp["error"]
+
+
 def test_serve_survives_bad_json_and_closes_on_exit(_reset_worker):
     opened = _reset_worker
     script = "\n".join(

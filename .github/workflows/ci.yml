@@ -14,7 +14,8 @@ on:
   # `test_realesrgan_real_inference_when_stack_present`,
   # `test_{sd_inpaint,sdxl_inpaint,flux_fill}_real_inference_with_tiny_snapshot`,
   # `test_diffusion_sr_real_inference_with_tiny_snapshot`,
-  # `test_onnx_matting_real_inference_when_weight_present`) skip on every normal
+  # `test_onnx_matting_real_inference_when_weight_present`,
+  # `test_onnx_defect_real_inference_when_weight_present`) skip on every normal
   # run. Trigger this manually to fetch/synthesise the weights and exercise the
   # real inference paths.
   workflow_dispatch:
@@ -223,6 +224,37 @@ jobs:
       - name: Run bridge tests (gated real matting inference active)
         env:
           HGRIPE_MATTING_MODEL: apps/desktop-tauri/src-tauri/resources/models/vitmatte.onnx
+        run: python -m pytest python/bridge/tests -q
+
+  watchdog-text-e2e:
+    name: python bridge (watchdog text e2e)
+    # Only on manual dispatch (like the matting e2e): fetches the sha256-checked
+    # PP-OCRv3 text-detection ONNX weight (~2.4 MB, plus its label-map sidecar)
+    # and runs the gated real-*trained-weight* inference test for the Detail
+    # Watchdog `onnx_defect` engine end-to-end through the CLI (the `text`
+    # watch target graduates from `skipped` to real findings). Skips on every
+    # normal run (the per-PR `python bridge (onnx inference)` lane covers the
+    # session path with a synthesised model only).
+    if: github.event_name == 'workflow_dispatch'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.x'
+
+      - name: Install runtime + test deps (incl. ONNX runtime)
+        run: pip install Pillow numpy pytest attrs onnx onnxruntime
+
+      # Fetches into resources/models/watchdog_defect.onnx (+ the .labels.json
+      # sidecar declaring `text` coverage and ImageNet normalisation).
+      - name: Fetch PP-OCRv3 text-detection weight
+        run: bash scripts/fetch-watchdog-text.sh
+
+      - name: Run bridge tests (gated real text detection active)
+        env:
+          HGRIPE_WATCHDOG_MODEL: apps/desktop-tauri/src-tauri/resources/models/watchdog_defect.onnx
         run: python -m pytest python/bridge/tests -q
 
   python-bridge:

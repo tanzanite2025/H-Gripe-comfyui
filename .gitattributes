@@ -15,3 +15,7 @@ comfy_api_nodes/apis/__init__.py linguist-generated
 third_party/ffmpeg/** linguist-vendored
 third_party/ffmpeg/**/*.dll filter=lfs diff=lfs merge=lfs -text
 third_party/ffmpeg/**/*.lib filter=lfs diff=lfs merge=lfs -text
+
+# Cargo verifies directory sources against each crate's .cargo-checksum.json.
+# Preserve vendored crate files byte-for-byte, including unusual line endings.
+third_party/cargo-vendor/** -text linguist-vendored

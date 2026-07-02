@@ -206,6 +206,47 @@ def test_default_output_name_from_stem(tmp_path: Path) -> None:
 # ---- engine seam (sr_backends dispatch + CPU fallback) ----------------------
 
 
+def _realesrgan_stack_ready() -> bool:
+    """Whether the opt-in Real-ESRGAN engine can genuinely run here.
+
+    True only when the optional deps import *and* the weight is present, i.e.
+    on the manual-dispatch real-inference CI lane (or a dev box that ran
+    ``scripts/fetch-realesrgan``); the gated e2e test skips everywhere else.
+    """
+    try:
+        import torch  # noqa: F401
+        from basicsr.archs.rrdbnet_arch import RRDBNet  # noqa: F401
+        from realesrgan import RealESRGANer  # noqa: F401
+    except Exception:
+        return False
+    from sr_backends.realesrgan import RealEsrganBackend
+
+    return RealEsrganBackend().weight_path().is_file()
+
+
+requires_realesrgan = pytest.mark.skipif(
+    not _realesrgan_stack_ready(),
+    reason="torch / realesrgan / weight not present (opt-in real-inference gate)",
+)
+
+
+@requires_realesrgan
+def test_realesrgan_real_inference_when_stack_present(tmp_path: Path) -> None:
+    # The real thing, end-to-end through the CLI: no fakes, no fallback. Runs
+    # only on the opt-in CI lane (or a dev box) with torch + realesrgan + the
+    # fetched weight; the engine must actually bind and report itself.
+    src = _make_rgb(tmp_path / "in.png", (24, 18))
+    out = _run(src, target_width=48, target_height=36, engine="realesrgan", output_dir=tmp_path)
+    report = out["enhance_report"]
+    assert report["engine"] == "realesrgan"
+    assert report["engine_requested"] == "realesrgan"
+    assert report["engine_fallback_reason"] is None
+    assert report["backend_model"] == "RealESRGAN_x4plus.pth"
+    assert report["device"] in ("cpu", "cuda")
+    assert report["precision"] in ("fp32", "fp16")
+    assert Image.open(out["enhanced_image"]).size == (48, 36)
+
+
 def test_default_engine_is_cpu(tmp_path: Path) -> None:
     src = _make_rgb(tmp_path / "in.png", (20, 20))
     report = _run(src, target_width=40, target_height=40, output_dir=tmp_path)["enhance_report"]

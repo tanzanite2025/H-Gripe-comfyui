@@ -52,8 +52,8 @@ detail** while preserving identity and text:
 
 ### 1.3 Integration plan
 **Status: the seam + Real-ESRGAN + the CCSR (`ccsr`) and SupIR (`supir`)
-diffusion SR backends have landed** (the rest of this section is the design it
-was built to; the ⛔ item is real-inference CI).
+diffusion SR backends have landed, plus the opt-in real-inference CI lane**
+(the rest of this section is the design it was built to).
 The selector is the local card's **`engine` param** (`cpu` | `realesrgan` | …),
 not `--profile-ref` — `profile_ref` is the API-card credentials concept, and
 Image Enhance is a `local` card (see `executor-split-and-psd-chain-hardening.md`).
@@ -74,8 +74,12 @@ Image Enhance is a `local` card (see `executor-split-and-psd-chain-hardening.md`
   cross-card `probe_engines` report (see §6 Capability probing).
 - ✅ Contract impact: none. Output adds optional `engine` / `engine_requested` /
   `engine_fallback_reason` / `backend_model` telemetry fields.
-- ⛔ A real-inference CI job (opt-in like the ViTMatte e2e), since CI does not
-  install `torch` + the weight.
+- ✅ A real-inference CI job (opt-in like the ViTMatte e2e), since the per-PR
+  matrix does not install `torch` + the weight: the manual-dispatch
+  `realesrgan-e2e` lane installs the CPU torch stack, fetches the
+  sha256-checked weight (`scripts/fetch-realesrgan.sh` / `.ps1`), and runs the
+  gated `test_realesrgan_real_inference_when_stack_present` e2e (skips on
+  every normal run).
 
 ### 1.4 Dependencies & risks
 `torch` + CUDA, `realesrgan`/`spandrel`, model weights (hundreds of MB–GB).

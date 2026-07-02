@@ -122,6 +122,88 @@ def test_weight_path_prefers_env_override(
     assert backend_cls().weight_path() == Path("/models/my-inpaint")
 
 
+def test_controlnet_weight_path_prefers_env_override(monkeypatch: pytest.MonkeyPatch) -> None:
+    from inpaint_backends.sd_inpaint import controlnet_weight_path
+
+    monkeypatch.setenv("HGRIPE_CONTROLNET_MODEL", "/models/my-controlnet")
+    assert controlnet_weight_path() == Path("/models/my-controlnet")
+    monkeypatch.delenv("HGRIPE_CONTROLNET_MODEL", raising=False)
+    monkeypatch.setenv("HGRIPE_MODEL_CACHE", "/cache")
+    assert controlnet_weight_path().name == "controlnet-canny"
+
+
+def test_sd_inpaint_controlnet_requires_weight(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    # With the SD weight present but the ControlNet weight missing, a canny
+    # request must raise (degrading to the provider) rather than silently
+    # dropping the conditioning. Deps are stubbed as importable via the SD
+    # weight dir trick only if torch/diffusers exist; otherwise available()
+    # already fails on deps -- both paths raise InpaintUnavailable.
+    weight = tmp_path / "sd-inpaint"
+    weight.mkdir()
+    monkeypatch.setenv("HGRIPE_INPAINT_MODEL", str(weight))
+    monkeypatch.delenv("HGRIPE_CONTROLNET_MODEL", raising=False)
+    monkeypatch.setenv("HGRIPE_MODEL_CACHE", "/definitely/not/here")
+    backend = StableDiffusionInpaintBackend()
+    crop = Image.new("RGB", (16, 16))
+    mask = Image.new("L", (16, 16), 255)
+    with pytest.raises(InpaintUnavailable):
+        backend.inpaint(crop, mask, "restore", controlnet="canny")
+
+
+def test_sd_inpaint_rejects_unknown_controlnet(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    weight = tmp_path / "sd-inpaint"
+    weight.mkdir()
+    monkeypatch.setenv("HGRIPE_INPAINT_MODEL", str(weight))
+    backend = StableDiffusionInpaintBackend()
+    crop = Image.new("RGB", (16, 16))
+    mask = Image.new("L", (16, 16), 255)
+    with pytest.raises(InpaintUnavailable):
+        backend.inpaint(crop, mask, "restore", controlnet="depth")
+
+
+@pytest.mark.parametrize("backend_cls", [StableDiffusionXLInpaintBackend, FluxFillBackend])
+def test_other_backends_reject_controlnet(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path, backend_cls: type
+) -> None:
+    # SDXL / Flux Fill have no ControlNet path today: an explicit request must
+    # raise (truthful provider fallback) instead of being silently ignored.
+    weight = tmp_path / "weight"
+    weight.mkdir()
+    env_var = {
+        StableDiffusionXLInpaintBackend: "HGRIPE_SDXL_INPAINT_MODEL",
+        FluxFillBackend: "HGRIPE_FLUX_FILL_MODEL",
+    }[backend_cls]
+    monkeypatch.setenv(env_var, str(weight))
+    backend = backend_cls()
+    crop = Image.new("RGB", (16, 16))
+    mask = Image.new("L", (16, 16), 255)
+    with pytest.raises(InpaintUnavailable, match="controlnet not supported"):
+        backend.inpaint(crop, mask, "restore", controlnet="canny")
+
+
+def test_canny_condition_is_rgb_edge_map() -> None:
+    np = pytest.importorskip("numpy")
+    from inpaint_backends.sd_inpaint import canny_condition
+
+    # A half-black / half-white image has one strong vertical edge.
+    img = Image.new("RGB", (32, 32), (0, 0, 0))
+    for y in range(32):
+        for x in range(16, 32):
+            img.putpixel((x, y), (255, 255, 255))
+    cond = canny_condition(img)
+    assert cond.mode == "RGB"
+    assert cond.size == img.size
+    arr = np.asarray(cond.convert("L"))
+    # Edges only near the boundary column; flat areas stay black.
+    assert arr[:, 14:18].max() == 255
+    assert arr[:, :8].max() == 0
+    assert arr[:, 24:].max() == 0
+
+
 def test_probe_survives_a_broken_backend(monkeypatch: pytest.MonkeyPatch) -> None:
     # A backend whose available() explodes must be reported unavailable, not
     # crash the whole capability probe.

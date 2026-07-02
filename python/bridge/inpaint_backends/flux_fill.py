@@ -34,7 +34,7 @@ import os
 from pathlib import Path
 from typing import Any
 
-from . import InpaintUnavailable, model_cache_dir
+from . import CONTROLNET_OFF, InpaintUnavailable, model_cache_dir
 from .sd_inpaint import _warm_pipeline
 
 _DEFAULT_WEIGHT_DIR = "flux-fill"
@@ -89,6 +89,7 @@ class FluxFillBackend:
         steps: int = 30,
         seed: int | None = None,
         precision: str | None = None,
+        controlnet: str = CONTROLNET_OFF,
     ) -> tuple[Any, str, str]:
         """Fill the white area of ``mask`` over ``crop`` with Flux Fill.
 
@@ -96,8 +97,12 @@ class FluxFillBackend:
         to the pipeline's multiple-of-16 requirement, run, and cropped back.
         ``negative_prompt`` and ``strength`` are ignored (Flux Fill has neither
         input). Returns ``(image, device_used, precision_used)``. Raises
-        :class:`InpaintUnavailable` if deps/weights vanished since the probe.
+        :class:`InpaintUnavailable` if deps/weights vanished since the probe,
+        or when ControlNet conditioning is requested (only ``sd_inpaint``
+        supports it today — raising is truthful; silently ignoring would lie).
         """
+        if (controlnet or CONTROLNET_OFF).strip().lower() not in ("", CONTROLNET_OFF):
+            raise InpaintUnavailable(f"controlnet not supported by {self.id}")
         ok, reason = self.available()
         if not ok:
             raise InpaintUnavailable(reason)

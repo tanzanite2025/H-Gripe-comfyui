@@ -131,6 +131,8 @@ export interface RepaintReport {
   precision?: string | null;
   /** Compute precision the node asked for (`auto`/`fp32`/`fp16`). */
   precision_requested?: string;
+  /** Structural conditioning the node asked for (`off`/`canny`). */
+  controlnet_requested?: string;
 }
 
 /** Exported artifact paths recorded for a finished workflow. */

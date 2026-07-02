@@ -28,6 +28,7 @@ const DETAIL_REPAINT_RESERVED = new Set([
   "credentials_ref",
   "engine",
   "precision",
+  "controlnet",
   "repaint_prompt_base",
   "repaint_actions",
   "min_confidence",
@@ -495,6 +496,7 @@ export const defaultExecutors: ExecutorRegistry = {
           | "device"
           | "precision"
           | "precision_requested"
+          | "controlnet_requested"
         >
       | null = null;
     if (engine !== "provider") {
@@ -509,6 +511,7 @@ export const defaultExecutors: ExecutorRegistry = {
         prompt: regionPrompt(""),
         promptMap: JSON.stringify(promptMap),
         precision: String(ctx.params.precision ?? "auto").trim() || undefined,
+        controlnet: String(ctx.params.controlnet ?? "off").trim() || undefined,
         outputDir: outputDir || undefined,
       });
       engineTelemetry = {
@@ -519,6 +522,7 @@ export const defaultExecutors: ExecutorRegistry = {
         device: local.device ?? null,
         precision: local.precision ?? null,
         precision_requested: local.precision_requested,
+        controlnet_requested: local.controlnet_requested,
       };
       if (local.engine !== "provider" && local.repainted.length > 0) {
         localUsed = true;

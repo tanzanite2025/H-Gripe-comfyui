@@ -29,9 +29,57 @@ import os
 from pathlib import Path
 from typing import Any
 
-from . import InpaintUnavailable, model_cache_dir
+from . import CONTROLNET_OFF, InpaintUnavailable, model_cache_dir
 
 _DEFAULT_WEIGHT_DIR = "sd-inpaint"
+_DEFAULT_CONTROLNET_WEIGHT_DIR = "controlnet-canny"
+
+
+def controlnet_weight_path() -> Path:
+    """Resolved path of the (non-bundled) canny ControlNet weight.
+
+    ``HGRIPE_CONTROLNET_MODEL`` overrides for dev / CI; otherwise the weight is
+    fetched into the model cache like every other opt-in weight.
+    """
+    override = (os.environ.get("HGRIPE_CONTROLNET_MODEL") or "").strip()
+    if override:
+        return Path(override)
+    return model_cache_dir() / _DEFAULT_CONTROLNET_WEIGHT_DIR
+
+
+def canny_condition(rgb: Any, low: float = 0.1, high: float = 0.2) -> Any:
+    """Canny-style edge conditioning image for a PIL ``RGB`` crop.
+
+    A dependency-light stand-in for OpenCV's Canny (the bridge deliberately
+    avoids a cv2 dependency): Gaussian smoothing + Sobel gradient magnitude
+    with a double threshold and hysteresis via a dilation pass. White edges on
+    black, replicated to 3 channels — the layout ControlNet canny models
+    expect.
+    """
+    import numpy as np
+    from PIL import Image, ImageFilter
+
+    gray = np.asarray(
+        rgb.convert("L").filter(ImageFilter.GaussianBlur(radius=1.4)), dtype=np.float32
+    ) / 255.0
+    gx = np.zeros_like(gray)
+    gy = np.zeros_like(gray)
+    gx[:, 1:-1] = gray[:, 2:] - gray[:, :-2]
+    gy[1:-1, :] = gray[2:, :] - gray[:-2, :]
+    magnitude = np.hypot(gx, gy)
+
+    strong = magnitude >= high
+    weak = magnitude >= low
+    # One hysteresis pass: keep weak edges that touch a strong edge.
+    padded = np.pad(strong, 1)
+    neighbour = np.zeros_like(strong)
+    for dy in (-1, 0, 1):
+        for dx in (-1, 0, 1):
+            neighbour |= padded[1 + dy : padded.shape[0] - 1 + dy, 1 + dx : padded.shape[1] - 1 + dx]
+    edges = strong | (weak & neighbour)
+
+    edge_img = Image.fromarray((edges * 255).astype(np.uint8), "L")
+    return Image.merge("RGB", (edge_img, edge_img, edge_img))
 
 #: Process-global warm cache of constructed inpaint pipelines (shared by every
 #: diffusers backend in this package), keyed by ``(weight, device, precision)``.
@@ -56,6 +104,28 @@ def _construct_pipeline(weight: str, device: str, precision: str) -> Any:
     dtype = torch.float16 if precision == "fp16" else torch.float32
     pipe = StableDiffusionInpaintPipeline.from_pretrained(
         weight,
+        torch_dtype=dtype,
+        safety_checker=None,
+    )
+    return pipe.to(device)
+
+
+def _construct_controlnet_pipeline(weight: str, device: str, precision: str) -> Any:
+    """Build a ControlNet-conditioned SD inpaint pipeline.
+
+    ``weight`` is the composite ``<sd weight>::<controlnet weight>`` cache key
+    produced by :meth:`StableDiffusionInpaintBackend.inpaint`, so the shared
+    warm cache distinguishes the plain and the conditioned pipeline.
+    """
+    import torch
+    from diffusers import ControlNetModel, StableDiffusionControlNetInpaintPipeline
+
+    sd_weight, cn_weight = weight.split("::", 1)
+    dtype = torch.float16 if precision == "fp16" else torch.float32
+    controlnet = ControlNetModel.from_pretrained(cn_weight, torch_dtype=dtype)
+    pipe = StableDiffusionControlNetInpaintPipeline.from_pretrained(
+        sd_weight,
+        controlnet=controlnet,
         torch_dtype=dtype,
         safety_checker=None,
     )
@@ -124,6 +194,7 @@ class StableDiffusionInpaintBackend:
         steps: int = 30,
         seed: int | None = None,
         precision: str | None = None,
+        controlnet: str = CONTROLNET_OFF,
     ) -> tuple[Any, str, str]:
         """Inpaint the white area of ``mask`` over ``crop`` with Stable Diffusion.
 
@@ -132,13 +203,28 @@ class StableDiffusionInpaintBackend:
         to the original size so the caller's geometry contract is unchanged.
         ``precision`` selects the compute precision (``auto`` by default — fp16
         on CUDA, fp32 on CPU — see :func:`sr_backends.resolve_precision`).
-        Returns ``(image, device_used, precision_used)`` so the caller reports
-        what actually ran. Raises :class:`InpaintUnavailable` if deps/weights
-        vanished since the probe.
+        ``controlnet='canny'`` conditions the repaint on the crop's edge map (a
+        canny ControlNet, weight from ``HGRIPE_CONTROLNET_MODEL``) so structure
+        stays stable across the seam. Returns ``(image, device_used,
+        precision_used)`` so the caller reports what actually ran. Raises
+        :class:`InpaintUnavailable` if deps/weights vanished since the probe,
+        or if the requested ControlNet weight is missing.
         """
         ok, reason = self.available()
         if not ok:
             raise InpaintUnavailable(reason)
+
+        controlnet = (controlnet or CONTROLNET_OFF).strip().lower() or CONTROLNET_OFF
+        if controlnet not in (CONTROLNET_OFF, "canny"):
+            raise InpaintUnavailable(f"unknown controlnet {controlnet!r} (off | canny)")
+        cn_weight: Path | None = None
+        if controlnet == "canny":
+            cn_weight = controlnet_weight_path()
+            if not (cn_weight.is_dir() or cn_weight.is_file()):
+                raise InpaintUnavailable(
+                    f"controlnet weight not found: {cn_weight} "
+                    "(set HGRIPE_CONTROLNET_MODEL or fetch into HGRIPE_MODEL_CACHE)"
+                )
 
         import torch
         from PIL import Image
@@ -151,7 +237,15 @@ class StableDiffusionInpaintBackend:
         # one-shot CLI run just builds it once. The multi-GB checkpoint load /
         # device move therefore happens once per (weight, device, precision)
         # instead of on every call.
-        pipe = _warm_pipeline(str(self.weight_path()), device, precision)
+        if cn_weight is not None:
+            pipe = _warm_pipeline(
+                f"{self.weight_path()}::{cn_weight}",
+                device,
+                precision,
+                constructor=_construct_controlnet_pipeline,
+            )
+        else:
+            pipe = _warm_pipeline(str(self.weight_path()), device, precision)
 
         rgb = crop.convert("RGB")
         msk = mask.convert("L")
@@ -170,16 +264,19 @@ class StableDiffusionInpaintBackend:
         if seed is not None:
             generator = torch.Generator(device=device).manual_seed(int(seed))
 
-        result = pipe(
-            prompt=prompt,
-            negative_prompt=negative_prompt or None,
-            image=rgb,
-            mask_image=msk,
-            strength=float(strength),
-            guidance_scale=float(guidance_scale),
-            num_inference_steps=int(steps),
-            generator=generator,
-        ).images[0]
+        pipe_kwargs: dict[str, Any] = {
+            "prompt": prompt,
+            "negative_prompt": negative_prompt or None,
+            "image": rgb,
+            "mask_image": msk,
+            "strength": float(strength),
+            "guidance_scale": float(guidance_scale),
+            "num_inference_steps": int(steps),
+            "generator": generator,
+        }
+        if cn_weight is not None:
+            pipe_kwargs["control_image"] = canny_condition(rgb)
+        result = pipe(**pipe_kwargs).images[0]
 
         if result.size != (orig_w, orig_h):
             result = result.crop((0, 0, orig_w, orig_h))

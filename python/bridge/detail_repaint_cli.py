@@ -546,6 +546,10 @@ _PROVIDER_ENGINE = "provider"
 # CUDA device, fp32 on CPU (mirrors sr_backends.PRECISION_AUTO; kept local so
 # this module stays torch-free at import time).
 _PRECISION_AUTO = "auto"
+# Default structural-conditioning selection for the local backend: no
+# ControlNet (mirrors inpaint_backends.CONTROLNET_OFF; kept local so this
+# module stays torch-free at import time).
+_CONTROLNET_OFF = "off"
 
 
 def _inner_mask(size: tuple[int, int], inner: list[int]) -> "np.ndarray":
@@ -599,6 +603,14 @@ def repaint(args: argparse.Namespace) -> dict[str, Any]:
     ).strip().lower() or _PRECISION_AUTO
     precision_used: str | None = None
     device_used: str | None = None
+
+    # ``controlnet`` requests optional structural conditioning from the local
+    # backend ("off" | "canny"); a backend that cannot honour the request raises
+    # ``InpaintUnavailable`` so the run degrades to the provider (recorded
+    # truthfully) instead of silently dropping the conditioning.
+    controlnet_requested = (
+        getattr(args, "controlnet", None) or _CONTROLNET_OFF
+    ).strip().lower() or _CONTROLNET_OFF
 
     repainted: list[dict[str, Any]] = []
     skipped: list[dict[str, Any]] = []
@@ -657,6 +669,7 @@ def repaint(args: argparse.Namespace) -> dict[str, Any]:
                     steps=int(args.steps),
                     seed=seed,
                     precision=precision_requested,
+                    controlnet=controlnet_requested,
                 )
             except InpaintUnavailable as err:
                 engine_fallback_reason = err.reason
@@ -690,6 +703,7 @@ def repaint(args: argparse.Namespace) -> dict[str, Any]:
         "device": device_used,
         "precision": precision_used,
         "precision_requested": precision_requested,
+        "controlnet_requested": controlnet_requested,
         "requested_count": len(regions),
         "repainted_count": len(repainted),
     }
@@ -879,6 +893,14 @@ def build_parser() -> argparse.ArgumentParser:
         help=(
             "compute precision for the torch backend: auto (default, fp16 on cuda "
             "else fp32) | fp32 | fp16 (degrades to fp32 on a cpu run)"
+        ),
+    )
+    rep.add_argument(
+        "--controlnet",
+        default=_CONTROLNET_OFF,
+        help=(
+            "structural conditioning for the sd_inpaint backend: off (default) | "
+            "canny (edge-conditioned; needs the HGRIPE_CONTROLNET_MODEL weight)"
         ),
     )
     rep.add_argument(

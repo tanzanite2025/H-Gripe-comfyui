@@ -259,6 +259,10 @@ pub(crate) struct LocalRepaintResult {
     /// `fp16` degrades to `fp32` on a CPU run.
     #[serde(default)]
     pub(crate) precision_requested: String,
+    /// Structural conditioning the node asked for (`off`/`canny`); a backend
+    /// that cannot honour it degrades to the provider with a recorded reason.
+    #[serde(default)]
+    pub(crate) controlnet_requested: String,
     #[serde(default)]
     pub(crate) requested_count: u32,
     #[serde(default)]
@@ -289,6 +293,7 @@ pub(crate) fn local_repaint_regions(
     steps: Option<i64>,
     seed: Option<i64>,
     precision: Option<String>,
+    controlnet: Option<String>,
     output_dir: Option<String>,
     output_name: Option<String>,
 ) -> Result<LocalRepaintResult, String> {
@@ -322,6 +327,8 @@ pub(crate) fn local_repaint_regions(
         seed.unwrap_or(-1).to_string(),
         "--precision".into(),
         precision.as_deref().unwrap_or("auto").into(),
+        "--controlnet".into(),
+        controlnet.as_deref().unwrap_or("off").into(),
         "--output-dir".into(),
         output_dir.as_deref().unwrap_or("").into(),
         "--output-name".into(),

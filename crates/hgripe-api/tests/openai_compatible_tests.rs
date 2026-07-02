@@ -1,5 +1,7 @@
 use hgripe_api::providers::openai_compatible::OpenAiCompatibleProvider;
-use hgripe_api::{ApiBroker, ApiStatus, ApiTask};
+use hgripe_api::{
+    ApiBroker, ApiStatus, ApiTask, BrokerError, CancellationToken, ProviderExecutionContext,
+};
 use serde_json::json;
 use std::fs;
 use std::sync::atomic::{AtomicU64, Ordering};
@@ -616,6 +618,56 @@ async fn spawn_once_binary_server(
     });
 
     (format!("http://{addr}"), request_rx)
+}
+
+#[tokio::test]
+async fn openai_compatible_cancel_aborts_in_flight_request() {
+    let (base_url, request_started_rx, release_tx) = spawn_stalled_server().await;
+
+    let mut broker = ApiBroker::new();
+    broker.register_provider(OpenAiCompatibleProvider::default());
+
+    let mut task = ApiTask::new("openai_compatible", "chat.completions");
+    task.params.insert("base_url".into(), json!(base_url));
+    task.params.insert("api_key".into(), json!("test-key"));
+    task.params.insert("model".into(), json!("test-model"));
+    task.inputs.insert("prompt".into(), json!("say hello"));
+
+    let cancellation = CancellationToken::new();
+    let context = ProviderExecutionContext::new(cancellation.clone());
+    let run = tokio::spawn(async move { broker.execute_with_context(task, context).await });
+
+    request_started_rx
+        .await
+        .expect("server should observe the request");
+    cancellation.cancel();
+
+    let error = run
+        .await
+        .expect("broker task should join")
+        .expect_err("cancelled in-flight request should error");
+    assert!(matches!(error, BrokerError::Cancelled));
+    drop(release_tx);
+}
+
+async fn spawn_stalled_server() -> (String, oneshot::Receiver<()>, oneshot::Sender<()>) {
+    let listener = TcpListener::bind("127.0.0.1:0")
+        .await
+        .expect("test server should bind");
+    let addr = listener.local_addr().expect("test server should have addr");
+    let (started_tx, started_rx) = oneshot::channel();
+    let (release_tx, release_rx) = oneshot::channel::<()>();
+
+    tokio::spawn(async move {
+        let (mut socket, _) = listener.accept().await.expect("test server should accept");
+        let _request = read_http_request(&mut socket).await;
+        let _ = started_tx.send(());
+        // Hold the connection open (no response) until the test releases it,
+        // so the request stays in flight while the token is cancelled.
+        let _ = release_rx.await;
+    });
+
+    (format!("http://{addr}"), started_rx, release_tx)
 }
 
 async fn read_http_request(socket: &mut tokio::net::TcpStream) -> String {

@@ -62,7 +62,13 @@ impl Provider for CustomHttpProvider {
         let task = apply_provider_profile(task)?;
         match task.operation.as_str() {
             "async_job" | "http.async_job" => self.execute_async_job(&task, context).await,
-            _ => self.execute_request(&task).await,
+            // A plain synchronous request has no remote job to cancel; the
+            // native mechanism is aborting the in-flight HTTP request, which
+            // dropping the future does.
+            _ => tokio::select! {
+                result = self.execute_request(&task) => result,
+                _ = context.cancellation().cancelled() => Err(BrokerError::Cancelled),
+            },
         }
     }
 }

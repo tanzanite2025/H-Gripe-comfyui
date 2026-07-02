@@ -2,7 +2,7 @@ use crate::credentials::{load_credential_ref, CredentialEntry};
 use crate::model::{ApiErrorInfo, ApiResult, ApiStatus, ApiTask, OutputFile};
 use crate::outputs::write_task_output_bytes;
 use crate::profiles::{load_provider_profile, ProviderProfile};
-use crate::provider::{BrokerError, BrokerResult, Provider};
+use crate::provider::{BrokerError, BrokerResult, Provider, ProviderExecutionContext};
 use async_trait::async_trait;
 use base64::engine::general_purpose::STANDARD as BASE64_STANDARD;
 use base64::Engine;
@@ -80,13 +80,34 @@ impl Provider for OpenAiCompatibleProvider {
     }
 
     async fn execute(&self, task: &ApiTask) -> BrokerResult<ApiResult> {
+        self.execute_with_context(task, &ProviderExecutionContext::default())
+            .await
+    }
+
+    async fn execute_with_context(
+        &self,
+        task: &ApiTask,
+        context: &ProviderExecutionContext,
+    ) -> BrokerResult<ApiResult> {
+        context.check_cancelled()?;
         let task = apply_provider_profile(task)?;
-        match task.operation.as_str() {
-            "audio.speech" => self.execute_audio_speech(&task).await,
-            "audio.transcriptions" | "audio.translations" => self.execute_audio_text(&task).await,
-            "image.edit" => self.execute_image_edit(&task).await,
-            "image.generate" => self.execute_image(&task).await,
-            _ => self.execute_chat(&task).await,
+        // OpenAI-style synchronous endpoints have no server-side cancel; the
+        // native mechanism is aborting the in-flight HTTP request, which
+        // dropping the future does.
+        let request = async {
+            match task.operation.as_str() {
+                "audio.speech" => self.execute_audio_speech(&task).await,
+                "audio.transcriptions" | "audio.translations" => {
+                    self.execute_audio_text(&task).await
+                }
+                "image.edit" => self.execute_image_edit(&task).await,
+                "image.generate" => self.execute_image(&task).await,
+                _ => self.execute_chat(&task).await,
+            }
+        };
+        tokio::select! {
+            result = request => result,
+            _ = context.cancellation().cancelled() => Err(BrokerError::Cancelled),
         }
     }
 }

@@ -1,5 +1,7 @@
 use hgripe_api::providers::custom_http::CustomHttpProvider;
-use hgripe_api::{ApiBroker, ApiStatus, ApiTask, CancellationToken, ProviderExecutionContext};
+use hgripe_api::{
+    ApiBroker, ApiStatus, ApiTask, BrokerError, CancellationToken, ProviderExecutionContext,
+};
 use serde_json::json;
 use std::fs;
 use std::sync::atomic::{AtomicU64, Ordering};
@@ -394,6 +396,54 @@ async fn custom_http_async_job_cancel_sends_cancel_request() {
     assert!(cancel_request.contains("POST /jobs/job-cancel/cancel HTTP/1.1"));
     assert!(cancel_request.contains(r#""reason":"user_cancelled""#));
     assert_eq!(result.output_json.unwrap()["cancel"]["sent"], json!(true));
+}
+
+#[tokio::test]
+async fn custom_http_request_cancel_aborts_in_flight_request() {
+    let (url, request_started_rx, release_tx) = spawn_stalled_server().await;
+
+    let mut broker = ApiBroker::new();
+    broker.register_provider(CustomHttpProvider::default());
+
+    let mut task = ApiTask::new("custom_http", "request");
+    task.params.insert("method".into(), json!("GET"));
+    task.params.insert("url".into(), json!(url));
+
+    let cancellation = CancellationToken::new();
+    let context = ProviderExecutionContext::new(cancellation.clone());
+    let run = tokio::spawn(async move { broker.execute_with_context(task, context).await });
+
+    request_started_rx
+        .await
+        .expect("server should observe the request");
+    cancellation.cancel();
+
+    let error = run
+        .await
+        .expect("broker task should join")
+        .expect_err("cancelled in-flight request should error");
+    assert!(matches!(error, BrokerError::Cancelled));
+    drop(release_tx);
+}
+
+async fn spawn_stalled_server() -> (String, oneshot::Receiver<()>, oneshot::Sender<()>) {
+    let listener = TcpListener::bind("127.0.0.1:0")
+        .await
+        .expect("test server should bind");
+    let addr = listener.local_addr().expect("test server should have addr");
+    let (started_tx, started_rx) = oneshot::channel();
+    let (release_tx, release_rx) = oneshot::channel::<()>();
+
+    tokio::spawn(async move {
+        let (mut socket, _) = listener.accept().await.expect("test server should accept");
+        let _request = read_http_request(&mut socket).await;
+        let _ = started_tx.send(());
+        // Hold the connection open (no response) until the test releases it,
+        // so the request stays in flight while the token is cancelled.
+        let _ = release_rx.await;
+    });
+
+    (format!("http://{addr}"), started_rx, release_tx)
 }
 
 async fn spawn_once_json_server(

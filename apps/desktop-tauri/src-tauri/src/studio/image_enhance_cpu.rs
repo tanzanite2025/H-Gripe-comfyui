@@ -80,8 +80,14 @@ pub(super) fn try_enhance(p: &CpuEnhanceParams) -> Result<Option<EnhanceImageRes
         _ => return Ok(None),
     };
     let source_mode = studio_image::source_mode_label(probe.color);
+    // Our own ProPhoto manual products are colour-managed to sRGB by the
+    // loader, so their profile no longer describes the output samples and must
+    // not ride onto it (the Python bridge drops it the same way).
     let icc_profile = if matches!(source_mode.as_str(), "RGB" | "RGBA" | "L" | "LA") {
-        probe.icc.clone()
+        probe
+            .icc
+            .clone()
+            .filter(|icc| !super::working_image::is_prophoto_icc(icc))
     } else {
         None
     };
@@ -687,6 +693,47 @@ mod tests {
         p.preserve_text_logo = false;
         let uncapped = try_enhance(&p).unwrap().unwrap();
         assert_eq!(uncapped.enhance_report.texture_strength, 0.7);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn prophoto_manual_product_egresses_srgb_without_stale_profile() {
+        use crate::studio::working_image::{prophoto_icc, WorkingImage, WorkingSpace};
+
+        let dir = unique_tmp("prophoto");
+        std::fs::create_dir_all(&dir).unwrap();
+        let src = dir.join("in.png");
+        // An 8x8 ProPhoto mid-grey surface, written exactly like a manual-path
+        // product (16-bit PNG with the ProPhoto profile embedded).
+        let pixels: Vec<u16> = (0..8 * 8)
+            .flat_map(|_| [32768u16, 32768, 32768, 65535])
+            .collect();
+        let img = WorkingImage {
+            width: 8,
+            height: 8,
+            pixels,
+            space: WorkingSpace::ProPhoto,
+            icc: Some(prophoto_icc().to_vec()),
+        };
+        studio_image::write_working_png(&src, &img).unwrap();
+
+        let p = params(src.to_str().unwrap(), dir.to_str().unwrap());
+        let result = try_enhance(&p).unwrap().expect("cpu fast path");
+
+        // The loader colour-manages ProPhoto to sRGB, so the stale profile
+        // must not be embedded on the output.
+        let probe = studio_image::probe_source(Path::new(&result.enhanced_image)).unwrap();
+        assert!(
+            probe.icc.is_none(),
+            "stale ProPhoto profile must not ride onto the sRGB output"
+        );
+        // ProPhoto mid-grey (32768) colour-manages to ~146 in sRGB; a naive
+        // (unmanaged) read would leave it at 128.
+        let out = image::open(&result.enhanced_image).unwrap().to_rgba8();
+        let px = out.get_pixel(4, 4).0;
+        for c in &px[..3] {
+            assert!((i32::from(*c) - 146).abs() <= 4, "got {px:?}");
+        }
         let _ = std::fs::remove_dir_all(&dir);
     }
 

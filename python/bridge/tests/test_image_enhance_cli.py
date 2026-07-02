@@ -247,6 +247,50 @@ def test_realesrgan_real_inference_when_stack_present(tmp_path: Path) -> None:
     assert Image.open(out["enhanced_image"]).size == (48, 36)
 
 
+def _diffusers_stack_importable() -> bool:
+    try:
+        import diffusers  # noqa: F401
+        import torch  # noqa: F401
+        import transformers  # noqa: F401
+    except Exception:
+        return False
+    return True
+
+
+requires_diffusers = pytest.mark.skipif(
+    not _diffusers_stack_importable(),
+    reason="torch / diffusers / transformers not importable (opt-in diffusion SR gate)",
+)
+
+
+@requires_diffusers
+@pytest.mark.parametrize(("engine", "env_var"), [("ccsr", "HGRIPE_CCSR_MODEL"), ("supir", "HGRIPE_SUPIR_MODEL")])
+def test_diffusion_sr_real_inference_with_tiny_snapshot(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, engine: str, env_var: str
+) -> None:
+    # The real diffusion SR path, end-to-end through the CLI: the generic
+    # DiffusionPipeline.from_pretrained load of a tiny synthesised img2img
+    # snapshot (no download), the denoise loop, the VAE decode, and truthful
+    # telemetry. Runs only where torch + diffusers + transformers are installed
+    # (the opt-in lane).
+    from tiny_diffusers import save_tiny_sd_img2img
+
+    snapshot = tmp_path / engine
+    save_tiny_sd_img2img(snapshot)
+    monkeypatch.setenv(env_var, str(snapshot))
+
+    src = _make_rgb(tmp_path / "in.png", (32, 24))
+    out = _run(src, target_width=64, target_height=48, engine=engine, output_dir=tmp_path)
+    report = out["enhance_report"]
+    assert report["engine"] == engine
+    assert report["engine_requested"] == engine
+    assert report["engine_fallback_reason"] is None
+    assert report["backend_model"] == engine
+    assert report["device"] in ("cpu", "cuda")
+    assert report["precision"] in ("fp32", "fp16")
+    assert Image.open(out["enhanced_image"]).size == (64, 48)
+
+
 def test_default_engine_is_cpu(tmp_path: Path) -> None:
     src = _make_rgb(tmp_path / "in.png", (20, 20))
     report = _run(src, target_width=40, target_height=40, output_dir=tmp_path)["enhance_report"]

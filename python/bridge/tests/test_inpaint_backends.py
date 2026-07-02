@@ -13,6 +13,7 @@ from __future__ import annotations
 import json
 import sys
 from pathlib import Path
+from typing import Any
 
 import pytest
 
@@ -224,94 +225,26 @@ requires_diffusers = pytest.mark.skipif(
 )
 
 
-def _make_tiny_sd_inpaint_snapshot(path: Path) -> None:
-    """Save a tiny random-weight SD inpaint pipeline in diffusers format.
+def _run_repaint_e2e(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    *,
+    engine: str,
+    env_var: str,
+    save_snapshot: Any,
+) -> dict[str, Any]:
+    """Drive the CLI ``repaint`` subcommand for real over a tiny snapshot.
 
-    Mirrors the synthesised-ONNX lanes: no hub download, just the smallest
-    components a ``StableDiffusionInpaintPipeline`` accepts, so the real
-    ``from_pretrained`` -> denoise-loop -> VAE-decode path runs in seconds on
-    CPU. The hand-written CLIP tokenizer keeps the snapshot hermetic.
+    The real diffusers path, end-to-end: ``from_pretrained`` on a
+    diffusers-format snapshot, the denoise loop, the VAE decode, and truthful
+    device/precision telemetry. Runs only where torch + diffusers +
+    transformers are installed (the opt-in lane).
     """
-    import torch
-    from diffusers import (
-        AutoencoderKL,
-        PNDMScheduler,
-        StableDiffusionInpaintPipeline,
-        UNet2DConditionModel,
-    )
-    from transformers import CLIPTextConfig, CLIPTextModel, CLIPTokenizer
-
-    torch.manual_seed(0)
-    unet = UNet2DConditionModel(
-        block_out_channels=(32, 64),
-        layers_per_block=2,
-        sample_size=32,
-        in_channels=9,  # 4 latent + 4 masked-latent + 1 mask: the inpaint UNet layout
-        out_channels=4,
-        down_block_types=("DownBlock2D", "CrossAttnDownBlock2D"),
-        up_block_types=("CrossAttnUpBlock2D", "UpBlock2D"),
-        cross_attention_dim=32,
-    )
-    vae = AutoencoderKL(
-        block_out_channels=(32, 64),
-        in_channels=3,
-        out_channels=3,
-        down_block_types=("DownEncoderBlock2D", "DownEncoderBlock2D"),
-        up_block_types=("UpDecoderBlock2D", "UpDecoderBlock2D"),
-        latent_channels=4,
-    )
-    text_encoder = CLIPTextModel(
-        CLIPTextConfig(
-            bos_token_id=0,
-            eos_token_id=2,
-            hidden_size=32,
-            intermediate_size=37,
-            layer_norm_eps=1e-05,
-            num_attention_heads=4,
-            num_hidden_layers=5,
-            pad_token_id=1,
-            vocab_size=1000,
-        )
-    )
-    # A minimal CLIP BPE vocab: specials + each ASCII letter as a mid-word and
-    # an end-of-word token, so any lowercase prompt tokenises without merges.
-    letters = "abcdefghijklmnopqrstuvwxyz"
-    vocab: dict[str, int] = {"<|startoftext|>": 0, "<|endoftext|>": 1}
-    for ch in letters:
-        vocab[ch] = len(vocab)
-        vocab[ch + "</w>"] = len(vocab)
-    vocab_file = path.parent / "vocab.json"
-    merges_file = path.parent / "merges.txt"
-    vocab_file.write_text(json.dumps(vocab), encoding="utf-8")
-    merges_file.write_text("#version: 0.2\n", encoding="utf-8")
-    tokenizer = CLIPTokenizer(str(vocab_file), str(merges_file), model_max_length=77)
-
-    pipe = StableDiffusionInpaintPipeline(
-        unet=unet,
-        vae=vae,
-        text_encoder=text_encoder,
-        tokenizer=tokenizer,
-        scheduler=PNDMScheduler(skip_prk_steps=True),
-        safety_checker=None,
-        feature_extractor=None,
-        requires_safety_checker=False,
-    )
-    pipe.save_pretrained(str(path))
-
-
-@requires_diffusers
-def test_sd_inpaint_real_inference_with_tiny_snapshot(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    # The real diffusers path, end-to-end through the CLI ``repaint``
-    # subcommand: from_pretrained on a diffusers-format snapshot, the denoise
-    # loop, the VAE decode, and truthful device/precision telemetry. Runs only
-    # where torch + diffusers + transformers are installed (the opt-in lane).
     import detail_repaint_cli as cli
 
-    snapshot = tmp_path / "sd-inpaint"
-    _make_tiny_sd_inpaint_snapshot(snapshot)
-    monkeypatch.setenv("HGRIPE_INPAINT_MODEL", str(snapshot))
+    snapshot = tmp_path / engine.replace("_", "-")
+    save_snapshot(snapshot)
+    monkeypatch.setenv(env_var, str(snapshot))
 
     crop_path = tmp_path / "crop.png"
     Image.new("RGB", (64, 64), (150, 90, 40)).save(crop_path)
@@ -332,7 +265,7 @@ def test_sd_inpaint_real_inference_with_tiny_snapshot(
             "--manifest",
             json.dumps(manifest),
             "--engine",
-            "sd_inpaint",
+            engine,
             "--prompt",
             "fix text",
             "--steps",
@@ -345,9 +278,9 @@ def test_sd_inpaint_real_inference_with_tiny_snapshot(
     )
     result = cli.repaint(args)
 
-    assert result["engine"] == "sd_inpaint"
+    assert result["engine"] == engine
     assert result["engine_fallback_reason"] is None
-    assert result["backend_model"] == "sd-inpaint"
+    assert result["backend_model"] == engine.replace("_", "-")
     assert result["device"] in ("cpu", "cuda")
     assert result["precision"] in ("fp32", "fp16")
     repainted = result["repainted"]
@@ -355,6 +288,52 @@ def test_sd_inpaint_real_inference_with_tiny_snapshot(
     out = Image.open(repainted[0]["path"])
     assert out.size == (64, 64)
     assert out.mode == "RGBA"
+    return result
+
+
+@requires_diffusers
+def test_sd_inpaint_real_inference_with_tiny_snapshot(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from tiny_diffusers import save_tiny_sd_inpaint
+
+    _run_repaint_e2e(
+        tmp_path,
+        monkeypatch,
+        engine="sd_inpaint",
+        env_var="HGRIPE_INPAINT_MODEL",
+        save_snapshot=save_tiny_sd_inpaint,
+    )
+
+
+@requires_diffusers
+def test_sdxl_inpaint_real_inference_with_tiny_snapshot(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from tiny_diffusers import save_tiny_sdxl_inpaint
+
+    _run_repaint_e2e(
+        tmp_path,
+        monkeypatch,
+        engine="sdxl_inpaint",
+        env_var="HGRIPE_SDXL_INPAINT_MODEL",
+        save_snapshot=save_tiny_sdxl_inpaint,
+    )
+
+
+@requires_diffusers
+def test_flux_fill_real_inference_with_tiny_snapshot(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from tiny_diffusers import save_tiny_flux_fill
+
+    _run_repaint_e2e(
+        tmp_path,
+        monkeypatch,
+        engine="flux_fill",
+        env_var="HGRIPE_FLUX_FILL_MODEL",
+        save_snapshot=save_tiny_flux_fill,
+    )
 
 
 def test_probe_survives_a_broken_backend(monkeypatch: pytest.MonkeyPatch) -> None:

@@ -12,7 +12,8 @@ on:
   # Opt-in end-to-end checks that run real model inference: the weights are
   # never committed, so the gated tests (`vitmatte_inference_when_weight_present`,
   # `test_realesrgan_real_inference_when_stack_present`,
-  # `test_sd_inpaint_real_inference_with_tiny_snapshot`) skip on every normal
+  # `test_{sd_inpaint,sdxl_inpaint,flux_fill}_real_inference_with_tiny_snapshot`,
+  # `test_diffusion_sr_real_inference_with_tiny_snapshot`) skip on every normal
   # run. Trigger this manually to fetch/synthesise the weights and exercise the
   # real inference paths.
   workflow_dispatch:
@@ -165,11 +166,12 @@ jobs:
   diffusers-inference:
     name: python bridge (diffusers inference)
     # Only on manual dispatch (the torch + diffusers install is heavy for the
-    # per-PR matrix): runs the gated Detail Repaint real-inference test, which
-    # synthesises a tiny random-weight SD inpaint snapshot in diffusers format
-    # (no weight download, mirroring the synthesised-ONNX lane) and exercises
-    # the real from_pretrained -> denoise-loop -> VAE-decode path through the
-    # CLI `repaint` subcommand. Skips on every normal run.
+    # per-PR matrix): runs the gated Detail Repaint (sd_inpaint / sdxl_inpaint /
+    # flux_fill) and Image Enhance diffusion SR (ccsr / supir) real-inference
+    # tests, which synthesise tiny random-weight snapshots in diffusers format
+    # (no weight download, mirroring the synthesised-ONNX lane) and exercise
+    # the real from_pretrained -> denoise-loop -> VAE-decode paths through the
+    # CLI `repaint` / enhance subcommands. Skips on every normal run.
     if: github.event_name == 'workflow_dispatch'
     runs-on: ubuntu-latest
     steps:

@@ -142,11 +142,13 @@ the paste-back carry honest colour; the source's original mode is recorded as
   `pytest python/bridge/tests`).
 - `python/bridge/tests/test_inpaint_backends.py` — the engine seam (resolve /
   probe / weight paths / unavailable fallback / ControlNet gating), plus the
-  gated `test_sd_inpaint_real_inference_with_tiny_snapshot` real-inference e2e:
-  it synthesises a tiny random-weight SD inpaint snapshot in diffusers format
-  (no download) and runs the real `from_pretrained` → denoise loop → VAE decode
-  through the CLI `repaint` subcommand. It skips without `torch` / `diffusers` /
+  gated `test_{sd_inpaint,sdxl_inpaint,flux_fill}_real_inference_with_tiny_snapshot`
+  real-inference e2es: each synthesises a tiny random-weight snapshot in
+  diffusers format (no download; SD inpaint UNet / dual-encoder SDXL /
+  flow-matching Flux transformer, built by `tests/tiny_diffusers.py`) and runs
+  the real `from_pretrained` → denoise loop → VAE decode through the CLI
+  `repaint` subcommand. They skip without `torch` / `diffusers` /
   `transformers`; the manual-dispatch **`python bridge (diffusers inference)`**
-  CI lane installs the CPU torch stack and runs it for real.
+  CI lane installs the CPU torch stack and runs them for real.
 - `src-tauri/src/studio/exec.rs` — `PrepareRepaintResult` / `RepaintReport`
   deserialization of the v1 hardening fields (plus legacy JSON defaults).

@@ -79,7 +79,12 @@ Image Enhance is a `local` card (see `executor-split-and-psd-chain-hardening.md`
   `realesrgan-e2e` lane installs the CPU torch stack, fetches the
   sha256-checked weight (`scripts/fetch-realesrgan.sh` / `.ps1`), and runs the
   gated `test_realesrgan_real_inference_when_stack_present` e2e (skips on
-  every normal run).
+  every normal run). The `ccsr` / `supir` diffusion pair runs on the
+  manual-dispatch `python bridge (diffusers inference)` lane: the gated
+  `test_diffusion_sr_real_inference_with_tiny_snapshot` e2e synthesises a tiny
+  random-weight img2img snapshot in diffusers format (no download) and drives
+  the real `DiffusionPipeline.from_pretrained` → denoise loop → VAE decode
+  through the CLI.
 
 ### 1.4 Dependencies & risks
 `torch` + CUDA, `realesrgan`/`spandrel`, model weights (hundreds of MB–GB).
@@ -182,11 +187,11 @@ to the provider with a recorded reason) + the opt-in real-inference CI lane
 have landed** (the rest of this section is the design it was built to): the
 manual-dispatch **`python bridge (diffusers inference)`** job installs the CPU
 torch stack (`torch` / `diffusers` / `transformers`) and runs the gated
-`test_sd_inpaint_real_inference_with_tiny_snapshot` e2e, which synthesises a
-tiny random-weight SD inpaint snapshot in diffusers format (no weight
-download, like the synthesised-ONNX lanes) and drives the real
-`from_pretrained` → denoise loop → VAE decode through the CLI `repaint`
-subcommand (skips on every normal run). The selector
+`test_{sd_inpaint,sdxl_inpaint,flux_fill}_real_inference_with_tiny_snapshot`
+e2es — **all three local engines** — each synthesising a tiny random-weight
+snapshot in diffusers format (no weight download, like the synthesised-ONNX
+lanes) and driving the real `from_pretrained` → denoise loop → VAE decode
+through the CLI `repaint` subcommand (skips on every normal run). The selector
 is the local card's
 **`engine` param** (`provider` | `sd_inpaint` | …); `provider` stays the default
 and the fallback.

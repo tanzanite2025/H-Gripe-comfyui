@@ -316,15 +316,15 @@ export const NODE_ZH: Record<string, NodeSpecZh> = {
       },
       engine: {
         label: "引擎",
-        hint: "cpu = 内置 Lanczos+锐化（始终可用）；realesrgan = 可选 GPU/CPU 模型，权重/依赖缺失时回落 cpu",
+        hint: "cpu = 内置 Lanczos+锐化（始终可用）；realesrgan / ccsr / supir = 可选 GPU/CPU 模型（ccsr = 忠实扩散超分，supir = 极致画质扩散超分），权重/依赖缺失时回落 cpu",
       },
       device: {
         label: "设备",
-        hint: "realesrgan 放大器的计算设备：auto（有 CUDA 用 CUDA，否则 CPU）| cpu | cuda（无加速器时回落 CPU）；cpu 路径忽略此项",
+        hint: "GPU 放大器的计算设备：auto（有 CUDA 用 CUDA，否则 CPU）| cpu | cuda（无加速器时回落 CPU）；cpu 路径忽略此项",
       },
       precision: {
         label: "精度",
-        hint: "realesrgan 放大器的计算精度：auto（CUDA 上 fp16，否则 fp32）| fp32 | fp16（CPU 运行时回落 fp32）；cpu 路径忽略此项",
+        hint: "GPU 放大器的计算精度：auto（CUDA 上 fp16，否则 fp32）| fp32 | fp16（CPU 运行时回落 fp32）；cpu 路径忽略此项",
       },
       target_width: { label: "目标宽度", hint: "显式目标像素（0 = 由所连边界或预设缩放自动推算）" },
       target_height: { label: "目标高度", hint: "显式目标像素（0 = 由所连边界或预设缩放自动推算）" },

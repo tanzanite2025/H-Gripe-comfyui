@@ -304,9 +304,11 @@ def device_probe() -> dict[str, Any]:
 
 # Imported lazily so this module stays torch-free at import time.
 def _registry() -> dict[str, SrBackend]:
+    from .ccsr import CcsrBackend
     from .realesrgan import RealEsrganBackend
+    from .supir import SupirBackend
 
-    backends: list[SrBackend] = [RealEsrganBackend()]
+    backends: list[SrBackend] = [RealEsrganBackend(), CcsrBackend(), SupirBackend()]
     return {b.id: b for b in backends}
 
 

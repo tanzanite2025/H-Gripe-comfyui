@@ -19,8 +19,10 @@ use serde::{Deserialize, Serialize};
 
 /// Engine id -> the env var its Python backend resolves the weight from.
 /// Covers every bridge engine the cross-card `probe_engines` report lists.
-const ENGINE_ENV_VARS: [(&str, &str); 7] = [
+const ENGINE_ENV_VARS: [(&str, &str); 9] = [
     ("realesrgan", "HGRIPE_REALESRGAN_MODEL"),
+    ("ccsr", "HGRIPE_CCSR_MODEL"),
+    ("supir", "HGRIPE_SUPIR_MODEL"),
     ("sd_inpaint", "HGRIPE_INPAINT_MODEL"),
     ("sdxl_inpaint", "HGRIPE_SDXL_INPAINT_MODEL"),
     ("flux_fill", "HGRIPE_FLUX_FILL_MODEL"),
@@ -251,6 +253,8 @@ mod tests {
             engines,
             [
                 "realesrgan",
+                "ccsr",
+                "supir",
                 "sd_inpaint",
                 "sdxl_inpaint",
                 "flux_fill",

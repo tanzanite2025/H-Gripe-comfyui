@@ -177,3 +177,71 @@ def test_realesrgan_weight_path_env_override(monkeypatch: pytest.MonkeyPatch, tm
     weight = tmp_path / "custom.pth"
     monkeypatch.setenv("HGRIPE_REALESRGAN_MODEL", str(weight))
     assert RealEsrganBackend().weight_path() == weight
+
+
+_DIFFUSION_BACKENDS = [
+    ("ccsr", "HGRIPE_CCSR_MODEL", "ccsr"),
+    ("supir", "HGRIPE_SUPIR_MODEL", "supir"),
+]
+
+
+def _diffusion_backend(engine: str):
+    from sr_backends.ccsr import CcsrBackend
+    from sr_backends.supir import SupirBackend
+
+    return {"ccsr": CcsrBackend, "supir": SupirBackend}[engine]()
+
+
+@pytest.mark.parametrize(("engine", "env_var", "weight_dir"), _DIFFUSION_BACKENDS)
+def test_resolve_diffusion_sr_backend(engine: str, env_var: str, weight_dir: str) -> None:
+    backend = resolve(engine)
+    assert backend is not None
+    assert backend.id == engine
+    assert backend.native_scale == 4
+
+
+@pytest.mark.parametrize(("engine", "env_var", "weight_dir"), _DIFFUSION_BACKENDS)
+def test_diffusion_sr_weight_path(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path, engine: str, env_var: str, weight_dir: str
+) -> None:
+    backend = _diffusion_backend(engine)
+    monkeypatch.setenv(env_var, str(tmp_path / "snapshot"))
+    assert backend.weight_path() == tmp_path / "snapshot"
+    monkeypatch.delenv(env_var, raising=False)
+    monkeypatch.setenv("HGRIPE_MODEL_CACHE", str(tmp_path))
+    assert backend.weight_path() == tmp_path / weight_dir
+
+
+@pytest.mark.parametrize(("engine", "env_var", "weight_dir"), _DIFFUSION_BACKENDS)
+def test_diffusion_sr_unavailable_without_deps_or_weight(
+    monkeypatch: pytest.MonkeyPatch, engine: str, env_var: str, weight_dir: str
+) -> None:
+    # No weight snapshot on disk (and torch/diffusers likely absent): the probe
+    # must report unavailable with a reason, never crash or import torch.
+    monkeypatch.delenv(env_var, raising=False)
+    monkeypatch.setenv("HGRIPE_MODEL_CACHE", "/definitely/not/here")
+    ok, reason = _diffusion_backend(engine).available()
+    assert ok is False
+    assert reason
+
+
+@pytest.mark.parametrize(("engine", "env_var", "weight_dir"), _DIFFUSION_BACKENDS)
+def test_diffusion_sr_upscale_raises_when_unavailable(
+    monkeypatch: pytest.MonkeyPatch, engine: str, env_var: str, weight_dir: str
+) -> None:
+    pytest.importorskip("PIL")
+    from PIL import Image
+
+    monkeypatch.delenv(env_var, raising=False)
+    monkeypatch.setenv("HGRIPE_MODEL_CACHE", "/definitely/not/here")
+    img = Image.new("RGB", (8, 8), (120, 60, 30))
+    with pytest.raises(BackendUnavailable):
+        _diffusion_backend(engine).upscale(img, 4.0)
+
+
+def test_probe_reports_diffusion_sr_entries() -> None:
+    engines = probe()["engines"]
+    for engine, _env, weight_dir in _DIFFUSION_BACKENDS:
+        assert engine in engines
+        assert engines[engine]["accelerated"] is True
+        assert engines[engine]["weight"]["path"].endswith(weight_dir)

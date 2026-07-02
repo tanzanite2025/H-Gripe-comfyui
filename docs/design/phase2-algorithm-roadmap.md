@@ -51,16 +51,19 @@ detail** while preserving identity and text:
   good first integration target.
 
 ### 1.3 Integration plan
-**Status: the seam + Real-ESRGAN have landed** (the rest of this section is the
-design it was built to; ⛔ items are CCSR/SupIR + real-inference CI).
+**Status: the seam + Real-ESRGAN + the CCSR (`ccsr`) and SupIR (`supir`)
+diffusion SR backends have landed** (the rest of this section is the design it
+was built to; the ⛔ item is real-inference CI).
 The selector is the local card's **`engine` param** (`cpu` | `realesrgan` | …),
 not `--profile-ref` — `profile_ref` is the API-card credentials concept, and
 Image Enhance is a `local` card (see `executor-split-and-psd-chain-hardening.md`).
 
 - ✅ Add an `--engine <id>` argument. When non-`cpu`, the CLI dispatches to a
-  backend module under `python/bridge/sr_backends/` (`realesrgan.py` landed;
-  `ccsr.py`, `supir.py` ⛔) selected by the registry; when `cpu`/absent the
-  current CPU path runs unchanged.
+  backend module under `python/bridge/sr_backends/` (`realesrgan.py`, `ccsr.py`
+  and `supir.py` landed — the diffusion pair loads a diffusers-format weight
+  snapshot from `HGRIPE_CCSR_MODEL` / `HGRIPE_SUPIR_MODEL`, sharing a warm
+  pipeline cache) selected by the registry; when `cpu`/absent the current CPU
+  path runs unchanged.
 - ✅ Backends declare weights + device requirements; weights resolve from a
   cache dir (env `HGRIPE_MODEL_CACHE`, or `HGRIPE_REALESRGAN_MODEL`), **not**
   bundled in the installer (keeps the Tauri bundle small — see Issue #2).

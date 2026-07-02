@@ -262,8 +262,9 @@ Rules (`python/bridge/sr_backends/`):
   high-bit handling, downscale path, decode guard, target resolution, clamp,
   logo guard, output naming, ICC preservation, and the **engine seam** (default
   `cpu`, unknown-engine fallback, `realesrgan` unavailable fallback, downscale
-  skip, a fake-backend dispatch + telemetry, `--probe-engines`) — run:
-  `pytest python/bridge/tests`.
+  skip, a fake-backend dispatch + telemetry, `--probe-engines`, plus the gated
+  `test_realesrgan_real_inference_when_stack_present` real-inference e2e that
+  skips without torch/realesrgan/the weight) — run: `pytest python/bridge/tests`.
 - `python/bridge/tests/test_sr_backends.py` — registry `resolve`, capability
   `probe`, weight-path resolution, and the Real-ESRGAN / CCSR / SupIR
   unavailable/raise paths.
@@ -271,12 +272,20 @@ Rules (`python/bridge/sr_backends/`):
 
 ## Verifying `realesrgan` end-to-end
 
-Real inference needs `torch` + `realesrgan` + the weight, which CI does not
-install, so it is verified manually (mirroring the ViTMatte e2e):
+Real inference needs `torch` + `realesrgan` + the weight, which the per-PR CI
+matrix does not install. Two verifiable paths exist (mirroring the ViTMatte
+e2e):
+
+- **CI (opt-in):** manually dispatch the CI workflow — the
+  `python bridge (realesrgan e2e)` job installs the CPU torch stack, fetches
+  the sha256-checked weight via `scripts/fetch-realesrgan.sh`, and runs the
+  gated `test_realesrgan_real_inference_when_stack_present` test (which skips
+  on every normal run).
+- **Manually:**
 
 ```
 pip install torch realesrgan
-export HGRIPE_MODEL_CACHE=/path/to/models   # or HGRIPE_REALESRGAN_MODEL=/path/to/RealESRGAN_x4plus.pth
+bash scripts/fetch-realesrgan.sh   # or HGRIPE_REALESRGAN_MODEL=/path/to/RealESRGAN_x4plus.pth
 python python/bridge/image_enhance_cli.py --probe-engines        # realesrgan -> available: true
 python python/bridge/image_enhance_cli.py --image in.png --engine realesrgan \
   --target-width 1024 --output-dir out                          # enhance_report.engine == "realesrgan"

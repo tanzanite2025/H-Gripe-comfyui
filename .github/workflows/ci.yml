@@ -9,10 +9,11 @@ on:
     paths-ignore:
       - '**/*.md'
       - 'docs/**'
-  # Opt-in end-to-end check that actually runs ViTMatte: the ~104 MB weight is
-  # never committed, so the gated `vitmatte_inference_when_weight_present` test
-  # skips on every normal run. Trigger this manually to fetch the weight and
-  # exercise the real `ort` inference path.
+  # Opt-in end-to-end checks that run real model inference: the weights are
+  # never committed, so the gated tests (`vitmatte_inference_when_weight_present`,
+  # `test_realesrgan_real_inference_when_stack_present`) skip on every normal
+  # run. Trigger this manually to fetch the weights and exercise the real
+  # inference paths.
   workflow_dispatch:
 
 concurrency:
@@ -123,6 +124,42 @@ jobs:
       - name: cargo test (vitmatte inference)
         working-directory: apps/desktop-tauri/src-tauri
         run: cargo test vitmatte_inference_when_weight_present -- --nocapture
+
+  realesrgan-e2e:
+    name: python bridge (realesrgan e2e)
+    # Only on manual dispatch (like the ViTMatte e2e): fetches the ~64 MB
+    # Real-ESRGAN weight, installs the optional torch stack (CPU wheels), and
+    # runs the gated real-inference test that skips on every normal run. This
+    # is the roadmap's "real-inference CI" lane for the Image Enhance SR seam.
+    if: github.event_name == 'workflow_dispatch'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          # basicsr 1.4.2 (the realesrgan dep) needs torchvision < 0.17
+          # (functional_tensor was removed) and therefore torch 2.0.x, whose
+          # wheels stop at Python 3.11 — so this lane pins 3.10.
+          python-version: '3.10'
+
+      - name: Install runtime + test deps
+        run: pip install Pillow numpy pytest attrs
+
+      - name: Install torch stack (CPU wheels)
+        run: pip install torch==2.0.1 torchvision==0.15.2 --index-url https://download.pytorch.org/whl/cpu
+
+      - name: Install Real-ESRGAN
+        run: pip install basicsr==1.4.2 realesrgan==0.3.0
+
+      # Fetches into resources/models/RealESRGAN_x4plus.pth (sha256-checked),
+      # which the backend's default weight resolution picks up in-repo so the
+      # gated test stops skipping.
+      - name: Fetch Real-ESRGAN weight
+        run: bash scripts/fetch-realesrgan.sh
+
+      - name: Run bridge tests (gated real inference active)
+        run: python -m pytest python/bridge/tests -q
 
   python-bridge:
     name: python bridge (pytest)

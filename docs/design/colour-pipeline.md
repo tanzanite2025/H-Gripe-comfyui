@@ -294,4 +294,7 @@ Design-first; each phase is an independently reviewable, CI-gated PR.
 
 - `docs/cards/image-enhance.md` — per-card colour handling (current 8-bit
   sRGB); defers here for the target.
+- `docs/design/rust-dependency-vendoring.md` — Cargo crate vendoring policy;
+  explains the all-crate `third_party/cargo-vendor` snapshot and the owned
+  `third_party/moxcms` fork.
 - `docs/implementation-status.md` — initiative tracking.

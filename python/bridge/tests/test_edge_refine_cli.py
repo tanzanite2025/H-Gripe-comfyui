@@ -337,6 +337,55 @@ def test_learned_engine_skipped_without_trimap(tmp_path: Path) -> None:
     assert "no trimap" in report["engine_fallback_reason"]
 
 
+def _vitmatte_stack_ready() -> bool:
+    """Whether the opt-in learned matter can genuinely run here.
+
+    True only when ``onnxruntime`` imports *and* the trained weight is present,
+    i.e. on the manual-dispatch real-inference CI lane (or a dev box that ran
+    ``scripts/fetch-vitmatte``); the gated e2e test skips everywhere else.
+    """
+    try:
+        import onnxruntime  # noqa: F401
+    except Exception:
+        return False
+    from matting_backends.vitmatte_onnx import OnnxMattingBackend
+
+    return OnnxMattingBackend().weight_path().is_file()
+
+
+requires_vitmatte = pytest.mark.skipif(
+    not _vitmatte_stack_ready(),
+    reason="onnxruntime / matting weight not present (opt-in real-inference gate)",
+)
+
+
+@requires_vitmatte
+def test_onnx_matting_real_inference_when_weight_present(tmp_path: Path) -> None:
+    # The real trained ViTMatte weight, end-to-end through the CLI: no fakes,
+    # no fallback. Runs only on the opt-in CI lane (or a dev box) with
+    # onnxruntime + the fetched weight (HGRIPE_MATTING_MODEL); the engine must
+    # actually bind, solve the unknown band and report itself truthfully.
+    size = 48
+    alpha = _disc_alpha(size, 16.0)
+    img = _subject_rgba(tmp_path / "s.png", size=size, radius=16.0)
+    trimap = _trimap_for(alpha, tmp_path / "trimap.png")
+    out = _run(img, tmp_path, trimap=str(trimap), engine="onnx_matting")
+    report = out["edge_report"]
+    assert report["engine"] == "onnx_matting"
+    assert report["engine_requested"] == "onnx_matting"
+    assert report["engine_fallback_reason"] is None
+    assert report["backend_model"]
+    assert report["device"] in ("cpu", "cuda")
+    assert report["trimap_applied"] is True
+    refined = np.asarray(
+        Image.open(out["refined_mask"]).convert("L"), dtype=np.float32
+    ) / 255.0
+    # A real matte: definite fg stays essentially opaque, definite bg stays
+    # essentially transparent, and the unknown band got a continuous solve.
+    assert refined[alpha > 0.95].mean() > 0.5
+    assert refined[alpha < 0.05].mean() < 0.5
+
+
 def test_probe_engines_flag_emits_capability_json(tmp_path: Path, capsys) -> None:
     rc = cli.main(["--image", "ignored", "--probe-engines"])
     assert rc == 0

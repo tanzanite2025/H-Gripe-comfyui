@@ -13,7 +13,8 @@ on:
   # never committed, so the gated tests (`vitmatte_inference_when_weight_present`,
   # `test_realesrgan_real_inference_when_stack_present`,
   # `test_{sd_inpaint,sdxl_inpaint,flux_fill}_real_inference_with_tiny_snapshot`,
-  # `test_diffusion_sr_real_inference_with_tiny_snapshot`) skip on every normal
+  # `test_diffusion_sr_real_inference_with_tiny_snapshot`,
+  # `test_onnx_matting_real_inference_when_weight_present`) skip on every normal
   # run. Trigger this manually to fetch/synthesise the weights and exercise the
   # real inference paths.
   workflow_dispatch:
@@ -191,6 +192,37 @@ jobs:
         run: pip install diffusers transformers accelerate
 
       - name: Run bridge tests (gated diffusers inference active)
+        run: python -m pytest python/bridge/tests -q
+
+  matting-e2e:
+    name: python bridge (vitmatte matting e2e)
+    # Only on manual dispatch (like the Rust ViTMatte e2e): fetches the same
+    # ~104 MB sha256-checked ViTMatte ONNX weight and runs the gated
+    # real-*trained-weight* inference test for the Refine Mask Edge
+    # `onnx_matting` engine end-to-end through the CLI. Skips on every normal
+    # run (the per-PR `python bridge (onnx inference)` lane covers the session
+    # path with a synthesised model only).
+    if: github.event_name == 'workflow_dispatch'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.x'
+
+      - name: Install runtime + test deps (incl. ONNX runtime)
+        run: pip install Pillow numpy pytest attrs onnx onnxruntime
+
+      # Same weight + checksum the Rust vitmatte-e2e lane uses; fetched into
+      # resources/models/vitmatte.onnx and pointed at explicitly (the Python
+      # backend's default name is matting.onnx).
+      - name: Fetch ViTMatte weight
+        run: bash scripts/fetch-vitmatte.sh
+
+      - name: Run bridge tests (gated real matting inference active)
+        env:
+          HGRIPE_MATTING_MODEL: apps/desktop-tauri/src-tauri/resources/models/vitmatte.onnx
         run: python -m pytest python/bridge/tests -q
 
   python-bridge:

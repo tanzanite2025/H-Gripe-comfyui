@@ -21,13 +21,17 @@ The weight is **not** bundled in the installer; ``scripts`` can fetch it into th
 cache dir, exactly like the SAM 2 / ViTMatte / Real-ESRGAN weights.
 
 Model contract (a standard trimap-based image-matting network):
-* inputs:
-  - ``image`` ``[1, 3, H, W]`` float32 RGB in ``0..1``.
-  - ``trimap`` ``[1, 1, H, W]`` float32 in ``0..1`` (``0`` bg / ``0.5`` unknown /
-    ``1`` fg). The network's fixed spatial size is read from the model; a dynamic
-    axis falls back to ``_DEFAULT_SIZE``. Image + trimap are resized into that
-    size and the predicted alpha is resized back so the caller's geometry
-    contract is unchanged.
+* inputs, either of the two standard layouts:
+  - two inputs: ``image`` ``[1, 3, H, W]`` float32 RGB in ``0..1`` +
+    ``trimap`` ``[1, 1, H, W]`` float32 in ``0..1`` (``0`` bg / ``0.5`` unknown /
+    ``1`` fg); or
+  - a single 4-channel input (the ViTMatte export convention, e.g.
+    ``pixel_values``): the RGB image and the trimap concatenated along the
+    channel axis.
+  The network's fixed spatial size is read from the model; a dynamic axis
+  falls back to ``_DEFAULT_SIZE``. Image + trimap are resized into that size
+  and the predicted alpha is resized back so the caller's geometry contract is
+  unchanged.
 * output: ``[1, 1, H, W]`` float32 alpha in ``0..1``. Matched by name
   (``alpha`` / ``output`` / ``matte``), falling back to positional [0].
 """
@@ -108,11 +112,14 @@ class OnnxMattingBackend:
 
         src_h, src_w = rgb.shape[:2]
         image_t = _to_nchw(rgb, net_w, net_h, np, channels=3)
-        feed: dict[str, Any] = {image_spec.name: image_t}
+        tri = np.clip(trimap, 0.0, 1.0).astype(np.float32)
+        tri_t = _to_nchw((tri[..., None] * 255.0).astype(np.uint8), net_w, net_h, np, channels=1)
         if trimap_spec is not None:
-            tri = np.clip(trimap, 0.0, 1.0).astype(np.float32)
-            tri_t = _to_nchw((tri[..., None] * 255.0).astype(np.uint8), net_w, net_h, np, channels=1)
-            feed[trimap_spec.name] = tri_t
+            feed: dict[str, Any] = {image_spec.name: image_t, trimap_spec.name: tri_t}
+        else:
+            # Single-input models (the ViTMatte export convention) take the RGB
+            # image and the trimap concatenated along the channel axis.
+            feed = {image_spec.name: np.concatenate([image_t, tri_t], axis=1)}
 
         raw = session.run(None, feed)
         out = _named_output(session, raw)

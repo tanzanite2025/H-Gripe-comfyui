@@ -79,8 +79,11 @@ pure/value/control nodes, prunes untaken branches, and routes `generate` /
 `psdExport` through the backend broker and PSD pipeline. The TypeScript
 `runtime/runGraph` remains as the browser-preview fallback and unit-tested
 reference implementation. The Rust runner emits node-level Tauri events on
-`studio:graph-run` (`queued` / `running` / `succeeded` / `skipped` / `failed`),
-filtered by `run_id` in the webview so repeated or batch runs do not cross-talk.
+`studio:graph-run` (`queued` / `running` / `succeeded` / `skipped` / `failed`,
+plus `log` progress lines from executors), filtered by `run_id` in the webview
+so repeated or batch runs do not cross-talk. Failed API nodes carry structured
+`error_detail` (error code, retryability, provider/operation, provider request
+id) alongside the flat error string, and the run log renders that context.
 The toolbar's **Cancel** button calls `cancel_studio_run`; cancellation stops
 before the next node starts and passes a cancellation token down into the Rust
 broker/provider layer for `generate` nodes. `custom_http async_job` can call a
@@ -89,9 +92,8 @@ configured provider-native `cancel_url` / `cancel_url_path` / `urls.cancel`, and
 provider/API remote job control, not an H-Gripe account/cloud system. Durable
 workflow save/load beyond autosave now exists (explicit Save/Open + project
 folder, above). Before the Node Editor becomes the primary production surface,
-the backend runner still needs a media index/cache, richer logs, more complete
-error details, more provider-native cancellation adapters, and FFmpeg-backed
-video assembly/export.
+the backend runner still needs a media index/cache, more provider-native
+cancellation adapters, and FFmpeg-backed video assembly/export.
 
 The desktop shell intentionally has no Credentials / Profiles account-management
 tabs. Provider profiles and credential refs are local API config files consumed

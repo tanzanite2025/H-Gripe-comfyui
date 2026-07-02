@@ -4,6 +4,7 @@
 // resulting entries. Kept separate from the React component so the trimming and
 // formatting logic is unit-testable without a DOM.
 
+import type { StudioRunErrorDetail } from "../bridge/tauri";
 import type { NodeStatus } from "../runtime/dag";
 
 export type LogLevel = "info" | "success" | "error" | "warn";
@@ -49,10 +50,31 @@ export function levelForStatus(status: NodeStatus): LogLevel {
   }
 }
 
+/**
+ * Compact `key=value` context suffix for a structured error detail, e.g.
+ * `provider=replicate op=run code=poll_timeout request=req-42 retryable`.
+ * Returns "" when the detail carries nothing beyond the flat message.
+ */
+export function formatErrorDetail(detail: StudioRunErrorDetail | null | undefined): string {
+  if (!detail) return "";
+  const parts: string[] = [];
+  if (detail.provider) parts.push(`provider=${detail.provider}`);
+  if (detail.operation) parts.push(`op=${detail.operation}`);
+  if (detail.code) parts.push(`code=${detail.code}`);
+  if (detail.provider_request_id) parts.push(`request=${detail.provider_request_id}`);
+  if (detail.task_id) parts.push(`task=${detail.task_id}`);
+  if (detail.retryable) parts.push("retryable");
+  return parts.join(" ");
+}
+
 /** Human-readable one-liner describing a node status event. */
 export function describeNodeStatus(
   status: NodeStatus,
-  opts: { durationMs?: number | null; error?: string | null } = {},
+  opts: {
+    durationMs?: number | null;
+    error?: string | null;
+    detail?: StudioRunErrorDetail | null;
+  } = {},
 ): string {
   switch (status) {
     case "queued":
@@ -63,8 +85,11 @@ export function describeNodeStatus(
       return opts.durationMs != null ? `done in ${Math.round(opts.durationMs)} ms` : "done";
     case "cached":
       return "cached (unchanged)";
-    case "failed":
-      return `failed: ${opts.error ?? "unknown error"}`;
+    case "failed": {
+      const context = formatErrorDetail(opts.detail);
+      const base = `failed: ${opts.error ?? "unknown error"}`;
+      return context ? `${base} [${context}]` : base;
+    }
     case "skipped":
       return "skipped (branch not taken)";
     case "cancelled":

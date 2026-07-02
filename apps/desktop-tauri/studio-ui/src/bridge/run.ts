@@ -26,12 +26,24 @@ export async function runTaskJson(task: unknown): Promise<ApiResultLike> {
   return (await invoke("run_task_json", { taskJson: JSON.stringify(task) })) as ApiResultLike;
 }
 
+/** Structured error details for a failed node (provider/broker context). */
+export interface StudioRunErrorDetail {
+  message: string;
+  code?: string | null;
+  retryable?: boolean | null;
+  provider?: string | null;
+  operation?: string | null;
+  provider_request_id?: string | null;
+  task_id?: string | null;
+}
+
 export interface StudioGraphNodeRun {
   node_id: string;
   kind: string;
   status: string;
   duration_ms?: number | null;
   error?: string | null;
+  error_detail?: StudioRunErrorDetail | null;
 }
 
 export interface StudioGraphRunResult {
@@ -45,9 +57,11 @@ export interface StudioGraphRunEvent {
   run_id: string;
   node_id?: string | null;
   kind?: string | null;
+  /** Node/run lifecycle status, or `"log"` for a progress line. */
   status: string;
   duration_ms?: number | null;
   error?: string | null;
+  error_detail?: StudioRunErrorDetail | null;
   message?: string | null;
 }
 

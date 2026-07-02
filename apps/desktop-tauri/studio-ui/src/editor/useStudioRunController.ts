@@ -273,13 +273,23 @@ export function useStudioRunController({
         if (event.message) pushLog("info", event.message);
         return;
       }
+      // Progress lines from executors (`status: "log"`) only feed the run log;
+      // they never change the node's lifecycle status.
+      if (event.status === "log") {
+        if (event.message) pushLog("info", event.message, event.node_id);
+        return;
+      }
       const status = toNodeStatus(event.status);
       if (status === "failed" && !runFailures.current.includes(event.node_id)) {
         runFailures.current.push(event.node_id);
       }
       pushLog(
         levelForStatus(status),
-        describeNodeStatus(status, { durationMs: event.duration_ms, error: event.error }),
+        describeNodeStatus(status, {
+          durationMs: event.duration_ms,
+          error: event.error,
+          detail: event.error_detail,
+        }),
         event.node_id,
       );
       setNodes((ns) =>

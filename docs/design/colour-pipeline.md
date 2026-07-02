@@ -223,10 +223,18 @@ Design-first; each phase is an independently reviewable, CI-gated PR.
 
 1. **Working-space primaries:** ~~ProPhoto RGB vs Adobe RGB (1998)~~ —
    **decided: ProPhoto RGB (ROMM)** for maximum gamut coverage.
-2. **TRC:** gamma-encoded working space (minimal behavioural change from today)
-   vs linear-light (more correct resampling/compositing math, but changes
-   results and cost). Recommendation: keep gamma-encoded for P1–P2, revisit
-   linear as a separate change.
+2. **TRC:** ~~gamma-encoded working space vs linear-light~~ — **decided:
+   the working space stays gamma-encoded; linear-light is applied per
+   operation where the maths assume light-linear values.** First landing:
+   the enhance colour resample decodes to linear `f32`, filters, and
+   re-encodes on **both engines** (`studio/color/linear.rs` /
+   `python/bridge/linear_light.py`, pinned to the same goldens — a
+   black/white edge now resamples to the photometric 188 instead of the
+   gamma-average ~128, removing dark fringing on contrast edges). Alpha and
+   mask tracks stay direct: coverage is already linear. Denoise (rank-based
+   median) and unsharp stay gamma-encoded deliberately — median is
+   TRC-invariant, and sharpening in gamma avoids over-dark halos. Model
+   ingress resizes also stay gamma: the models are trained on gamma sRGB.
 3. **Manual file container:** 16-bit PNG (simple, ICC via iCCP) vs TIFF
    (can also carry CMYK directly). PNG recommended unless a card needs CMYK
    round-trip.

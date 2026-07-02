@@ -295,12 +295,22 @@ def _sharpen(img: Any, strength: float) -> Any:
 
 
 def _resample(img: Any, out_w: int, out_h: int, downscaling: bool) -> Any:
-    """Resize, using a box filter when shrinking and Lanczos when enlarging."""
+    """Resize, using a box filter when shrinking and Lanczos when enlarging.
+
+    Colour is filtered in **linear light** (`linear_light.py`): averaging
+    gamma-encoded samples under-weights bright pixels and leaves dark fringes
+    on contrast edges. Alpha rides through directly — coverage is already
+    linear — as do non-RGB planes.
+    """
     from PIL import Image
 
     if (out_w, out_h) == img.size:
         return img
     resample = Image.BOX if downscaling else Image.LANCZOS
+    if img.mode == "RGB":
+        from linear_light import resize_rgb_linear
+
+        return resize_rgb_linear(img, out_w, out_h, resample)
     return img.resize((out_w, out_h), resample)
 
 

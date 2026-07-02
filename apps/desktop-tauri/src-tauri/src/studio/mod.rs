@@ -65,7 +65,7 @@ pub(crate) mod video_worker;
 // The colour layers keep their original `crate::studio::<layer>` paths so the
 // many call sites (and their docs) stay stable while the files live together
 // under `color/`.
-pub(crate) use color::{cmyk_decode, cmyk_transform, working_image};
+pub(crate) use color::{cmyk_decode, cmyk_transform, linear, working_image};
 
 // Glob re-exports so the original `crate::studio::*` command paths keep
 // resolving from `main.rs`'s `generate_handler!`. A plain `use exec::cmd` only

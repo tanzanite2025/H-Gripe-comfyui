@@ -36,6 +36,7 @@ use std::time::Instant;
 use image::imageops::{self, FilterType};
 use image::{ExtendedColorType, GrayImage, ImageBuffer, Luma, Rgb, RgbImage, Rgba, RgbaImage};
 
+use super::linear;
 use super::studio_image::{self, DEFAULT_MAX_DECODE_PIXELS};
 use crate::psd::{reject_unsafe_output_name, EnhanceImageResult, EnhanceReport};
 
@@ -482,6 +483,12 @@ fn blend(a: &RgbImage, b: &RgbImage, s: f32) -> RgbImage {
     out
 }
 
+/// Resample colour in **linear light**: averaging gamma-encoded samples
+/// under-weights bright pixels (a black/white edge lands on sRGB 128 instead
+/// of the photometric 188), which reads as dark fringing on contrast edges.
+/// Decode via the sRGB TRC, filter in `f32`, re-encode. The Python engine
+/// mirrors this in `_resample` (`linear_light.py`); alpha stays on its own
+/// track — coverage is already linear.
 fn resample_rgb(img: &RgbImage, out_w: u32, out_h: u32, downscaling: bool) -> RgbImage {
     if (out_w, out_h) == img.dimensions() {
         return img.clone();
@@ -491,7 +498,21 @@ fn resample_rgb(img: &RgbImage, out_w: u32, out_h: u32, downscaling: bool) -> Rg
     } else {
         FilterType::Lanczos3
     };
-    imageops::resize(img, out_w, out_h, filter)
+    let (w, h) = img.dimensions();
+    let linear_buf: Vec<f32> = img
+        .as_raw()
+        .iter()
+        .map(|&v| linear::srgb_u8_to_linear(v))
+        .collect();
+    let linear_img = image::Rgb32FImage::from_raw(w, h, linear_buf)
+        .expect("linear buffer matches source dimensions");
+    let resized = imageops::resize(&linear_img, out_w, out_h, filter);
+    let out_buf: Vec<u8> = resized
+        .as_raw()
+        .iter()
+        .map(|&l| linear::linear_to_srgb_u8(l))
+        .collect();
+    RgbImage::from_raw(out_w, out_h, out_buf).expect("encoded buffer matches output dimensions")
 }
 
 fn resample_gray(img: &GrayImage, out_w: u32, out_h: u32, downscaling: bool) -> GrayImage {
@@ -694,6 +715,35 @@ mod tests {
         let uncapped = try_enhance(&p).unwrap().unwrap();
         assert_eq!(uncapped.enhance_report.texture_strength, 0.7);
         let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn resample_averages_in_linear_light() {
+        // A 2x2 black/white checker downscaled to 1x1: gamma-space averaging
+        // gives ~128; the photometric (linear-light) average encodes to 188.
+        // The Python engine pins the same golden (`test_linear_light.py`).
+        let mut img = RgbImage::new(2, 2);
+        img.put_pixel(0, 0, Rgb([255, 255, 255]));
+        img.put_pixel(1, 1, Rgb([255, 255, 255]));
+        let out = resample_rgb(&img, 1, 1, true);
+        for c in out.get_pixel(0, 0).0 {
+            assert!(
+                (i32::from(c) - 188).abs() <= 1,
+                "got {:?}",
+                out.get_pixel(0, 0)
+            );
+        }
+    }
+
+    #[test]
+    fn resample_keeps_flat_colours_exact() {
+        // The TRC round-trip must be lossless on flat surfaces so plain scales
+        // of solid colours stay byte-stable.
+        let img = RgbImage::from_pixel(3, 3, Rgb([120, 60, 30]));
+        let up = resample_rgb(&img, 6, 6, false);
+        for px in up.pixels() {
+            assert_eq!(px.0, [120, 60, 30]);
+        }
     }
 
     #[test]

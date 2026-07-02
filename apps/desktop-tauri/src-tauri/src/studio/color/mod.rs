@@ -19,4 +19,5 @@
 
 pub(crate) mod cmyk_decode;
 pub(crate) mod cmyk_transform;
+pub(crate) mod linear;
 pub(crate) mod working_image;

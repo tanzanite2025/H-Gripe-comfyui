@@ -15,8 +15,8 @@ it alive for the life of the desktop process, then talks to it with
 newline-delimited JSON — one request object per line on ``stdin``, one response
 object per line on ``stdout``:
 
-    request : {"id": <any>, "cmd": "ping"|"probe"|"frame"|"close"|"shutdown",
-               "args": {...}}
+    request : {"id": <any>, "cmd": "ping"|"probe"|"frame"|"assemble"|"trim"|
+               "close"|"shutdown", "args": {...}}
     response: {"id": <same>, "ok": bool, "code": int, "stdout": str, "error": str}
 
 ``stdout`` carries the result payload as a JSON string (exactly the shape the
@@ -207,6 +207,115 @@ def _do_assemble(args: dict[str, Any]) -> dict[str, Any]:
 _ASSEMBLER: Callable[[list[str], str, float, str], dict[str, Any]] = _assemble_frames
 
 
+def _trim_video(
+    video: str, out_path: str, start_sec: float, end_sec: float | None, codec: str
+) -> dict[str, Any]:
+    """Cut ``[start_sec, end_sec)`` out of ``video`` into ``out_path`` via PyAV.
+
+    Decode-and-re-encode so the cut is frame-accurate (a remux could only cut on
+    keyframes). Seeks to the keyframe at/before ``start_sec`` and drops decoded
+    frames until the range begins. ``end_sec=None`` trims to the end of the
+    clip. Audio streams are not carried over (the media engine is video-only).
+    Returns the payload for the ``trim`` response.
+    """
+    import av  # lazy: PyAV bundles ffmpeg and is only needed for a real trim
+    from fractions import Fraction
+
+    in_container = av.open(video)
+    frame_count = 0
+    first_ts: float | None = None
+    last_ts: float | None = None
+    try:
+        in_stream = next((s for s in in_container.streams if s.type == "video"), None)
+        if in_stream is None:
+            raise ValueError("no video stream found")
+        fps = video_probe_cli.stream_fps(in_stream) or 24.0
+        rate = Fraction(fps).limit_denominator(1001)
+        codec_ctx = in_stream.codec_context
+        # yuv420p needs even dimensions; round down like the assembler does.
+        width = max(2, int(codec_ctx.width or 2) - int(codec_ctx.width or 2) % 2)
+        height = max(2, int(codec_ctx.height or 2) - int(codec_ctx.height or 2) % 2)
+
+        out_container = av.open(out_path, mode="w")
+        try:
+            out_stream = out_container.add_stream(codec, rate=rate)
+            out_stream.pix_fmt = "yuv420p"
+            out_stream.width = width
+            out_stream.height = height
+
+            if start_sec > 0:
+                in_container.seek(int(start_sec * av.time_base))
+            for frame in in_container.decode(in_stream):
+                ts = frame.time
+                if ts is None or ts < start_sec:
+                    continue
+                if end_sec is not None and ts >= end_sec:
+                    break
+                img = frame.to_image()
+                if (img.width, img.height) != (width, height):
+                    img = img.resize((width, height))
+                for packet in out_stream.encode(av.VideoFrame.from_image(img)):
+                    out_container.mux(packet)
+                frame_count += 1
+                last_ts = ts
+                if first_ts is None:
+                    first_ts = ts
+            for packet in out_stream.encode():
+                out_container.mux(packet)
+        finally:
+            out_container.close()
+    finally:
+        in_container.close()
+    if frame_count == 0:
+        raise ValueError(
+            f"no frames in the requested range ({start_sec}s.."
+            f"{'end' if end_sec is None else f'{end_sec}s'})"
+        )
+    return {
+        "video_path": out_path,
+        "frame_count": frame_count,
+        "width": width,
+        "height": height,
+        "fps": float(rate),
+        "duration_sec": frame_count / float(rate) if rate else None,
+        "start_sec": first_ts,
+        "end_sec": last_ts,
+        "codec": codec,
+    }
+
+
+#: Indirection so tests can inject a fake trimmer (no ``av`` needed).
+#: Production always uses :func:`_trim_video`.
+_TRIMMER: Callable[[str, str, float, float | None, str], dict[str, Any]] = _trim_video
+
+
+def _do_trim(args: dict[str, Any]) -> dict[str, Any]:
+    """Validate a ``trim`` request and cut the range into a new video file."""
+    video = _require_video(args)
+    out_path = args.get("out")
+    if not isinstance(out_path, str) or not out_path:
+        raise ValueError("args.out must be a non-empty string")
+    try:
+        start_sec = float(args.get("start_sec", 0.0))
+    except (TypeError, ValueError):
+        raise ValueError("args.start_sec must be a number") from None
+    if start_sec < 0:
+        raise ValueError("args.start_sec must be >= 0")
+    end_raw = args.get("end_sec")
+    end_sec: float | None = None
+    if end_raw is not None:
+        try:
+            end_sec = float(end_raw)
+        except (TypeError, ValueError):
+            raise ValueError("args.end_sec must be a number") from None
+        if end_sec <= start_sec:
+            raise ValueError("args.end_sec must be greater than args.start_sec")
+    codec = args.get("codec", "libx264")
+    if not isinstance(codec, str) or not codec:
+        raise ValueError("args.codec must be a non-empty string")
+    return _TRIMMER(video, out_path, start_sec, end_sec, codec)
+
+
 def _require_video(args: dict[str, Any]) -> str:
     video = args.get("video")
     if not isinstance(video, str) or not video:
@@ -244,6 +353,7 @@ _COMMANDS: dict[str, Callable[[dict[str, Any]], dict[str, Any]]] = {
     "probe": _do_probe,
     "frame": _do_frame,
     "assemble": _do_assemble,
+    "trim": _do_trim,
 }
 
 

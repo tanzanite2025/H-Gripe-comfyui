@@ -40,6 +40,8 @@
 //! - [`subject_sam2`]: SAM 2 interactive point-prompt segmenter (Compute lane).
 //! - [`video_assemble`]: the `videoAssemble` node executor (FFmpeg-backed
 //!   frame-sequence -> video encode via the PyAV worker's `assemble` command).
+//! - [`video_trim`]: the `videoTrim` node executor (frame-accurate cut of a
+//!   time range via the PyAV worker's `trim` command).
 //! - [`persist`]: on-disk autosave, workflow files, recents, and pickers.
 //! - [`history`]: project-scoped snapshot / run-history JSON stores.
 //!
@@ -83,6 +85,7 @@ mod subject_segment;
 pub(crate) mod torch_worker;
 mod video_assemble;
 pub(crate) mod video_engine;
+mod video_trim;
 pub(crate) mod video_worker;
 mod write_skip;
 

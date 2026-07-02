@@ -19,6 +19,7 @@ describe("nodeSpecs executor tagging", () => {
       detailWatchdog: "local",
       psdExport: "local",
       videoAssemble: "local",
+      videoTrim: "local",
       subjectMask: "compute",
       generate: "api",
       detailRepaint: "api",

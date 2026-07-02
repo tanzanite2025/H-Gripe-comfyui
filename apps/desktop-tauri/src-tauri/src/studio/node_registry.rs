@@ -37,7 +37,7 @@ pub(crate) fn node_class(kind: &str) -> Option<NodeClass> {
         }
         // `python/bridge` CLI cards: CPU-bound subprocess work.
         "psdContextAnalyze" | "matchLightColor" | "refineMaskEdge" | "imageEnhance"
-        | "detailWatchdog" | "psdExport" | "videoAssemble" => (Local, CpuBound),
+        | "detailWatchdog" | "psdExport" | "videoAssemble" | "videoTrim" => (Local, CpuBound),
         // Native-Rust compute cards split by device use: the ONNX matte runs on
         // the GPU (serialised), plain crop geometry is CPU-only.
         "subjectMask" => (Compute, Gpu),

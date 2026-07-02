@@ -605,6 +605,38 @@ export const defaultExecutors: ExecutorRegistry = {
     };
   },
 
+  // Cuts a time range out of a video via the media engine's FFmpeg backend
+  // (PyAV worker `trim`). The re-encode only exists in the desktop build's
+  // Rust runner; this browser-preview executor validates the wiring and
+  // returns a plausible mock so the editor stays runnable in dev.
+  videoTrim: async (ctx) => {
+    const wired = ctx.inputs.video;
+    const video =
+      (typeof wired === "string" && wired.trim()) || String(ctx.params.video ?? "").trim();
+    if (!video) {
+      throw new Error("Video Trim needs a video (connect a video input or set the video param)");
+    }
+    const startSec = Math.max(0, Number(ctx.params.start_sec ?? 0) || 0);
+    const endRaw = Number(ctx.params.end_sec ?? 0) || 0;
+    const endSec = endRaw > 0 ? endRaw : null;
+    if (endSec !== null && endSec <= startSec) {
+      throw new Error("end_sec must be greater than start_sec");
+    }
+    const codec = String(ctx.params.codec ?? "libx264").trim() || "libx264";
+    const outputDir =
+      String(ctx.params.output_dir ?? "").trim() || (await getOutputDir()) || "/mock/outputs";
+    const name = String(ctx.params.output_name ?? "").trim() || `trimmed-${Date.now()}`;
+    const out = `${outputDir.replace(/\/$/, "")}/${name.includes(".") ? name : `${name}.mp4`}`;
+    const fps = 24;
+    const durationSec = endSec !== null ? endSec - startSec : 1;
+    return {
+      video: out,
+      frame_count: Math.max(1, Math.round(durationSec * fps)),
+      duration_sec: durationSec,
+      trim_report: { fps, codec, start_sec: startSec, end_sec: endSec, mock: true },
+    };
+  },
+
   // Writes the upstream image into the PSD template's placeholder (true
   // smart-object replacement when possible) and exports the .psd triplet via
   // the backend `compose_psd` command.

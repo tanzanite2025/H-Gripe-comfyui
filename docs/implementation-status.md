@@ -100,7 +100,7 @@ The full staged rollout of the editor compute/threading model has **landed**.
 | Video media engine (decoder seam + frame cache + playback thread) | ✅ Landed | PR #149; `video_engine.rs` + `frame_cache.rs`, `video_scrub` command. |
 | Native in-process ffmpeg `FrameSource` | ✅ Landed | PR #150; `ffmpeg_native.rs` links **vendored** libav (`third_party/ffmpeg`, git-lfs) behind the off-by-default `native-ffmpeg` feature, with PyAV fallback. |
 | Video **export / encode** | ✅ Landed | The **Video Assemble** output card encodes an ordered frame sequence to video through the PyAV worker `assemble` command (fps / encoder / output params). |
-| Video **trim** | ⛔ Planned | No cut/trim path over an existing video yet (decode/scrub + re-encode exists; a trim card would combine them). |
+| Video **trim** | ✅ Landed | The **Video Trim** output card cuts a `[start_sec, end_sec)` range out of a video through the PyAV worker `trim` command (frame-accurate decode-and-re-encode; audio not carried over). |
 
 ## 8. Out of scope (explicit product-direction decisions)
 

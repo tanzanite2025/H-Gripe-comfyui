@@ -397,6 +397,7 @@ fn execute_studio_local_node(
         "detailWatchdog" => execute_studio_detail_watchdog(node, inputs),
         "psdExport" => execute_studio_psd_export(node, inputs),
         "videoAssemble" => super::video_assemble::execute_studio_video_assemble(node, inputs),
+        "videoTrim" => super::video_trim::execute_studio_video_trim(node, inputs),
         other => Err(format!("node kind is not a local node: {other}")),
     }
 }

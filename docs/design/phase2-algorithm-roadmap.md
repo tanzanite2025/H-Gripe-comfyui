@@ -119,8 +119,9 @@ skipped semantic targets:
   rule layer.
 
 ### 2.3 Integration plan
-**Status: the seam has landed** (the rest of this section is the design it was
-built to; ⛔ items are the concrete face/hand/OCR/VLM models + real-inference CI).
+**Status: the seam has landed, plus a real trained text detector +
+real-inference CI** (⛔ items are the remaining face/hand-quality, logo and VLM
+models).
 As with Image Enhance, the selector is the local card's **`engine` param**
 (`rules` | `onnx_defect` | …), not `--profile-ref` (Detail Watchdog is a `local`
 card).
@@ -139,14 +140,24 @@ card).
   reason recorded.
 - 🟡 `onnx_defect` is the first concrete detector: a generic ONNX object
   detector seam covering hands/text/logo (`malformed_hands` / `garbled_text` /
-  `deformed_logo`). Its weight is not bundled; ⛔ the actual trained
-  face/hand-quality, OCR/logo and VLM models behind it.
+  `deformed_logo`). It accepts both box-detector outputs
+  (`boxes`/`scores`/`labels`) and DB-style segmentation **probability maps**
+  (`[1,1,H,W]`, thresholded into connected components), with the sidecar's
+  object form (`{"labels": {...}, "normalize": "imagenet"}`) selecting input
+  normalisation. ✅ The `text` target has a real trained weight: the PP-OCRv3
+  det ONNX export (PaddleOCR, Apache-2.0, ~2.4 MB), fetched sha256-checked by
+  `scripts/fetch-watchdog-text.{sh,ps1}` — a partial-coverage weight keeps the
+  other targets truthfully `skipped`. Weights are not bundled; ⛔ the trained
+  face/hand-quality, logo and VLM models behind the remaining targets.
 - 🟡 The gated unit test that synthesises a tiny ONNX detector to exercise the
   session path (incl. the `onnx_providers` execution-provider selection) now
   runs in CI: the **`python bridge (onnx inference)`** lane installs `onnx` +
   `onnxruntime` per PR (no weight download needed since the model is
-  synthesised). ⛔ remaining: real *trained-weight* inference (opt-in like the
-  ViTMatte e2e), since CI does not fetch the trained detector weight.
+  synthesised). ✅ Real *trained-weight* inference CI (opt-in like the ViTMatte
+  e2e): the manual-dispatch **`python bridge (watchdog text e2e)`** lane
+  fetches the PP-OCRv3 weight and runs the gated
+  `test_onnx_defect_real_inference_when_weight_present` e2e through the CLI
+  (skips on every normal run).
 
 ### 2.4 Dependencies & risks
 `onnxruntime`/`torch`, OCR + detection weights. Risks: false positives causing

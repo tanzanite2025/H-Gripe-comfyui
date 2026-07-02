@@ -115,9 +115,16 @@ findings; the targets a detector covers graduate out of `skipped_targets`.
 `onnx_defect` resolves its weight from `HGRIPE_WATCHDOG_MODEL` (explicit path)
 or `<model cache>/watchdog_defect.onnx` (`HGRIPE_MODEL_CACHE`, else the bundled
 `resources/models`); the weight is **not** shipped in the installer. Model
-contract: input `[1,3,H,W]` float32 RGB `0..1` (letterboxed), outputs `boxes`
-`[N,4]` xyxy / `scores` `[N]` / `labels` `[N]`, with an optional sidecar
-`<weight>.labels.json` mapping class ids to target names. Run
+contract: input `[1,3,H,W]` float32 RGB `0..1` (letterboxed), outputs either
+`boxes` `[N,4]` xyxy / `scores` `[N]` / `labels` `[N]`, or a DB-style
+segmentation **probability map** `[1,1,H,W]` (thresholded and split into
+connected components, one detection per component). An optional sidecar
+`<weight>.labels.json` describes the weight: either the bare class-id → target
+map, or `{"labels": {...}, "normalize": "imagenet"}` to also request ImageNet
+input normalisation. A weight that covers only some targets keeps the others
+truthfully `skipped`. `scripts/fetch-watchdog-text.{sh,ps1}` fetches a real
+trained text detector — the PP-OCRv3 det ONNX export (PaddleOCR, Apache-2.0,
+~2.4 MB) — plus its sidecar, graduating the `text` target. Run
 `detail_watchdog_cli.py --probe-engines` for the UI capability probe (which
 engines are usable right now).
 
@@ -142,8 +149,35 @@ engines are usable right now).
   and `WatchdogReport` deserialization of the v1 hardening fields, the engine-
   seam telemetry fields, and legacy JSON defaults.
 - `python/bridge/tests/test_detector_backends.py` — the detector registry /
-  probe, unknown-engine and missing-weight fallback, the sidecar label map, and
-  a gated end-to-end pass that synthesises a tiny ONNX detector (skipped unless
-  `onnx` + `onnxruntime` import, mirroring the ViTMatte opt-in gate).
+  probe, unknown-engine and missing-weight fallback, the sidecar label map
+  (both forms, incl. `normalize`), a gated end-to-end pass that synthesises a
+  tiny ONNX detector (skipped unless `onnx` + `onnxruntime` import, mirroring
+  the ViTMatte opt-in gate), and the gated
+  `test_onnx_defect_real_inference_when_weight_present` e2e: the real trained
+  PP-OCRv3 text-detection weight through the CLI — `text` graduates to real
+  `garbled_text` findings on rendered text while hands/logo stay skipped. It
+  skips without `onnxruntime` + the weight; the manual-dispatch
+  **`python bridge (watchdog text e2e)`** CI lane fetches the sha256-checked
+  weight (`scripts/fetch-watchdog-text.sh`) and runs it for real.
 - `python/bridge/tests/test_detail_watchdog_cli.py` — also the `--engine`
   dispatch: default `rules`, unknown-engine fallback, unavailable-ML fallback.
+
+## Verifying `onnx_defect` end-to-end
+
+Real inference needs `onnxruntime` + a detector weight, which the per-PR CI
+matrix does not install. Two verifiable paths exist:
+
+- **CI (opt-in):** manually dispatch the CI workflow — the
+  `python bridge (watchdog text e2e)` job installs `onnxruntime`, fetches the
+  sha256-checked PP-OCRv3 weight via `scripts/fetch-watchdog-text.sh`, and runs
+  the gated real-inference test (which skips on every normal run).
+- **Manually:**
+
+```
+pip install onnxruntime
+bash scripts/fetch-watchdog-text.sh
+HGRIPE_WATCHDOG_MODEL=apps/desktop-tauri/src-tauri/resources/models/watchdog_defect.onnx \
+python python/bridge/detail_watchdog_cli.py --image candidate.png \
+  --engine onnx_defect --watch-targets text --output-dir out
+# watchdog_report.engine == "onnx_defect"; garbled_text findings on text regions
+```

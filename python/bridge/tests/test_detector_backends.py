@@ -112,13 +112,40 @@ def test_label_map_prefers_sidecar(tmp_path: Path) -> None:
     sidecar = tmp_path / "watchdog_defect.onnx.labels.json"
     sidecar.write_text(json.dumps({"0": "logo", "1": "hands"}), encoding="utf-8")
     backend = OnnxDefectBackend()
-    assert backend._label_map(weight) == {0: "logo", 1: "hands"}
+    assert backend._sidecar(weight) == ({0: "logo", 1: "hands"}, None)
 
 
 def test_label_map_falls_back_to_target_order(tmp_path: Path) -> None:
     weight = tmp_path / "watchdog_defect.onnx"
     backend = OnnxDefectBackend()
-    assert backend._label_map(weight) == {0: "hands", 1: "text", 2: "logo"}
+    assert backend._sidecar(weight) == ({0: "hands", 1: "text", 2: "logo"}, None)
+
+
+def test_sidecar_object_form_carries_normalize(tmp_path: Path) -> None:
+    # The object form (written by scripts/fetch-watchdog-text) carries the
+    # label map plus the input-normalisation convention the weight wants.
+    weight = tmp_path / "watchdog_defect.onnx"
+    weight.write_bytes(b"not-a-real-model")
+    sidecar = tmp_path / "watchdog_defect.onnx.labels.json"
+    sidecar.write_text(
+        json.dumps({"labels": {"0": "text"}, "normalize": "imagenet"}),
+        encoding="utf-8",
+    )
+    backend = OnnxDefectBackend()
+    assert backend._sidecar(weight) == ({0: "text"}, "imagenet")
+
+
+def test_covered_targets_follows_object_form_sidecar(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    weight = tmp_path / "watchdog_defect.onnx"
+    weight.write_bytes(b"not-a-real-model")
+    (tmp_path / "watchdog_defect.onnx.labels.json").write_text(
+        json.dumps({"labels": {"0": "text"}, "normalize": "imagenet"}),
+        encoding="utf-8",
+    )
+    monkeypatch.setenv("HGRIPE_WATCHDOG_MODEL", str(weight))
+    assert OnnxDefectBackend().covered_targets() == {"text"}
 
 
 # --- gated end-to-end: synthesise a tiny ONNX detector --------------------
@@ -269,3 +296,84 @@ def test_onnx_defect_dispatch_via_watch(
     assert "text" in report["skipped_targets"]
     types = {issue["type"] for issue in result["quality_report"]["issues"]}
     assert "malformed_hands" in types
+
+
+# --- gated real trained-weight inference (PP-OCRv3 text detection) ---------
+
+
+def _text_detector_stack_ready() -> bool:
+    """Whether the opt-in real text detector can genuinely run here.
+
+    True only when ``onnxruntime`` imports *and* the trained weight is present,
+    i.e. on the manual-dispatch real-inference CI lane (or a dev box that ran
+    ``scripts/fetch-watchdog-text``); the gated e2e test skips everywhere else.
+    """
+    try:
+        import onnxruntime  # noqa: F401
+    except Exception:
+        return False
+    return OnnxDefectBackend().weight_path().is_file()
+
+
+requires_text_detector = pytest.mark.skipif(
+    not _text_detector_stack_ready(),
+    reason="onnxruntime / watchdog weight not present (opt-in real-inference gate)",
+)
+
+
+@requires_text_detector
+def test_onnx_defect_real_inference_when_weight_present(tmp_path: Path) -> None:
+    # The real trained PP-OCRv3 text-detection weight, end-to-end through the
+    # CLI: no fakes, no fallback. Runs only on the opt-in CI lane (or a dev
+    # box) with onnxruntime + the fetched weight (HGRIPE_WATCHDOG_MODEL); the
+    # engine must bind, find the rendered text and report itself truthfully,
+    # and the uncovered targets must stay honestly skipped.
+    import detail_watchdog_cli as cli
+    from PIL import Image, ImageDraw
+
+    img = Image.new("RGB", (320, 240), (245, 245, 240))
+    draw = ImageDraw.Draw(img)
+    draw.text((40, 60), "HELLO WORLD", fill=(10, 10, 10))
+    draw.text((40, 140), "SAMPLE TEXT 123", fill=(20, 20, 60))
+    image_path = tmp_path / "candidate.png"
+    img.save(image_path)
+
+    args = cli.build_parser().parse_args(
+        [
+            "--image",
+            str(image_path),
+            "--output-dir",
+            str(tmp_path),
+            "--engine",
+            "onnx_defect",
+            "--watch-targets",
+            "hands,text,logo",
+            "--no-overlay",
+        ]
+    )
+    result = cli.watch(args)
+    report = result["watchdog_report"]
+    assert report["engine"] == "onnx_defect"
+    assert report["engine_requested"] == "onnx_defect"
+    assert report["engine_fallback_reason"] is None
+    assert report["detectors"] == ["onnx_defect"]
+    assert report["backend_model"]
+    assert report["device"] in ("cpu", "cuda")
+    # `text` is covered by the fetched weight and graduates out of skipped;
+    # hands / logo stay truthfully skipped (the weight cannot detect them).
+    assert "text" not in report["skipped_targets"]
+    assert "hands" in report["skipped_targets"]
+    assert "logo" in report["skipped_targets"]
+    # A real detection: at least one garbled_text finding whose bbox lands on
+    # one of the rendered text lines.
+    text_issues = [
+        issue
+        for issue in result["quality_report"]["issues"]
+        if issue["type"] == "garbled_text"
+    ]
+    assert text_issues
+    for issue in text_issues:
+        assert issue["suggested_action"] == "detail_redraw"
+        assert 0.0 < issue["confidence"] <= 0.99
+    boxes = [issue["bbox"] for issue in text_issues]
+    assert any(y1 < 80 < y2 + 40 or y1 < 160 < y2 + 40 for _, y1, _, y2 in boxes)

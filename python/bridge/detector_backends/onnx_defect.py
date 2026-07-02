@@ -25,12 +25,22 @@ Model contract (a standard single-image detector):
   network's fixed spatial size is read from the model; a dynamic axis falls back
   to ``_DEFAULT_SIZE``. The image is letterbox-resized (aspect preserved) into
   that square so detections map back to the original pixels.
-* outputs: ``boxes`` ``[N, 4]`` ``xyxy`` in input-pixel coords, ``scores``
-  ``[N]``, and ``labels`` ``[N]`` int class ids. Outputs are matched by name
-  (``boxes`` / ``scores`` / ``labels``), falling back to positional order.
-* a sidecar ``<weight>.labels.json`` maps each class id to a watch-target name,
-  e.g. ``{"0": "hands", "1": "text", "2": "logo"}``. Without it the backend uses
-  the natural order of :attr:`targets`.
+* outputs, either of two layouts:
+  - box detections: ``boxes`` ``[N, 4]`` ``xyxy`` in input-pixel coords,
+    ``scores`` ``[N]``, and ``labels`` ``[N]`` int class ids. Outputs are
+    matched by name (``boxes`` / ``scores`` / ``labels``), falling back to
+    positional order; or
+  - a segmentation **probability map** ``[1, 1, H, W]`` float32 in ``0..1`` at
+    the input resolution (the DB-style text-detector convention, e.g. the
+    PP-OCRv3 det export fetched by ``scripts/fetch-watchdog-text``). The map is
+    thresholded and split into connected components; each component becomes one
+    detection (class id ``0``, score = the component's mean probability).
+* a sidecar ``<weight>.labels.json`` describes the weight. Either the bare
+  class-id map, e.g. ``{"0": "hands", "1": "text", "2": "logo"}``, or an
+  object form ``{"labels": {"0": "text"}, "normalize": "imagenet"}`` where
+  ``normalize: "imagenet"`` requests per-channel ImageNet mean/std input
+  normalisation (the PaddleOCR convention). Without a sidecar the backend uses
+  the natural order of :attr:`targets` and no normalisation.
 """
 
 from __future__ import annotations
@@ -50,6 +60,11 @@ _DEFAULT_WEIGHT_NAME = "watchdog_defect.onnx"
 _DEFAULT_SIZE = 640
 # Per-target score floor: a detection below this is ignored (tunable later).
 _SCORE_FLOOR = 0.35
+# Binarisation threshold for probability-map outputs (the DB default).
+_PROB_MAP_THRESHOLD = 0.3
+# ImageNet per-channel input normalisation (the PaddleOCR / torchvision stats).
+_IMAGENET_MEAN = (0.485, 0.456, 0.406)
+_IMAGENET_STD = (0.229, 0.224, 0.225)
 # How each covered target maps into the QualityReport. The action drives Detail
 # Repaint selection (default repaint action is ``detail_redraw``).
 _ISSUE_TYPE = {
@@ -105,31 +120,43 @@ class OnnxDefectBackend:
         try:
             weight = self.weight_path()
             if weight.is_file():
-                mapped = set(self._label_map(weight).values()) & set(self.targets)
+                label_map, _ = self._sidecar(weight)
+                mapped = set(label_map.values()) & set(self.targets)
                 if mapped:
                     return mapped
         except OSError:
             pass
         return set(self.targets)
 
-    def _label_map(self, weight: Path) -> dict[int, str]:
-        """Class-id -> target name, from the sidecar JSON or the target order."""
+    def _sidecar(self, weight: Path) -> tuple[dict[int, str], str | None]:
+        """``(label_map, normalize)`` from the sidecar JSON.
+
+        The sidecar is either the bare class-id -> target map or the object
+        form ``{"labels": {...}, "normalize": "imagenet"}``. Falls back to the
+        natural :attr:`targets` order and no normalisation.
+        """
         sidecar = weight.with_suffix(weight.suffix + ".labels.json")
+        normalize: str | None = None
         if sidecar.is_file():
             try:
                 raw = json.loads(sidecar.read_text(encoding="utf-8"))
             except (ValueError, OSError):
                 raw = None
             if isinstance(raw, dict):
+                labels = raw
+                if isinstance(raw.get("labels"), dict):
+                    labels = raw["labels"]
+                    value = raw.get("normalize")
+                    normalize = str(value) if isinstance(value, str) else None
                 mapped: dict[int, str] = {}
-                for key, value in raw.items():
+                for key, value in labels.items():
                     try:
                         mapped[int(key)] = str(value)
                     except (TypeError, ValueError):
                         continue
                 if mapped:
-                    return mapped
-        return {idx: name for idx, name in enumerate(self.targets)}
+                    return mapped, normalize
+        return {idx: name for idx, name in enumerate(self.targets)}, normalize
 
     def detect(
         self, rgb: Any, alpha: Any, watch: set[str], device: str | None = None
@@ -151,7 +178,7 @@ class OnnxDefectBackend:
         import onnxruntime as ort
 
         weight = self.weight_path()
-        label_map = self._label_map(weight)
+        label_map, normalize = self._sidecar(weight)
 
         session = ort.InferenceSession(
             str(weight),
@@ -166,9 +193,16 @@ class OnnxDefectBackend:
 
         src_h, src_w = rgb.shape[:2]
         tensor, scale, pad = _letterbox(rgb, net_w, net_h, np)
+        if normalize == "imagenet":
+            mean = np.asarray(_IMAGENET_MEAN, dtype=np.float32).reshape(1, 3, 1, 1)
+            std = np.asarray(_IMAGENET_STD, dtype=np.float32).reshape(1, 3, 1, 1)
+            tensor = (tensor - mean) / std
 
         raw = session.run(None, {spec.name: tensor})
-        boxes, scores, labels = _named_outputs(session, raw)
+        if _is_prob_map(raw):
+            boxes, scores, labels = _boxes_from_prob_map(raw[0], np)
+        else:
+            boxes, scores, labels = _named_outputs(session, raw)
         if boxes is None or boxes.size == 0:
             return [], device_used
 
@@ -225,6 +259,59 @@ def _letterbox(rgb: Any, net_w: int, net_h: int, np: Any) -> tuple[Any, float, t
     )
     tensor = np.transpose(canvas, (2, 0, 1))[None, ...].astype(np.float32)
     return tensor, scale, (float(off_x), float(off_y))
+
+
+def _is_prob_map(raw: list[Any]) -> bool:
+    """Whether the model emitted a DB-style segmentation probability map."""
+    if len(raw) != 1:
+        return False
+    out = raw[0]
+    shape = getattr(out, "shape", None)
+    return shape is not None and len(shape) == 4 and shape[0] == 1 and shape[1] == 1
+
+
+def _boxes_from_prob_map(prob: Any, np: Any) -> tuple[Any, Any, Any]:
+    """Split a ``[1, 1, H, W]`` probability map into per-component detections.
+
+    Thresholds at :data:`_PROB_MAP_THRESHOLD` and labels 4-connected
+    components with an iterative flood fill (pure numpy, no scipy). Each
+    component yields one ``xyxy`` box in input-pixel coords with score = the
+    component's mean probability and class id ``0``.
+    """
+    heat = np.asarray(prob, dtype=np.float32)[0, 0]
+    mask = heat >= _PROB_MAP_THRESHOLD
+    height, width = mask.shape
+    visited = np.zeros_like(mask, dtype=bool)
+    boxes: list[list[float]] = []
+    scores: list[float] = []
+    for seed_y, seed_x in zip(*np.nonzero(mask)):
+        if visited[seed_y, seed_x]:
+            continue
+        stack = [(int(seed_y), int(seed_x))]
+        visited[seed_y, seed_x] = True
+        ys: list[int] = []
+        xs: list[int] = []
+        total = 0.0
+        while stack:
+            y, x = stack.pop()
+            ys.append(y)
+            xs.append(x)
+            total += float(heat[y, x])
+            for ny, nx in ((y - 1, x), (y + 1, x), (y, x - 1), (y, x + 1)):
+                if 0 <= ny < height and 0 <= nx < width and mask[ny, nx] and not visited[ny, nx]:
+                    visited[ny, nx] = True
+                    stack.append((ny, nx))
+        boxes.append(
+            [float(min(xs)), float(min(ys)), float(max(xs)) + 1.0, float(max(ys)) + 1.0]
+        )
+        scores.append(total / max(len(ys), 1))
+    if not boxes:
+        return None, None, None
+    return (
+        np.asarray(boxes, dtype=np.float32),
+        np.asarray(scores, dtype=np.float32),
+        np.zeros(len(boxes), dtype=int),
+    )
 
 
 def _named_outputs(session: Any, raw: list[Any]) -> tuple[Any, Any, Any]:

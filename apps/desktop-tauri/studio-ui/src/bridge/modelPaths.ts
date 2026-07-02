@@ -40,20 +40,67 @@ export interface ModelPathsReport {
   config_file: string;
 }
 
+/** Engine -> env var rows the browser mock mirrors from the Rust backend. */
+const MOCK_ENGINE_ENV_VARS: [string, string][] = [
+  ["realesrgan", "HGRIPE_REALESRGAN_MODEL"],
+  ["sd_inpaint", "HGRIPE_INPAINT_MODEL"],
+  ["onnx_defect", "HGRIPE_WATCHDOG_MODEL"],
+  ["onnx_harmonize", "HGRIPE_COLOR_MODEL"],
+  ["onnx_matting", "HGRIPE_MATTING_MODEL"],
+];
+
+const MOCK_STORAGE_KEY = "hgripe.mock.modelPaths";
+
+function loadMockConfig(): ModelPathsConfig {
+  try {
+    const raw = window.localStorage.getItem(MOCK_STORAGE_KEY);
+    if (raw) return JSON.parse(raw) as ModelPathsConfig;
+  } catch {
+    // Ignore parse/storage failures; start blank.
+  }
+  return { model_cache_dir: null, weights: {} };
+}
+
+/** Browser-dev mock of the manager report: config persisted in localStorage,
+ * no real env vars or disk, so `configured_exists` is always false. */
+function mockReport(config: ModelPathsConfig): ModelPathsReport {
+  return {
+    config,
+    entries: MOCK_ENGINE_ENV_VARS.map(([engine, env_var]) => ({
+      engine,
+      env_var,
+      configured_path: config.weights[engine] ?? null,
+      configured_exists: false,
+      env_active: false,
+      env_value: null,
+    })),
+    cache_env_active: false,
+    cache_env_value: null,
+    config_file: "(browser dev mock: stored in localStorage)",
+  };
+}
+
 /**
  * Read the persisted local-model weight paths. Outside the desktop shell
- * (browser preview) there is no config file, so we return `null` and the
- * Dashboard hides the manager panel rather than showing an empty editor.
+ * (browser preview) there is no config file, so the panel runs on a
+ * localStorage-backed mock (paths are never checked against disk there).
  */
-export async function getModelPaths(): Promise<ModelPathsReport | null> {
+export async function getModelPaths(): Promise<ModelPathsReport> {
   const invoke = tauriInvoke();
-  if (!invoke) return null;
+  if (!invoke) return mockReport(loadMockConfig());
   return (await invoke("get_model_paths")) as ModelPathsReport;
 }
 
 /** Persist an updated config and return the resulting report. */
 export async function setModelPaths(config: ModelPathsConfig): Promise<ModelPathsReport> {
   const invoke = tauriInvoke();
-  if (!invoke) throw new Error("model path management requires the desktop shell");
+  if (!invoke) {
+    try {
+      window.localStorage.setItem(MOCK_STORAGE_KEY, JSON.stringify(config));
+    } catch {
+      // Storage may be unavailable (private mode); the in-memory copy still shows.
+    }
+    return mockReport(config);
+  }
   return (await invoke("set_model_paths", { config })) as ModelPathsReport;
 }

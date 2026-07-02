@@ -140,5 +140,13 @@ the paste-back carry honest colour; the source's original mode is recorded as
   **box-filter downsampling**, no-repaint passthrough, decode guard, CMYK source
   mode, EXIF reporting, invalid JSON, missing image (run:
   `pytest python/bridge/tests`).
+- `python/bridge/tests/test_inpaint_backends.py` — the engine seam (resolve /
+  probe / weight paths / unavailable fallback / ControlNet gating), plus the
+  gated `test_sd_inpaint_real_inference_with_tiny_snapshot` real-inference e2e:
+  it synthesises a tiny random-weight SD inpaint snapshot in diffusers format
+  (no download) and runs the real `from_pretrained` → denoise loop → VAE decode
+  through the CLI `repaint` subcommand. It skips without `torch` / `diffusers` /
+  `transformers`; the manual-dispatch **`python bridge (diffusers inference)`**
+  CI lane installs the CPU torch stack and runs it for real.
 - `src-tauri/src/studio/exec.rs` — `PrepareRepaintResult` / `RepaintReport`
   deserialization of the v1 hardening fields (plus legacy JSON defaults).

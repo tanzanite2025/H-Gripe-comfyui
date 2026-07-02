@@ -178,8 +178,15 @@ provider:
 gradient-domain seam compositing in `composite`, defaulting to the feather) +
 the optional ControlNet (canny) conditioning for `sd_inpaint` (`controlnet`
 param, weight from `HGRIPE_CONTROLNET_MODEL`; an unsupported request degrades
-to the provider with a recorded reason) have landed** (the rest of this section
-is the design it was built to; the ⛔ item is real-inference CI). The selector
+to the provider with a recorded reason) + the opt-in real-inference CI lane
+have landed** (the rest of this section is the design it was built to): the
+manual-dispatch **`python bridge (diffusers inference)`** job installs the CPU
+torch stack (`torch` / `diffusers` / `transformers`) and runs the gated
+`test_sd_inpaint_real_inference_with_tiny_snapshot` e2e, which synthesises a
+tiny random-weight SD inpaint snapshot in diffusers format (no weight
+download, like the synthesised-ONNX lanes) and drives the real
+`from_pretrained` → denoise loop → VAE decode through the CLI `repaint`
+subcommand (skips on every normal run). The selector
 is the local card's
 **`engine` param** (`provider` | `sd_inpaint` | …); `provider` stays the default
 and the fallback.

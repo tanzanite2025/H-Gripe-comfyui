@@ -11,9 +11,10 @@ on:
       - 'docs/**'
   # Opt-in end-to-end checks that run real model inference: the weights are
   # never committed, so the gated tests (`vitmatte_inference_when_weight_present`,
-  # `test_realesrgan_real_inference_when_stack_present`) skip on every normal
-  # run. Trigger this manually to fetch the weights and exercise the real
-  # inference paths.
+  # `test_realesrgan_real_inference_when_stack_present`,
+  # `test_sd_inpaint_real_inference_with_tiny_snapshot`) skip on every normal
+  # run. Trigger this manually to fetch/synthesise the weights and exercise the
+  # real inference paths.
   workflow_dispatch:
 
 concurrency:
@@ -159,6 +160,35 @@ jobs:
         run: bash scripts/fetch-realesrgan.sh
 
       - name: Run bridge tests (gated real inference active)
+        run: python -m pytest python/bridge/tests -q
+
+  diffusers-inference:
+    name: python bridge (diffusers inference)
+    # Only on manual dispatch (the torch + diffusers install is heavy for the
+    # per-PR matrix): runs the gated Detail Repaint real-inference test, which
+    # synthesises a tiny random-weight SD inpaint snapshot in diffusers format
+    # (no weight download, mirroring the synthesised-ONNX lane) and exercises
+    # the real from_pretrained -> denoise-loop -> VAE-decode path through the
+    # CLI `repaint` subcommand. Skips on every normal run.
+    if: github.event_name == 'workflow_dispatch'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.x'
+
+      - name: Install runtime + test deps
+        run: pip install Pillow numpy pytest attrs
+
+      - name: Install torch stack (CPU wheels)
+        run: pip install torch --index-url https://download.pytorch.org/whl/cpu
+
+      - name: Install diffusers stack
+        run: pip install diffusers transformers accelerate
+
+      - name: Run bridge tests (gated diffusers inference active)
         run: python -m pytest python/bridge/tests -q
 
   python-bridge:

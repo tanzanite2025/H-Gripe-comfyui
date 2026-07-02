@@ -44,6 +44,8 @@ export interface ModelPathsReport {
 const MOCK_ENGINE_ENV_VARS: [string, string][] = [
   ["realesrgan", "HGRIPE_REALESRGAN_MODEL"],
   ["sd_inpaint", "HGRIPE_INPAINT_MODEL"],
+  ["sdxl_inpaint", "HGRIPE_SDXL_INPAINT_MODEL"],
+  ["flux_fill", "HGRIPE_FLUX_FILL_MODEL"],
   ["onnx_defect", "HGRIPE_WATCHDOG_MODEL"],
   ["onnx_harmonize", "HGRIPE_COLOR_MODEL"],
   ["onnx_matting", "HGRIPE_MATTING_MODEL"],

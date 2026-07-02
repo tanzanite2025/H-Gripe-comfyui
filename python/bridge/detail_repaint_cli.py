@@ -826,7 +826,10 @@ def build_parser() -> argparse.ArgumentParser:
     rep.add_argument(
         "--engine",
         default=_PROVIDER_ENGINE,
-        help="inpaint engine: provider (default) | sd_inpaint (opt-in, falls back to provider)",
+        help=(
+            "inpaint engine: provider (default) | sd_inpaint | sdxl_inpaint | "
+            "flux_fill (opt-in, falls back to provider)"
+        ),
     )
     rep.add_argument(
         "--prompt",

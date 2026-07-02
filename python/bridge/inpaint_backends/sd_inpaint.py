@@ -33,12 +33,13 @@ from . import InpaintUnavailable, model_cache_dir
 
 _DEFAULT_WEIGHT_DIR = "sd-inpaint"
 
-#: Process-global warm cache of constructed Stable Diffusion inpaint pipelines,
-#: keyed by ``(weight, device, precision)``. ``from_pretrained`` loads a multi-GB
-#: checkpoint and moves it onto the device; in a long-lived host (the torch
-#: worker, staged-rollout step 4 of ``docs/cards/editor-resource-model.md``) this
-#: cache means that happens once per ``(weight, device, precision)`` instead of
-#: on every run. In a one-shot CLI process it is simply built once and discarded.
+#: Process-global warm cache of constructed inpaint pipelines (shared by every
+#: diffusers backend in this package), keyed by ``(weight, device, precision)``.
+#: ``from_pretrained`` loads a multi-GB checkpoint and moves it onto the device;
+#: in a long-lived host (the torch worker, staged-rollout step 4 of
+#: ``docs/cards/editor-resource-model.md``) this cache means that happens once
+#: per ``(weight, device, precision)`` instead of on every run. In a one-shot
+#: CLI process it is simply built once and discarded.
 _WARM_PIPELINES: dict[tuple[str, str, str], Any] = {}
 
 
@@ -61,13 +62,25 @@ def _construct_pipeline(weight: str, device: str, precision: str) -> Any:
     return pipe.to(device)
 
 
-def _warm_pipeline(weight: str, device: str, precision: str) -> Any:
-    """Return a cached inpaint pipeline for the key, building it on first use."""
+def _warm_pipeline(
+    weight: str,
+    device: str,
+    precision: str,
+    constructor: Any = None,
+) -> Any:
+    """Return a cached inpaint pipeline for the key, building it on first use.
+
+    ``constructor`` lets the other diffusers backends (SDXL, Flux Fill) share
+    this cache with their own pipeline builder; the default is this module's
+    SD constructor (resolved at call time so tests can monkeypatch it). Weights
+    live in per-engine directories, so keys never collide across backends.
+    """
     key = (weight, device, precision)
     cached = _WARM_PIPELINES.get(key)
     if cached is not None:
         return cached
-    built = _construct_pipeline(weight, device, precision)
+    build = constructor if constructor is not None else _construct_pipeline
+    built = build(weight, device, precision)
     _WARM_PIPELINES[key] = built
     return built
 

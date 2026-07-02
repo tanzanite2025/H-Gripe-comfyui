@@ -195,6 +195,13 @@ def _load_image(image_path: str, max_decode_pixels: int) -> tuple[Any, bool]:
         fixed = img
     if fixed is not img:
         transposed = True
+
+    # A ProPhoto-tagged manual product (the Rust chain's 16-bit output) is
+    # colour-managed into sRGB here (dropping the stale profile so it is not
+    # re-embedded on save); everything else passes through untouched.
+    from wide_gamut import managed_to_srgb
+
+    fixed, _ = managed_to_srgb(fixed)
     return fixed, transposed
 
 

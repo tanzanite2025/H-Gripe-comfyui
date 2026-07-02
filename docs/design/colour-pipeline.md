@@ -194,6 +194,17 @@ Design-first; each phase is an independently reviewable, CI-gated PR.
     move in lock-step with the bridge in P5, not ahead of it.
 - **P5 — Python-bridge parity.** Reconcile / retire the Python path's 8-bit
   sRGB behaviour so the two engines agree on the new contract.
+  - **P5a (landed): sRGB ingress for manual products.** Pillow opens the Rust
+    chain's 16-bit ProPhoto PNG/TIFF as 8-bit and would read the ProPhoto
+    numbers as if sRGB (mid-grey alone lands 18 codes off). The shared
+    `python/bridge/wide_gamut.py` ingress detects the ProPhoto tag and
+    colour-manages the pixels to sRGB via the embedded profile — the Python
+    mirror of `WorkingImage::to_srgb_rgba8` — and every CLI image loader runs
+    it. Anything not ProPhoto-tagged passes through byte-identical, matching
+    the Rust loader's conservatism. Cross-engine parity is pinned by
+    `tests/test_wide_gamut.py` against a fixture written by
+    `write_working_png` itself, asserted to the same goldens as the Rust
+    egress stage test (lcms vs moxcms within ±4).
 
 ## Open decisions
 

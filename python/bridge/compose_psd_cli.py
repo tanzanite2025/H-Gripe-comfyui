@@ -175,6 +175,12 @@ def _load_rgba(image_path: str, max_decode_pixels: int) -> tuple[Any, str, bool]
     img.load()
     img, transposed = _apply_exif_orientation(img)
 
+    # A ProPhoto-tagged manual product (the Rust chain's 16-bit output) is
+    # colour-managed into sRGB; everything else passes through untouched.
+    from wide_gamut import managed_to_srgb
+
+    img, _ = managed_to_srgb(img)
+
     source_mode = img.mode
     had_alpha = source_mode in _ALPHA_MODES or (
         source_mode == "P" and "transparency" in img.info

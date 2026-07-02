@@ -238,8 +238,23 @@ Design-first; each phase is an independently reviewable, CI-gated PR.
 3. **Manual file container:** 16-bit PNG (simple, ICC via iCCP) vs TIFF
    (can also carry CMYK directly). PNG recommended unless a card needs CMYK
    round-trip.
-4. **Local-model bit depth:** 8-bit vs 16-bit sRGB per model — depends on each
-   model's actual input contract; decide per integration in P3.
+4. **Local-model bit depth:** ~~8-bit vs 16-bit sRGB per model~~ — **decided:
+   8-bit sRGB for every current local model.** Surveyed per integration; all
+   eight ingest 8-bit sRGB and rescale to `float32 0..1` (or hand PIL `RGB`
+   straight to the framework):
+   - native ORT: SAM 2 (`subject_sam2`, `1/255`), BiRefNet/saliency
+     (`subject_model`, ImageNet-normalised), ViTMatte (`subject_matte`,
+     image+trimap `1/255`);
+   - bridge ONNX/torch: `onnx_defect` (detail_watchdog), `onnx_harmonize`
+     (color_match), `vitmatte_onnx` (edge_refine), `realesrgan`
+     (image_enhance), `sd_inpaint` (detail_repaint).
+
+   All are trained on 8-bit sRGB imagery, so a 16-bit entry (f32 tensors from
+   the u16 surface) would only add sub-LSB precision the networks are
+   insensitive to, while forking the single well-tested P3 egress
+   (`to_srgb_rgba8`). Revisit only if a future integration's weights are
+   trained on high-bit-depth / linear-light data — then give that model its
+   own 16-bit egress rather than changing the shared boundary.
 
 ## Related
 

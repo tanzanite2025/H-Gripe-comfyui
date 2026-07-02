@@ -388,11 +388,11 @@ export const NODE_ZH: Record<string, NodeSpecZh> = {
       operation: { label: "操作" },
       engine: {
         label: "引擎",
-        hint: "provider = 远程 image.edit（默认）；sd_inpaint = 可选本地 GPU 重绘，权重/依赖缺失时回落 provider",
+        hint: "provider = 远程 image.edit（默认）；sd_inpaint / sdxl_inpaint / flux_fill = 可选本地 GPU 重绘，权重/依赖缺失时回落 provider（flux_fill 忽略负面提示词与强度）",
       },
       precision: {
         label: "精度",
-        hint: "sd_inpaint 后端的计算精度：auto（CUDA 上 fp16，否则 fp32）| fp32 | fp16（CPU 运行时回落 fp32）；provider 路径忽略此项",
+        hint: "本地重绘后端的计算精度：auto（CUDA 上 fp16，否则 fp32）| fp32 | fp16（CPU 运行时回落 fp32）；provider 路径忽略此项",
       },
       credentials_ref: { label: "凭据", hint: "选择档案时自动设置" },
       repaint_prompt_base: {

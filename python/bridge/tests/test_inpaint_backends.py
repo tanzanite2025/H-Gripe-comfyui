@@ -25,7 +25,9 @@ from inpaint_backends import (  # noqa: E402
     probe,
     resolve,
 )
+from inpaint_backends.flux_fill import FluxFillBackend  # noqa: E402
 from inpaint_backends.sd_inpaint import StableDiffusionInpaintBackend  # noqa: E402
+from inpaint_backends.sdxl_inpaint import StableDiffusionXLInpaintBackend  # noqa: E402
 
 PIL = pytest.importorskip("PIL")
 from PIL import Image  # noqa: E402
@@ -46,16 +48,19 @@ def test_resolve_unknown_engine_returns_none() -> None:
     assert resolve("does_not_exist") is None
 
 
-def test_resolve_known_backend() -> None:
-    backend = resolve("sd_inpaint")
+@pytest.mark.parametrize("engine", ["sd_inpaint", "sdxl_inpaint", "flux_fill"])
+def test_resolve_known_backend(engine: str) -> None:
+    backend = resolve(engine)
     assert backend is not None
-    assert backend.id == "sd_inpaint"
+    assert backend.id == engine
 
 
 def test_known_engines_lists_provider_first() -> None:
     engines = known_engines()
     assert engines[0] == "provider"
     assert "sd_inpaint" in engines
+    assert "sdxl_inpaint" in engines
+    assert "flux_fill" in engines
 
 
 def test_probe_always_reports_provider_available() -> None:
@@ -64,7 +69,8 @@ def test_probe_always_reports_provider_available() -> None:
     assert "sd_inpaint" in report["engines"]
     # The remote provider is not a local accelerator; the local engine is.
     assert report["engines"]["provider"]["accelerated"] is False
-    assert report["engines"]["sd_inpaint"]["accelerated"] is True
+    for engine in ("sd_inpaint", "sdxl_inpaint", "flux_fill"):
+        assert report["engines"][engine]["accelerated"] is True
     # Cached-weight inventory: the remote provider loads none; the local engine
     # names its (directory) weight.
     assert "weight" not in report["engines"]["provider"]
@@ -74,31 +80,46 @@ def test_probe_always_reports_provider_available() -> None:
     assert "model_cache_dir" in report
 
 
-def test_sd_inpaint_unavailable_without_weight(monkeypatch: pytest.MonkeyPatch) -> None:
+_BACKENDS = [
+    (StableDiffusionInpaintBackend, "HGRIPE_INPAINT_MODEL", "sd-inpaint"),
+    (StableDiffusionXLInpaintBackend, "HGRIPE_SDXL_INPAINT_MODEL", "sdxl-inpaint"),
+    (FluxFillBackend, "HGRIPE_FLUX_FILL_MODEL", "flux-fill"),
+]
+
+
+@pytest.mark.parametrize(("backend_cls", "env_var", "weight_dir"), _BACKENDS)
+def test_backend_unavailable_without_weight(
+    monkeypatch: pytest.MonkeyPatch, backend_cls: type, env_var: str, weight_dir: str
+) -> None:
     # No weight on disk -> unavailable with a helpful reason, never a crash.
-    monkeypatch.delenv("HGRIPE_INPAINT_MODEL", raising=False)
+    monkeypatch.delenv(env_var, raising=False)
     monkeypatch.setenv("HGRIPE_MODEL_CACHE", "/definitely/not/here")
-    backend = StableDiffusionInpaintBackend()
+    backend = backend_cls()
     ok, reason = backend.available()
     assert ok is False
     assert reason  # non-empty explanation
+    assert backend.weight_path().name == weight_dir
 
 
-def test_sd_inpaint_inpaint_raises_when_unavailable(
-    monkeypatch: pytest.MonkeyPatch,
+@pytest.mark.parametrize(("backend_cls", "env_var", "weight_dir"), _BACKENDS)
+def test_backend_inpaint_raises_when_unavailable(
+    monkeypatch: pytest.MonkeyPatch, backend_cls: type, env_var: str, weight_dir: str
 ) -> None:
-    monkeypatch.delenv("HGRIPE_INPAINT_MODEL", raising=False)
+    monkeypatch.delenv(env_var, raising=False)
     monkeypatch.setenv("HGRIPE_MODEL_CACHE", "/definitely/not/here")
-    backend = StableDiffusionInpaintBackend()
+    backend = backend_cls()
     crop = Image.new("RGB", (16, 16))
     mask = Image.new("L", (16, 16), 255)
     with pytest.raises(InpaintUnavailable):
         backend.inpaint(crop, mask, "restore")
 
 
-def test_weight_path_prefers_env_override(monkeypatch: pytest.MonkeyPatch) -> None:
-    monkeypatch.setenv("HGRIPE_INPAINT_MODEL", "/models/my-inpaint")
-    assert StableDiffusionInpaintBackend().weight_path() == Path("/models/my-inpaint")
+@pytest.mark.parametrize(("backend_cls", "env_var", "weight_dir"), _BACKENDS)
+def test_weight_path_prefers_env_override(
+    monkeypatch: pytest.MonkeyPatch, backend_cls: type, env_var: str, weight_dir: str
+) -> None:
+    monkeypatch.setenv(env_var, "/models/my-inpaint")
+    assert backend_cls().weight_path() == Path("/models/my-inpaint")
 
 
 def test_probe_survives_a_broken_backend(monkeypatch: pytest.MonkeyPatch) -> None:

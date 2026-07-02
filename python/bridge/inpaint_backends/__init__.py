@@ -5,9 +5,9 @@ paste-back) lives in ``detail_repaint_cli.py`` and is always available; the
 *generative* fix between those two halves is, today, the H-Gripe broker's
 remote ``image.edit`` provider call owned by the Rust/TS orchestrator. This
 package is the ``engine`` seam from ``docs/phase2-algorithm-roadmap.md`` §3:
-additional **local** GPU inpaint engines (``sd_inpaint`` now; SDXL / Flux Fill
-later) register here and are selected per run by the node's ``engine`` param,
-consuming the *same* prepare manifest so the contract is unchanged.
+additional **local** GPU inpaint engines (``sd_inpaint``, ``sdxl_inpaint``,
+``flux_fill``) register here and are selected per run by the node's ``engine``
+param, consuming the *same* prepare manifest so the contract is unchanged.
 
 Design rules (mirroring the ``sr_backends`` / ``detector_backends`` seams):
 
@@ -105,9 +105,15 @@ class InpaintBackend(Protocol):
 
 # Imported lazily so this module stays torch/diffusers-free at import time.
 def _registry() -> dict[str, InpaintBackend]:
+    from .flux_fill import FluxFillBackend
     from .sd_inpaint import StableDiffusionInpaintBackend
+    from .sdxl_inpaint import StableDiffusionXLInpaintBackend
 
-    backends: list[InpaintBackend] = [StableDiffusionInpaintBackend()]
+    backends: list[InpaintBackend] = [
+        StableDiffusionInpaintBackend(),
+        StableDiffusionXLInpaintBackend(),
+        FluxFillBackend(),
+    ]
     return {b.id: b for b in backends}
 
 

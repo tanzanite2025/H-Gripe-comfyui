@@ -1199,10 +1199,10 @@ export const NODE_SPECS: Record<string, NodeSpec> = {
         key: "engine",
         label: "Engine",
         control: "select",
-        options: ["provider", "sd_inpaint"],
+        options: ["provider", "sd_inpaint", "sdxl_inpaint", "flux_fill"],
         defaultValue: "provider",
         inline: true,
-        hint: "provider = remote image.edit (default); sd_inpaint = opt-in local GPU inpaint, falls back to the provider when its weights/deps are missing",
+        hint: "provider = remote image.edit (default); sd_inpaint / sdxl_inpaint / flux_fill = opt-in local GPU inpaint, falls back to the provider when its weights/deps are missing (flux_fill ignores negative prompt and strength)",
       },
       {
         key: "precision",
@@ -1211,8 +1211,8 @@ export const NODE_SPECS: Record<string, NodeSpec> = {
         options: ["auto", "fp32", "fp16"],
         defaultValue: "auto",
         inline: true,
-        hint: "compute precision for the sd_inpaint backend: auto (fp16 on cuda else fp32) | fp32 | fp16 (degrades to fp32 on a cpu run); ignored by the provider path",
-        visibleWhen: { param: "engine", in: ["sd_inpaint"] },
+        hint: "compute precision for the local inpaint backends: auto (fp16 on cuda else fp32) | fp32 | fp16 (degrades to fp32 on a cpu run); ignored by the provider path",
+        visibleWhen: { param: "engine", in: ["sd_inpaint", "sdxl_inpaint", "flux_fill"] },
       },
       {
         key: "credentials_ref",

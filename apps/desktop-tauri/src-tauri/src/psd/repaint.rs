@@ -328,10 +328,10 @@ pub(crate) fn local_repaint_regions(
         output_name.as_deref().unwrap_or("").into(),
     ];
 
-    // Only the torch backend (`sd_inpaint`) loads a heavy pipeline per call, so
-    // only it is routed through the warm worker; the default `provider` (remote
+    // Only the torch backends load a heavy pipeline per call, so only they are
+    // routed through the warm worker; the default `provider` (remote
     // `image.edit`) and any other engine stay a one-shot.
-    let stdout = if engine == "sd_inpaint" {
+    let stdout = if matches!(engine, "sd_inpaint" | "sdxl_inpaint" | "flux_fill") {
         run_torch_cli(
             &python,
             &dir,

@@ -79,12 +79,7 @@ fn main() {
         .invoke_handler(tauri::generate_handler![
             commands::runtime::get_runtime_info,
             commands::runtime::doctor,
-            commands::config::get_credentials,
-            commands::config::check_credentials,
             commands::config::get_profiles,
-            commands::config::check_profiles,
-            commands::config::read_config_file,
-            commands::config::write_config_file,
             commands::history::list_history,
             commands::history::history_detail,
             commands::history::history_cleanup_preview,

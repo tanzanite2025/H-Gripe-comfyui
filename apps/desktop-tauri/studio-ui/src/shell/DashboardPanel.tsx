@@ -68,8 +68,8 @@ export function DashboardPanel() {
               <div className="label">providers</div>
               <div className="value">{info.providers.join(", ")}</div>
             </div>
-            <PathCard label="credentials.json" info={info.credentials_file} />
-            <PathCard label="provider_profiles.json" info={info.profiles_file} />
+            <PathCard label="API keys file" info={info.credentials_file} />
+            <PathCard label="provider profiles file" info={info.profiles_file} />
             <PathCard label="history file" info={info.history_file} />
             <PathCard label="history db" info={info.history_db} />
             <PathCard label="output dir" info={info.output_dir} />

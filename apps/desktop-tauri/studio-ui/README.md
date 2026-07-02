@@ -1,8 +1,8 @@
 # H-Gripe Studio (desktop front end)
 
 The Vite + React + TypeScript front end for H-Gripe Desktop. It hosts the shell
-panels (Dashboard / PSD Studio / Credentials / Profiles / Run Task / History /
-PSD, under [`src/shell/`](src/shell/)) and H-Gripe's own production node-graph
+panels (Dashboard / PSD Studio / Run Task / History / PSD, under
+[`src/shell/`](src/shell/)) and H-Gripe's own production node-graph
 editor built on [React Flow](https://reactflow.dev) (`@xyflow/react`, under
 [`src/editor/`](src/editor/)) as tabs of one app. The node editor is H-Gripe's
 own visual workflow canvas — the only node canvas in the app.
@@ -70,8 +70,8 @@ effects goes through Tauri/Rust:
   `list_studio_workflows`, `rename_studio_workflow`, `delete_studio_workflow`,
   `duplicate_studio_workflow`, and `read_studio_recents` / `write_studio_recents`
   (which persist the active folder + recent files next to the autosave).
-- Credentials, provider profiles, output directories, history, cache indexes,
-  local GPU service startup, and video export should live behind Rust commands.
+- API provider config, output directories, history, cache indexes, local GPU
+  service startup, and video export should live behind Rust commands.
 
 The desktop Run / Run xN path uses the Rust-side `run_studio_graph` Tauri
 command. It accepts the same renderer-agnostic `WorkflowGraph` JSON, executes
@@ -92,6 +92,11 @@ folder, above). Before the Node Editor becomes the primary production surface,
 the backend runner still needs a media index/cache, richer logs, more complete
 error details, more provider-native cancellation adapters, and FFmpeg-backed
 video assembly/export.
+
+The desktop shell intentionally has no Credentials / Profiles account-management
+tabs. Provider profiles and credential refs are local API config files consumed
+by the broker; editing them stays in the CLI/file layer until a cleaner API
+configuration surface is designed.
 
 ## Editor features
 

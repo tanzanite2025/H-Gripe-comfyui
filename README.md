@@ -5,7 +5,8 @@
 
 </div>
 
-H-Gripe Studio is a local-first [Tauri](https://tauri.app) desktop app: a single
+H-Gripe Studio is a local-first [Tauri](https://tauri.app) desktop app with no
+H-Gripe account/login system: a single
 React front end (shell panels + an in-house React Flow node editor) over a Rust
 backend (the `hgripe-api` broker, Tauri commands, native compute cards, and
 resource scheduling) plus a Python bridge for PSD/image helpers and opt-in model
@@ -204,9 +205,14 @@ python -m pytest python/bridge/tests
 
 ## Local Workspace Mode
 
-H-Gripe is local-first and personal-use oriented: there are no cloud accounts or multi-user profiles. Workflows, credentials, provider profiles, history, and generated outputs are all stored under a single local workspace rooted at `user/hgripe`.
+H-Gripe is local-first and personal-use oriented: there are no cloud accounts,
+login sessions, or multi-user profiles. Workflows, API credential refs, provider
+profiles, history, and generated outputs are all stored under a single local
+workspace rooted at `user/hgripe`.
 
-Credential refs keep API keys out of workflow files. `openai_compatible` and `custom_http` tasks/nodes can use them. The default local credential file is ignored by git:
+Credential refs keep third-party API keys out of workflow files. They are not
+H-Gripe accounts. `openai_compatible` and `custom_http` tasks/nodes can use
+them. The default local credential file is ignored by git:
 
 ```text
 user/hgripe/credentials.json
@@ -214,7 +220,9 @@ user/hgripe/credentials.json
 
 You can also point to another file with `HGRIPE_CREDENTIALS_FILE`.
 
-Provider profiles keep non-secret provider defaults out of workflow files. `openai_compatible` and `custom_http` tasks/nodes can use them. The default local profile file is ignored by git:
+Provider profiles keep non-secret third-party provider defaults out of workflow
+files. `openai_compatible` and `custom_http` tasks/nodes can use them. The
+default local profile file is ignored by git:
 
 ```text
 user/hgripe/provider_profiles.json

@@ -117,14 +117,12 @@ export const messages = {
     zh: "快照存储在本浏览器中并捕获整个图。恢复将替换当前工作流。",
   },
 
-  // ---- desktop shell (Dashboard / PSD Studio / Credentials / Profiles / Run /
-  // History / PSD tabs), merged in from the former dependency-free shell-ui. ----
+  // ---- desktop shell (Dashboard / PSD Studio / Run / History / PSD tabs),
+  // merged in from the former dependency-free shell-ui. ----
   "brand.title": { en: "H-Gripe Desktop", zh: "H-Gripe 桌面端" },
 
   "tab.dashboard": { en: "Dashboard", zh: "仪表盘" },
   "tab.studio": { en: "PSD Studio", zh: "PSD 工作室" },
-  "tab.credentials": { en: "Credentials", zh: "凭据" },
-  "tab.profiles": { en: "Profiles", zh: "配置档案" },
   "tab.run": { en: "Run Task", zh: "运行任务" },
   "tab.history": { en: "History", zh: "历史" },
   "tab.psd": { en: "PSD", zh: "PSD" },
@@ -200,14 +198,6 @@ export const messages = {
   "studio.noPsdInOutput": { en: "no PSD files in output dir", zh: "输出目录中没有 PSD 文件" },
   "studio.pickedPsd": { en: "picked {name}.psd ({count} found)", zh: "已选取 {name}.psd（共 {count} 个）" },
 
-  "creds.heading": { en: "Credentials", zh: "凭据" },
-  "creds.file": { en: "credentials.json", zh: "credentials.json" },
-  "creds.keyEnv": { en: "env:", zh: "环境变量:" },
-  "creds.keySet": { en: "set", zh: "已设置" },
-  "creds.keyNone": { en: "none", zh: "无" },
-  "profiles.heading": { en: "Provider Profiles", zh: "提供方档案" },
-  "profiles.file": { en: "provider_profiles.json", zh: "provider_profiles.json" },
-
   "status.saved": { en: "saved", zh: "已保存" },
   "toast.savedKind": { en: "{kind} saved", zh: "{kind} 已保存" },
   "validation.valid": { en: "valid", zh: "有效" },
@@ -215,7 +205,7 @@ export const messages = {
 
   "field.provider": { en: "provider", zh: "提供方" },
   "field.model": { en: "model", zh: "模型" },
-  "field.creds": { en: "creds", zh: "凭据" },
+  "field.creds": { en: "API key ref", zh: "API 密钥引用" },
   "field.key": { en: "key", zh: "密钥" },
   "field.headers": { en: "headers", zh: "请求头" },
   "field.params": { en: "params", zh: "参数" },

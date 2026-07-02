@@ -1,7 +1,7 @@
 // Application shell: top bar + tab navigation hosting the former vanilla
-// shell-ui tabs (Dashboard / PSD Studio / Credentials / Profiles / Run /
-// History / PSD) as React panels, plus the React Flow Node Editor. This is the
-// single front-end entry point that replaced the shell-ui + iframe split.
+// shell-ui tabs (Dashboard / PSD Studio / Run / History / PSD) as React panels,
+// plus the React Flow Node Editor. This is the single front-end entry point
+// that replaced the shell-ui + iframe split.
 
 import { useCallback, useState } from "react";
 
@@ -10,7 +10,6 @@ import { LangContext, loadLang, saveLang, useT, type Lang, type MsgKey } from ".
 import { ToastProvider } from "./common";
 import { DashboardPanel } from "./DashboardPanel";
 import { PsdStudioPanel } from "./PsdStudioPanel";
-import { ConfigPanel } from "./ConfigPanel";
 import { RunTaskPanel } from "./RunTaskPanel";
 import { HistoryPanel } from "./HistoryPanel";
 import { PsdPanel } from "./PsdPanel";
@@ -18,8 +17,6 @@ import { PsdPanel } from "./PsdPanel";
 type TabId =
   | "dashboard"
   | "studio"
-  | "credentials"
-  | "profiles"
   | "run"
   | "history"
   | "psd"
@@ -28,8 +25,6 @@ type TabId =
 const TABS: { id: TabId; label: MsgKey }[] = [
   { id: "dashboard", label: "tab.dashboard" },
   { id: "studio", label: "tab.studio" },
-  { id: "credentials", label: "tab.credentials" },
-  { id: "profiles", label: "tab.profiles" },
   { id: "run", label: "tab.run" },
   { id: "history", label: "tab.history" },
   { id: "psd", label: "tab.psd" },
@@ -73,8 +68,6 @@ function ShellBody({ onToggleLang }: { onToggleLang: () => void }) {
           <div className="shell-scroll">
             {tab === "dashboard" && <DashboardPanel />}
             {tab === "studio" && <PsdStudioPanel />}
-            {tab === "credentials" && <ConfigPanel kind="credentials" />}
-            {tab === "profiles" && <ConfigPanel kind="profiles" />}
             {tab === "run" && <RunTaskPanel />}
             {tab === "history" && <HistoryPanel />}
             {tab === "psd" && <PsdPanel />}

@@ -1,5 +1,5 @@
 // Typed wrapper around the Tauri IPC bridge for the desktop *shell* commands
-// (Dashboard / Credentials / Profiles / Run / History / PSD / PSD Studio tabs).
+// (Dashboard / Run / History / PSD / PSD Studio tabs).
 //
 // This is the single place that touches `invoke` for these commands: every
 // backend command has an explicit argument + return type derived from the Rust
@@ -31,16 +31,6 @@ export interface RuntimeInfo {
   output_dir: PathInfo;
 }
 
-/** `hgripe-api::CredentialSummary` (Rust `Option<String>` → `string | null`). */
-export interface CredentialSummary {
-  credential_ref: string;
-  provider: string | null;
-  base_url: string | null;
-  api_key_configured: boolean;
-  api_key_env: string | null;
-  headers_count: number;
-}
-
 /** `hgripe-api::ProviderProfileSummary`. */
 export interface ProfileSummary {
   profile_ref: string;
@@ -52,23 +42,6 @@ export interface ProfileSummary {
   has_headers: boolean;
   params_count: number;
   extra_body_count: number;
-}
-
-/** A single credential/profile validation issue. */
-export interface ValidationIssue {
-  severity: string;
-  code: string;
-  message: string;
-  credential_ref?: string;
-  profile_ref?: string;
-}
-
-/** `check_credentials` / `check_profiles` result. */
-export interface ValidationResult {
-  ok: boolean;
-  issues: ValidationIssue[];
-  credential_count?: number;
-  profile_count?: number;
 }
 
 /** An output file produced by a task run. */
@@ -106,9 +79,6 @@ export interface PsdOutput {
   size_bytes: number;
   smart_object: boolean;
 }
-
-/** Which on-disk config file an editor operates on. */
-export type ConfigKind = "credentials" | "profiles";
 
 /** Filter for `list_history`. */
 export interface HistoryQuery {
@@ -148,13 +118,7 @@ export const commands = {
   getRuntimeInfo: () => invoke<RuntimeInfo>("get_runtime_info"),
   doctor: () => invoke<unknown>("doctor"),
 
-  getCredentials: () => invoke<CredentialSummary[]>("get_credentials"),
   getProfiles: () => invoke<ProfileSummary[]>("get_profiles"),
-  readConfigFile: (kind: ConfigKind) => invoke<string>("read_config_file", { kind }),
-  writeConfigFile: (kind: ConfigKind, content: string) =>
-    invoke<void>("write_config_file", { kind, content }),
-  checkCredentials: () => invoke<ValidationResult>("check_credentials"),
-  checkProfiles: () => invoke<ValidationResult>("check_profiles"),
 
   runTaskJson: (taskJson: string) => invoke<ApiResult>("run_task_json", { taskJson }),
   listHistory: (query: HistoryQuery) => invoke<HistoryRecord[]>("list_history", { query }),

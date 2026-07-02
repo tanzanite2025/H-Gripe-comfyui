@@ -436,6 +436,28 @@ export const NODE_ZH: Record<string, NodeSpecZh> = {
       assemble_report: "合成报告",
     },
   },
+  videoTrim: {
+    title: "视频剪辑",
+    description:
+      "通过媒体引擎的 FFmpeg 后端（PyAV）从视频文件中剪出一个时间区间。连接视频（或在 video 参数中填路径），设置起止秒数，即可得到帧精确的重编码片段及剪辑报告。音频不会保留。",
+    params: {
+      video: { label: "视频", hint: "源视频路径（连接的 video 输入优先）" },
+      start_sec: { label: "起始秒", hint: "剪辑起点（自开头起的秒数）" },
+      end_sec: { label: "结束秒", hint: "剪辑终点秒数（0 = 到片尾）" },
+      codec: { label: "编码器", hint: "重编码使用的 ffmpeg 编码器；libx264 兼容性最好" },
+      output_dir: { label: "输出目录", hint: OUTPUT_DIR_HINT },
+      output_name: {
+        label: "输出名",
+        hint: "输出文件名（空 = trimmed-<时间戳>.mp4；缺省扩展名为 .mp4）",
+      },
+    },
+    ports: {
+      video: "视频",
+      frame_count: "帧数",
+      duration_sec: "时长（秒）",
+      trim_report: "剪辑报告",
+    },
+  },
   psdExport: {
     title: "PSD 导出",
     description:

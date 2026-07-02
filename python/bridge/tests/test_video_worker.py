@@ -214,6 +214,60 @@ def test_assemble_rejects_bad_args(args, needle):
     assert needle in resp["error"]
 
 
+def test_trim_cuts_via_injected_trimmer(monkeypatch):
+    calls: list[tuple[str, str, float, float | None, str]] = []
+
+    def fake_trimmer(video, out_path, start_sec, end_sec, codec):
+        calls.append((video, out_path, start_sec, end_sec, codec))
+        return {"video_path": out_path, "frame_count": 5}
+
+    monkeypatch.setattr(video_worker, "_TRIMMER", fake_trimmer)
+    resp = video_worker.handle_request(
+        {
+            "id": 1,
+            "cmd": "trim",
+            "args": {"video": "clip.mp4", "out": "/tmp/cut.mp4", "start_sec": 1.5, "end_sec": 3, "codec": "libx264"},
+        }
+    )
+    assert resp["ok"] is True
+    payload = json.loads(resp["stdout"])
+    assert payload["video_path"] == "/tmp/cut.mp4"
+    assert calls == [("clip.mp4", "/tmp/cut.mp4", 1.5, 3.0, "libx264")]
+
+
+def test_trim_defaults_start_end_and_codec(monkeypatch):
+    seen: dict[str, object] = {}
+
+    def fake_trimmer(video, out_path, start_sec, end_sec, codec):
+        seen.update(start_sec=start_sec, end_sec=end_sec, codec=codec)
+        return {"video_path": out_path}
+
+    monkeypatch.setattr(video_worker, "_TRIMMER", fake_trimmer)
+    resp = video_worker.handle_request(
+        {"id": 2, "cmd": "trim", "args": {"video": "clip.mp4", "out": "/tmp/cut.mp4"}}
+    )
+    assert resp["ok"] is True
+    assert seen == {"start_sec": 0.0, "end_sec": None, "codec": "libx264"}
+
+
+@pytest.mark.parametrize(
+    ("args", "needle"),
+    [
+        ({"out": "/tmp/cut.mp4"}, "video"),
+        ({"video": "clip.mp4"}, "out"),
+        ({"video": "clip.mp4", "out": "/tmp/cut.mp4", "start_sec": "soon"}, "start_sec"),
+        ({"video": "clip.mp4", "out": "/tmp/cut.mp4", "start_sec": -1}, "start_sec"),
+        ({"video": "clip.mp4", "out": "/tmp/cut.mp4", "end_sec": "later"}, "end_sec"),
+        ({"video": "clip.mp4", "out": "/tmp/cut.mp4", "start_sec": 2, "end_sec": 2}, "end_sec"),
+        ({"video": "clip.mp4", "out": "/tmp/cut.mp4", "codec": ""}, "codec"),
+    ],
+)
+def test_trim_rejects_bad_args(args, needle):
+    resp = video_worker.handle_request({"id": 3, "cmd": "trim", "args": args})
+    assert resp["ok"] is False
+    assert needle in resp["error"]
+
+
 def test_serve_survives_bad_json_and_closes_on_exit(_reset_worker):
     opened = _reset_worker
     script = "\n".join(

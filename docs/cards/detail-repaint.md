@@ -42,7 +42,8 @@ provider loop is skipped and the node passes the image through unchanged
 | `min_confidence` | float | `0.0` | `0..1` | Skip issues below this confidence. |
 | `region_padding` | int | `24` | `>= 0` | Context padding (px) around each issue bbox in the crop. |
 | `max_regions` | int | `8` | `>= 1` | Cap on repainted regions (highest confidence first). |
-| `feather_px` | float | `0.0` | `>= 0` (0 = auto) | Seam feather radius; auto ≈ 6% of the issue's short side (2..24). |
+| `feather_px` | float | `0.0` | `>= 0` (0 = auto) | Seam feather radius; auto ≈ 6% of the issue's short side (2..24). Ignored by the `poisson` blend. |
+| `blend` | str | `feather` | `feather` \| `poisson` | Seam blend mode: `feather` = soft alpha falloff; `poisson` = gradient-domain seamless clone (see below). |
 | `max_decode_pixels` | int | `96_000_000` | `>= 0` (0 disables) | Rejects an **input** larger than this before decoding (decompression-bomb guard). |
 | `output_dir` | path | run output dir | | Validated server-side. |
 | `output_name` | basename | `<image>_repaint(ed)` | plain basename | Rejected if it contains `..` or a path separator. |
@@ -60,7 +61,20 @@ opaque/white as the edit area. The chosen polarity is reported as
 The composite blends **only the RGB channels** of the repainted patch into the
 candidate; the candidate's **original alpha is preserved**. A cut-out subject
 therefore keeps its exact matte and never gains a soft seam halo from a provider
-crop whose own alpha differs. The feathered weight applies to RGB only.
+crop whose own alpha differs. Both blend modes apply to RGB only.
+
+## Seam blend modes
+
+- **`feather`** (default) — the repainted core is alpha-blended with a Gaussian
+  falloff at the issue-core edge (`feather_px`); cheap and predictable.
+- **`poisson`** — gradient-domain (Poisson / seamless-clone) compositing for
+  harder seams: the result keeps the repainted patch's *gradients* inside the
+  issue core while its boundary is pinned to the surrounding candidate pixels,
+  so illumination/colour offsets at the seam diffuse away instead of showing as
+  an edge. The rectangular core lets the 5-point Poisson system be solved
+  exactly with a 2-D DST (no iterative solver). A core smaller than 3×3 px
+  falls back to the feathered blend for that region; the per-region
+  `blend` report field records which mode actually ran.
 
 ## Patch resampling
 
@@ -105,8 +119,9 @@ the paste-back carry honest colour; the source's original mode is recorded as
 
 `composite` returns `fixed_image` and `repaint_report`: `status`
 (`repainted` \| `partial` \| `unchanged`), `regions` (each `index`, `type`,
-`bbox`, `status`, optional `feather_px`), `repainted_count`, `requested_count`,
-`image_size`, `source_mode`, `exif_transposed`, `max_decode_pixels`.
+`bbox`, `status`, optional `blend` and `feather_px`), `repainted_count`,
+`requested_count`, `image_size`, `blend`, `source_mode`, `exif_transposed`,
+`max_decode_pixels`.
 
 ## Outputs (ports)
 
@@ -119,7 +134,9 @@ the paste-back carry honest colour; the source's original mode is recorded as
 
 - `python/bridge/tests/test_detail_repaint_cli.py` — issue selection / action /
   confidence / region cap, mask polarity (+ invert), padding, the feathered
-  paste-back, **alpha isolation** (RGB-only blend, original alpha preserved),
+  paste-back, the **Poisson seam blend** (offset diffusion, gradient
+  preservation, alpha isolation, tiny-region feather fallback, unknown-mode
+  rejection), **alpha isolation** (RGB-only blend, original alpha preserved),
   **box-filter downsampling**, no-repaint passthrough, decode guard, CMYK source
   mode, EXIF reporting, invalid JSON, missing image (run:
   `pytest python/bridge/tests`).

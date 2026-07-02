@@ -166,9 +166,10 @@ provider:
   compositing) for harder seams.
 
 ### 3.3 Integration plan
-**Status: the seam + `sd_inpaint` have landed** (the rest of this section is the
-design it was built to; ⛔ items are SDXL / Flux Fill backends, ControlNet, the
-advanced-blend flag and real-inference CI). The selector is the local card's
+**Status: the seam + `sd_inpaint` + the advanced-blend flag (`blend=poisson`,
+gradient-domain seam compositing in `composite`, defaulting to the feather)
+have landed** (the rest of this section is the design it was built to; ⛔ items
+are SDXL / Flux Fill backends, ControlNet and real-inference CI). The selector is the local card's
 **`engine` param** (`provider` | `sd_inpaint` | …); `provider` stays the default
 and the fallback.
 - The `prepare`/`composite` split and manifest **already** isolate the generative
@@ -179,7 +180,9 @@ and the fallback.
   `composite` already consumes, and an unavailable/`provider` engine emits an
   empty list + `engine_fallback_reason` so the remote path runs unchanged.
 - `composite` stays backend-agnostic; only an optional advanced-blend flag is
-  added, defaulting to today's feather.
+  added, defaulting to today's feather. ✅ Landed as `--blend feather|poisson`
+  (a DST-based exact Poisson solve over the rectangular issue core, falling
+  back to the feather on a too-small region).
 
 ### 3.4 Dependencies & risks
 `torch` + CUDA, inpaint model weights, optional ControlNet. Risks: identity

@@ -34,6 +34,7 @@ const DETAIL_REPAINT_RESERVED = new Set([
   "region_padding",
   "max_regions",
   "feather_px",
+  "blend",
   "output_dir",
   "output_name",
 ]);
@@ -566,6 +567,7 @@ export const defaultExecutors: ExecutorRegistry = {
       manifest: prepared,
       repainted,
       featherPx: Number(ctx.params.feather_px ?? 0),
+      blend: String(ctx.params.blend ?? "").trim() || undefined,
       outputDir: outputDir || undefined,
       outputName: String(ctx.params.output_name ?? "").trim() || undefined,
     });

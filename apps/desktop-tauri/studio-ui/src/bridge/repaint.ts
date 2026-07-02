@@ -186,6 +186,8 @@ export interface CompositeRepaintRequest {
   repainted: RepaintedCrop[];
   /** Seam feather radius (0 / undefined = auto from the issue size). */
   featherPx?: number;
+  /** Seam blend mode: `feather` (default) or `poisson` (gradient-domain). */
+  blend?: string;
   outputDir?: string;
   outputName?: string;
 }
@@ -207,14 +209,17 @@ export async function compositeRepaint(
       req.repainted.filter((r) => (r.path ?? "").trim().length > 0).map((r) => r.index),
     );
     const regions = req.manifest.regions ?? [];
+    const blend = req.blend === "poisson" ? "poisson" : "feather";
     const region_results = regions.map((region) => ({
       index: region.index,
       type: region.type,
       bbox: region.bbox,
       status: done.has(region.index) ? "repainted" : "no_repaint",
-      feather_px: done.has(region.index)
-        ? Math.max(2, Math.min(24, Math.round(Math.min(...region.size) * 0.06)))
-        : null,
+      blend: done.has(region.index) ? blend : null,
+      feather_px:
+        done.has(region.index) && blend === "feather"
+          ? Math.max(2, Math.min(24, Math.round(Math.min(...region.size) * 0.06)))
+          : null,
     }));
     const repaintedCount = region_results.filter((r) => r.status === "repainted").length;
     const status =
@@ -228,6 +233,7 @@ export async function compositeRepaint(
         repainted_count: repaintedCount,
         requested_count: regions.length,
         image_size: req.manifest.image_size ?? [0, 0],
+        blend,
       },
     };
   }
@@ -236,6 +242,7 @@ export async function compositeRepaint(
     manifest: JSON.stringify(req.manifest),
     repainted: JSON.stringify(req.repainted),
     featherPx: req.featherPx ?? null,
+    blend: req.blend ?? null,
     outputDir: req.outputDir ?? null,
     outputName: req.outputName ?? null,
   })) as CompositeRepaintResult;

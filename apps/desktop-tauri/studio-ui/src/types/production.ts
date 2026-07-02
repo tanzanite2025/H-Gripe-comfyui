@@ -95,6 +95,9 @@ export interface RepaintRegionResult {
   status: string;
   /** Seam feather radius actually used when the region was repainted. */
   feather_px?: number | null;
+  /** Seam blend actually applied (`feather` | `poisson`); a `poisson` request
+   *  degrades to `feather` on a too-small region. */
+  blend?: string | null;
 }
 
 /** Outcome of the Detail Repaint node (mirrors Rust `RepaintReport`). */
@@ -108,6 +111,8 @@ export interface RepaintReport {
   requested_count: number;
   /** `[width, height]` of the fixed image. */
   image_size: [number, number];
+  /** Seam blend mode the composite ran (`feather` | `poisson`). */
+  blend?: string;
   // --- Optional local-engine telemetry (Detail Repaint `engine` seam) --------
   // Present only when a non-`provider` engine was selected; carries which
   // engine actually ran and why it fell back, so the UI can explain a

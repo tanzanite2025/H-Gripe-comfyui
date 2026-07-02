@@ -168,6 +168,7 @@ pub(crate) fn composite_repaint(
     manifest: String,
     repainted: String,
     feather_px: Option<f64>,
+    blend: Option<String>,
     output_dir: Option<String>,
     output_name: Option<String>,
 ) -> Result<CompositeRepaintResult, String> {
@@ -187,6 +188,8 @@ pub(crate) fn composite_repaint(
         .arg(&repainted)
         .arg("--feather-px")
         .arg(feather_px.unwrap_or(0.0).to_string())
+        .arg("--blend")
+        .arg(blend.as_deref().unwrap_or("feather"))
         .arg("--output-dir")
         .arg(output_dir.as_deref().unwrap_or(""))
         .arg("--output-name")

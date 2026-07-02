@@ -27,6 +27,8 @@
 //! - [`subject_mask`]: the `subjectMask` node executor (native-Rust matte).
 //! - [`subject_matte`]: continuous alpha matting (ViTMatte / trimap, Compute lane).
 //! - [`subject_sam2`]: SAM 2 interactive point-prompt segmenter (Compute lane).
+//! - [`video_assemble`]: the `videoAssemble` node executor (FFmpeg-backed
+//!   frame-sequence -> video encode via the PyAV worker's `assemble` command).
 //! - [`persist`]: on-disk autosave, workflow files, recents, and pickers.
 //! - [`history`]: project-scoped snapshot / run-history JSON stores.
 //!
@@ -62,6 +64,7 @@ mod subject_model;
 mod subject_sam2;
 mod subject_segment;
 pub(crate) mod torch_worker;
+mod video_assemble;
 pub(crate) mod video_engine;
 pub(crate) mod video_worker;
 

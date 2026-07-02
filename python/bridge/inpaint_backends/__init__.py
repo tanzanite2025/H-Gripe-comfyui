@@ -37,8 +37,12 @@ from sr_backends import _engine_weight, model_cache_dir
 
 PROVIDER_ENGINE = "provider"
 
+#: The default ``controlnet`` selection: no structural conditioning.
+CONTROLNET_OFF = "off"
+
 __all__ = [
     "PROVIDER_ENGINE",
+    "CONTROLNET_OFF",
     "InpaintUnavailable",
     "InpaintBackend",
     "model_cache_dir",
@@ -86,6 +90,7 @@ class InpaintBackend(Protocol):
         steps: int = 30,
         seed: int | None = None,
         precision: str | None = None,
+        controlnet: str = CONTROLNET_OFF,
     ) -> tuple[Any, str, str]:
         """Inpaint the masked area of a padded ``crop`` and return the result.
 
@@ -93,10 +98,13 @@ class InpaintBackend(Protocol):
         ``mask`` is a PIL ``L`` image the same size where **white (255) marks
         the area to regenerate** (the diffusers convention). ``precision``
         selects the compute precision (``auto`` by default — fp16 on CUDA, fp32
-        on CPU). Returns ``(image, device_used, precision_used)`` where the PIL
-        ``RGB`` image is the same size as ``crop``, so the caller reports what
-        actually ran. Raises :class:`InpaintUnavailable` if deps/weights vanished
-        between the probe and the call.
+        on CPU). ``controlnet`` requests optional structural conditioning
+        (``off`` by default; a backend that does not support the requested kind
+        raises rather than silently ignoring it). Returns ``(image,
+        device_used, precision_used)`` where the PIL ``RGB`` image is the same
+        size as ``crop``, so the caller reports what actually ran. Raises
+        :class:`InpaintUnavailable` if deps/weights vanished between the probe
+        and the call.
         """
         ...
 

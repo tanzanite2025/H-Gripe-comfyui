@@ -266,6 +266,8 @@ export interface LocalRepaintResult {
   precision?: string | null;
   /** Compute precision the node asked for (`auto`/`fp32`/`fp16`). */
   precision_requested?: string;
+  /** Structural conditioning the node asked for (`off`/`canny`). */
+  controlnet_requested?: string;
   requested_count: number;
   repainted_count: number;
 }
@@ -287,6 +289,8 @@ export interface LocalRepaintRequest {
   seed?: number;
   /** Compute precision for the local backend: `auto` (default) | `fp32` | `fp16`. */
   precision?: string;
+  /** Structural conditioning for `sd_inpaint`: `off` (default) | `canny`. */
+  controlnet?: string;
   outputDir?: string;
   outputName?: string;
 }
@@ -316,6 +320,7 @@ export async function localRepaintRegions(req: LocalRepaintRequest): Promise<Loc
       device: null,
       precision: null,
       precision_requested: req.precision ?? "auto",
+      controlnet_requested: req.controlnet ?? "off",
       requested_count: req.manifest.regions?.length ?? 0,
       repainted_count: 0,
     };
@@ -331,6 +336,7 @@ export async function localRepaintRegions(req: LocalRepaintRequest): Promise<Loc
     steps: req.steps ?? null,
     seed: req.seed ?? null,
     precision: req.precision ?? null,
+    controlnet: req.controlnet ?? null,
     outputDir: req.outputDir ?? null,
     outputName: req.outputName ?? null,
   })) as LocalRepaintResult;

@@ -481,6 +481,21 @@ def test_repaint_runs_available_backend(tmp_path: Path, monkeypatch) -> None:
     assert out["precision_requested"] == "fp16"
     assert out["precision"] == "fp32"
     assert out["device"] == "cpu"
+    # ControlNet defaults to off and is threaded through + reported.
+    assert backend.calls[0]["controlnet"] == "off"
+    assert out["controlnet_requested"] == "off"
+
+
+def test_repaint_threads_controlnet_request(tmp_path: Path, monkeypatch) -> None:
+    import inpaint_backends
+
+    backend = _FakeBackend()
+    monkeypatch.setattr(inpaint_backends, "resolve", lambda engine: backend)
+    prep = _prepared_manifest(tmp_path)
+    out = _run_repaint(tmp_path, prep, engine="fake_inpaint", controlnet="canny")
+
+    assert backend.calls[0]["controlnet"] == "canny"
+    assert out["controlnet_requested"] == "canny"
 
 
 def test_repaint_per_type_prompt_map_overrides(tmp_path: Path, monkeypatch) -> None:

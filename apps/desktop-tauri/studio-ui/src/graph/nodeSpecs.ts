@@ -1215,6 +1215,16 @@ export const NODE_SPECS: Record<string, NodeSpec> = {
         visibleWhen: { param: "engine", in: ["sd_inpaint", "sdxl_inpaint", "flux_fill"] },
       },
       {
+        key: "controlnet",
+        label: "ControlNet",
+        control: "select",
+        options: ["off", "canny"],
+        defaultValue: "off",
+        inline: true,
+        hint: "structural conditioning for sd_inpaint: off (default) | canny (edge-conditioned repaint keeps structure stable; needs the HGRIPE_CONTROLNET_MODEL weight, falls back to the provider when missing)",
+        visibleWhen: { param: "engine", in: ["sd_inpaint"] },
+      },
+      {
         key: "credentials_ref",
         label: "Credentials",
         control: "text",

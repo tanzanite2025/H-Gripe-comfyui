@@ -14,7 +14,7 @@ import {
 import { FlowCanvas, type EdgeStyle } from "./editor/FlowCanvas";
 import { Inspector } from "./editor/Inspector";
 import { Palette } from "./editor/Palette";
-import { ContextMenu, type MenuItem } from "./editor/ContextMenu";
+import { ContextMenu } from "./editor/ContextMenu";
 import { NodeEditingContext } from "./editor/editingContext";
 import { PreviewModal } from "./editor/PreviewModal";
 import { MaskEditModal } from "./editor/MaskEditModal";
@@ -22,17 +22,13 @@ import { CropEditModal } from "./editor/CropEditModal";
 import { MediaEditModal } from "./editor/MediaEditModal";
 import { normalizeEditPaths } from "./editor/maskEdit";
 import { useHistory } from "./editor/useHistory";
-import { buildPaste, clipFromSelection, type Clip } from "./editor/clipboard";
 import {
   detachChildren,
   findContainingGroup,
   isGroupNode,
-  makeGroupNode,
-  orderNodes,
   reparentNode,
 } from "./editor/grouping";
 import { getHelperLines } from "./editor/helperLines";
-import { layeredPositions } from "./editor/layout";
 import type { HgripeNodeData } from "./editor/HgripeNode";
 import { fromWorkflowGraph, toWorkflowGraph } from "./editor/adapter";
 import { ProjectPanel } from "./editor/ProjectPanel";
@@ -43,17 +39,14 @@ import { RunHistoryPanel } from "./editor/RunHistoryPanel";
 import { useKeyboardShortcuts } from "./editor/useKeyboardShortcuts";
 import { useStudioRunController } from "./editor/useStudioRunController";
 import { useStudioFileController } from "./editor/useStudioFileController";
+import { makeNode, useNodeEditing } from "./editor/useNodeEditing";
+import { useContextMenu } from "./editor/useContextMenu";
+import { useModals } from "./editor/useModals";
 import { loadPersistedGraph } from "./editor/persist";
-import { defaultParams } from "./graph/nodeSpecs";
-import { topoLevels, validateGraph } from "./runtime/dag";
+import { validateGraph } from "./runtime/dag";
 import { isTauri, listenFileDrop, primeIngest } from "./bridge/tauri";
 import { startIngestListener } from "./runtime/ingestStore";
 import { useT } from "./i18n";
-
-function makeNode(id: string, kind: string, x: number, y: number, params?: Record<string, unknown>): Node {
-  const data: HgripeNodeData = { kind, params: { ...defaultParams(kind), ...params }, status: "idle" };
-  return { id, type: "hgripe", position: { x, y }, data };
-}
 
 // Canvas file-drop ingestion: which dropped files become a media card. Images
 // land on the generic image card (`imageSource`); videos land on the generic
@@ -96,13 +89,6 @@ function Studio({ onToggleLang }: { onToggleLang: () => void }) {
   const [helperLines, setHelperLines] = useState<{ horizontal?: number; vertical?: number }>({});
   const [edgeType, setEdgeType] = useState<EdgeStyle>("default");
   const [showMinimap, setShowMinimap] = useState(true);
-  const [menu, setMenu] = useState<{ x: number; y: number; nodeId: string | null } | null>(null);
-  // Which node (if any) has the shared Preview / Mask-Edit modal open.
-  const [previewNodeId, setPreviewNodeId] = useState<string | null>(null);
-  const [maskEditNodeId, setMaskEditNodeId] = useState<string | null>(null);
-  const [cropEditNodeId, setCropEditNodeId] = useState<string | null>(null);
-  // Image source whose unified manual editor (mask + crop) is open, if any.
-  const [mediaEditSourceId, setMediaEditSourceId] = useState<string | null>(null);
   const { fitView, screenToFlowPosition } = useReactFlow();
   const isDesktop = isTauri();
   const [message, setMessage] = useState<string>(
@@ -113,17 +99,11 @@ function Studio({ onToggleLang }: { onToggleLang: () => void }) {
       : "browser preview (backend mocked)",
   );
 
-  const idSeq = useRef(0);
-  const clipboard = useRef<Clip | null>(null);
   // True while a node drag is in progress, so we snapshot only once per drag.
   const dragging = useRef(false);
-  // Coalesce rapid edits to the same param (e.g. typing) into one undo step.
-  const lastParamEdit = useRef<{ id: string; key: string; t: number } | null>(null);
   // Node id queued for a "run up to this node" once the committing param edit
   // has landed in `nodes` state (setNodes is async, so we defer to an effect).
   const pendingRunNode = useRef<string | null>(null);
-
-  const newNodeId = useCallback((kind: string) => `${kind}-${Date.now()}-${idSeq.current++}`, []);
 
   const history = useHistory({ nodes, edges, setNodes, setEdges });
   const { takeSnapshot, undo, redo } = history;
@@ -197,49 +177,56 @@ function Studio({ onToggleLang }: { onToggleLang: () => void }) {
     suppressNextDirty,
   } = file;
 
-  const patchNode = useCallback(
-    (id: string, patch: Partial<HgripeNodeData>) => {
-      setNodes((ns) =>
-        ns.map((n) => (n.id === id ? { ...n, data: { ...(n.data as HgripeNodeData), ...patch } } : n)),
-      );
-    },
-    [setNodes],
-  );
+  // Modal-open state (Preview / Mask-Edit / Crop-Edit / media manual editor)
+  // and the connected-image lookup the modals underlay with.
+  const {
+    previewNode,
+    maskEditNode,
+    cropEditNode,
+    mediaEditSource,
+    setPreviewNodeId,
+    setMaskEditNodeId,
+    setCropEditNodeId,
+    setMediaEditSourceId,
+    openPreview,
+    openMaskEdit,
+    openCropEdit,
+    openMediaEdit,
+    connectedImagePath,
+  } = useModals({ nodes, edges });
 
-  const onParamChange = useCallback(
-    (id: string, key: string, value: unknown) => {
-      const now = Date.now();
-      const last = lastParamEdit.current;
-      const coalesce = last && last.id === id && last.key === key && now - last.t < 600;
-      if (!coalesce) takeSnapshot();
-      lastParamEdit.current = { id, key, t: now };
-      setNodes((ns) =>
-        ns.map((n) => {
-          if (n.id !== id) return n;
-          const d = n.data as HgripeNodeData;
-          return { ...n, data: { ...d, params: { ...d.params, [key]: value } } };
-        }),
-      );
-    },
-    [setNodes],
-  );
-
-  const addNode = useCallback(
-    (kind: string, position?: { x: number; y: number }) => {
-      takeSnapshot();
-      const id = newNodeId(kind);
-      // Click-to-add cascades nodes so they do not stack exactly.
-      const pos = position ?? { x: 80 + (idSeq.current % 6) * 36, y: 80 + (idSeq.current % 6) * 36 };
-      if (kind === "group") {
-        // Group frames go to the front of the array (painted behind, parents
-        // before children).
-        setNodes((ns) => orderNodes([makeGroupNode(id, pos.x, pos.y), ...ns]));
-        return;
-      }
-      setNodes((ns) => ns.concat(makeNode(id, kind, pos.x, pos.y)));
-    },
-    [setNodes, takeSnapshot, newNodeId],
-  );
+  // Node/graph editing actions: add/delete/duplicate, param edits, clipboard,
+  // focus/selection, tidy layout, and bound-edit spawning.
+  const {
+    clipboard,
+    newNodeId,
+    patchNode,
+    onParamChange,
+    addNode,
+    copySelection,
+    pasteClipboard,
+    focusNode,
+    jumpToNode,
+    deleteNode,
+    disconnectNode,
+    duplicateNode,
+    tidyLayout,
+    selectAll,
+    addBoundEdit,
+  } = useNodeEditing({
+    nodes,
+    edges,
+    setNodes,
+    setEdges,
+    setSelectedId,
+    takeSnapshot,
+    setMessage,
+    fitView,
+    suppressNextDirty,
+    pendingRunNode,
+    openMaskEditorFor: setMaskEditNodeId,
+    openCropEditorFor: setCropEditNodeId,
+  });
 
   // Ingest OS files dropped onto the canvas: create a generic media card per
   // recognised file (an `imageSource` for images, a `videoSource` for videos),
@@ -370,44 +357,6 @@ function Studio({ onToggleLang }: { onToggleLang: () => void }) {
     [onEdgesChange, takeSnapshot],
   );
 
-  const copySelection = useCallback(() => {
-    const clip = clipFromSelection(nodes, edges);
-    if (clip.nodes.length === 0) return;
-    clipboard.current = clip;
-    setMessage(`copied ${clip.nodes.length} node${clip.nodes.length > 1 ? "s" : ""}`);
-  }, [nodes, edges]);
-
-  const pasteClipboard = useCallback(() => {
-    const clip = clipboard.current;
-    if (!clip || clip.nodes.length === 0) return;
-    takeSnapshot();
-    const pasted = buildPaste(clip, { x: 40, y: 40 }, newNodeId);
-    setNodes((ns) => orderNodes(ns.map((n): Node => ({ ...n, selected: false })).concat(pasted.nodes)));
-    setEdges((es) => es.map((e): Edge => ({ ...e, selected: false })).concat(pasted.edges));
-    setSelectedId(pasted.nodes[0]?.id ?? null);
-    setMessage(`pasted ${pasted.nodes.length} node${pasted.nodes.length > 1 ? "s" : ""}`);
-  }, [setNodes, setEdges, takeSnapshot, newNodeId]);
-
-  // Select/focus a node in the editor (e.g. from a run-log line). Programmatic,
-  // so it must not flag the file dirty.
-  const focusNode = useCallback(
-    (nodeId: string) => {
-      suppressNextDirty();
-      setNodes((ns) => ns.map((n) => ({ ...n, selected: n.id === nodeId })));
-      setSelectedId(nodeId);
-    },
-    [setNodes, suppressNextDirty],
-  );
-
-  // Select a node and pan/zoom the viewport to center it (used by node search).
-  const jumpToNode = useCallback(
-    (id: string) => {
-      focusNode(id);
-      void fitView({ nodes: [{ id }], duration: 400, maxZoom: 1.5 });
-    },
-    [focusNode, fitView],
-  );
-
   // The run lifecycle, run log, and run history live in their own controller.
   // The editor reaches it through these callbacks and consumes the returned
   // view state (panel toggles, counts, run actions).
@@ -460,86 +409,20 @@ function Studio({ onToggleLang }: { onToggleLang: () => void }) {
     [setEdges],
   );
 
-  // Delete a single node (freeing group members if it is a group frame) and
-  // drop any edges touching it.
-  const deleteNode = useCallback(
-    (id: string) => {
-      takeSnapshot();
-      const isGroup = nodes.some((n) => n.id === id && isGroupNode(n));
-      setNodes((ns) => {
-        const remaining = ns.filter((n) => n.id !== id);
-        return isGroup ? detachChildren(remaining, new Set([id])) : remaining;
-      });
-      setEdges((es) => es.filter((e) => e.source !== id && e.target !== id));
-      setSelectedId((cur) => (cur === id ? null : cur));
-    },
-    [nodes, setNodes, setEdges, takeSnapshot],
-  );
-
-  // Remove every edge connected to a node, leaving the node in place.
-  const disconnectNode = useCallback(
-    (id: string) => {
-      const touching = edges.some((e) => e.source === id || e.target === id);
-      if (!touching) return;
-      takeSnapshot();
-      setEdges((es) => es.filter((e) => e.source !== id && e.target !== id));
-    },
-    [edges, setEdges, takeSnapshot],
-  );
-
-  // Duplicate a single node (fresh id, offset position, no edges).
-  const duplicateNode = useCallback(
-    (id: string) => {
-      const node = nodes.find((n) => n.id === id);
-      if (!node) return;
-      takeSnapshot();
-      const pasted = buildPaste({ nodes: [node], edges: [] }, { x: 40, y: 40 }, newNodeId);
-      setNodes((ns) => orderNodes(ns.map((n): Node => ({ ...n, selected: false })).concat(pasted.nodes)));
-      setSelectedId(pasted.nodes[0]?.id ?? null);
-    },
-    [nodes, setNodes, takeSnapshot, newNodeId],
-  );
-
-  const openNodeMenu = useCallback(
-    (nodeId: string, at: { x: number; y: number }) => setMenu({ ...at, nodeId }),
-    [],
-  );
-  const openPaneMenu = useCallback(
-    (at: { x: number; y: number }) => setMenu({ ...at, nodeId: null }),
-    [],
-  );
-
-  // Tidy layout: arrange nodes on a grid by DAG depth. Grouped nodes (and group
-  // frames) keep their positions so containers are not torn apart.
-  const tidyLayout = useCallback(() => {
-    const graph = toWorkflowGraph(nodes, edges);
-    let levels: string[][];
-    try {
-      levels = topoLevels(graph);
-    } catch {
-      setMessage("无法整理：图中存在环");
-      return;
-    }
-    const movable = new Set(
-      nodes.filter((n) => !isGroupNode(n) && !n.parentId).map((n) => n.id),
-    );
-    const positions = layeredPositions(levels.map((level) => level.filter((id) => movable.has(id))));
-    if (positions.size === 0) {
-      setMessage("没有可整理的节点");
-      return;
-    }
-    takeSnapshot();
-    setNodes((ns) => ns.map((n) => (positions.has(n.id) ? { ...n, position: positions.get(n.id)! } : n)));
-    setMessage("已整理布局");
-    // Re-center after React Flow applies the new positions.
-    setTimeout(() => fitView({ padding: 0.2, duration: 300 }), 0);
-  }, [nodes, edges, setNodes, takeSnapshot, fitView]);
-
-  // Select every node and edge (Ctrl/Cmd+A).
-  const selectAll = useCallback(() => {
-    setNodes((ns) => ns.map((n) => ({ ...n, selected: true })));
-    setEdges((es) => es.map((ed) => ({ ...ed, selected: true })));
-  }, [setNodes, setEdges]);
+  // Right-click context menu: open state + item list built from the editing
+  // actions above.
+  const { menu, menuItems, openNodeMenu, openPaneMenu, closeMenu } = useContextMenu({
+    nodes,
+    edges,
+    clipboard,
+    fitView,
+    addBoundEdit,
+    duplicateNode,
+    disconnectNode,
+    deleteNode,
+    tidyLayout,
+    pasteClipboard,
+  });
 
   // Global keyboard shortcuts (edit + file/run); see the hook for behavior.
   useKeyboardShortcuts({
@@ -556,141 +439,10 @@ function Studio({ onToggleLang }: { onToggleLang: () => void }) {
     canRun: !running && issues.length === 0,
   });
 
-  // Resolve the image path feeding a node's `image` input port: follow the
-  // incoming edge to its source node and read that node's last-run image / path
-  // param. Used as the best-effort underlay for the Mask-Edit canvas and the
-  // layers of the Preview modal (often empty in browser preview).
-  const connectedImagePath = useCallback(
-    (nodeId: string): string | null => {
-      const edge = edges.find((e) => e.target === nodeId && e.targetHandle === "image");
-      if (!edge) return null;
-      const src = nodes.find((n) => n.id === edge.source);
-      if (!src) return null;
-      const d = src.data as HgripeNodeData;
-      return d.imagePath ?? (typeof d.params?.path === "string" ? (d.params.path as string) : null);
-    },
-    [edges, nodes],
-  );
-
-  const openPreview = useCallback((nodeId: string) => setPreviewNodeId(nodeId), []);
-  const openMaskEdit = useCallback((nodeId: string) => setMaskEditNodeId(nodeId), []);
-  const openCropEdit = useCallback((nodeId: string) => setCropEditNodeId(nodeId), []);
-  const openMediaEdit = useCallback((sourceId: string) => setMediaEditSourceId(sourceId), []);
-
-  // Spawn a bound edit node from a media source card: place it to the right,
-  // wire a `binding` edge (source.image -> edit.image), and select it. The
-  // source card is never mutated; the new node becomes the output the rest of
-  // the workflow consumes. `opts` chooses the manual/auto entry (see
-  // docs/cards/generic-media-card.md): `params` seeds the node, `openEditor`
-  // (default true) opens its editor for manual edits, and `run` runs the
-  // ancestor subgraph so a computed (auto) edit surfaces its result directly.
-  const addBoundEdit = useCallback(
-    (
-      sourceId: string,
-      editKind: string,
-      opts?: { params?: Record<string, unknown>; openEditor?: boolean; run?: boolean },
-    ) => {
-      const source = nodes.find((n) => n.id === sourceId);
-      if (!source) return;
-      takeSnapshot();
-      const editId = newNodeId(editKind);
-      const pos = { x: source.position.x + 320, y: source.position.y };
-      setNodes((ns) =>
-        ns
-          .map((n) => ({ ...n, selected: false }))
-          .concat({ ...makeNode(editId, editKind, pos.x, pos.y, opts?.params), selected: true }),
-      );
-      setEdges((es) =>
-        es.concat({
-          id: `binding-${editId}`,
-          source: sourceId,
-          sourceHandle: "image",
-          target: editId,
-          targetHandle: "image",
-          type: "binding",
-        }),
-      );
-      setSelectedId(editId);
-      if (opts?.openEditor !== false) {
-        if (editKind === "subjectMask") setMaskEditNodeId(editId);
-        if (editKind === "crop") setCropEditNodeId(editId);
-      }
-      // Defer the partial run to the effect that fires once the new node has
-      // landed in `nodes` (setNodes is async), matching the editor-confirm path.
-      if (opts?.run) pendingRunNode.current = editId;
-    },
-    [nodes, setNodes, setEdges, takeSnapshot, newNodeId],
-  );
-
   // Stable context value so memoized node cards can edit their own params.
   const editing = useMemo(
     () => ({ onParamChange, openPreview, openMaskEdit, openCropEdit, openMediaEdit, addBoundEdit, runUpToNode }),
     [onParamChange, openPreview, openMaskEdit, openCropEdit, openMediaEdit, addBoundEdit, runUpToNode],
-  );
-
-  // Right-click menu items, depending on whether a node or empty pane was hit.
-  const menuItems = useMemo<MenuItem[]>(() => {
-    if (!menu) return [];
-    if (menu.nodeId) {
-      const id = menu.nodeId;
-      const connected = edges.some((e) => e.source === id || e.target === id);
-      const kind = (nodes.find((n) => n.id === id)?.data as HgripeNodeData | undefined)?.kind;
-      const items: MenuItem[] = [];
-      // Auto (computed) entries: image cards spawn a bound compute node and run
-      // it straight away — no editor. Each is purely algorithm-derived from the
-      // single input image (the manual / human-spatial lanes live on the card's
-      // action-row buttons instead). See generic-media-card.md.
-      if (kind === "imageSource") {
-        const auto = (editKind: string, params?: Record<string, unknown>) =>
-          addBoundEdit(id, editKind, { params, openEditor: false, run: true });
-        items.push(
-          { label: t("node.cropAuto"), onClick: () => auto("crop", { mode: "auto_subject" }) },
-          { label: t("node.maskAuto"), onClick: () => auto("subjectMask", { mode: "auto_subject" }) },
-          { label: t("node.enhanceAuto"), onClick: () => auto("imageEnhance") },
-          { label: t("node.watchdogAuto"), onClick: () => auto("detailWatchdog") },
-        );
-      }
-      items.push(
-        { label: "复制", onClick: () => duplicateNode(id) },
-        { label: "断开全部连线", onClick: () => disconnectNode(id), disabled: !connected },
-        { label: "删除", onClick: () => deleteNode(id) },
-      );
-      return items;
-    }
-    return [
-      { label: "整理布局", onClick: tidyLayout },
-      { label: "适应视图", onClick: () => fitView({ padding: 0.2, duration: 300 }) },
-      { label: "粘贴", onClick: pasteClipboard, disabled: !clipboard.current },
-    ];
-  }, [
-    menu,
-    edges,
-    nodes,
-    t,
-    addBoundEdit,
-    duplicateNode,
-    disconnectNode,
-    deleteNode,
-    tidyLayout,
-    fitView,
-    pasteClipboard,
-  ]);
-
-  const previewNode = useMemo(
-    () => nodes.find((n) => n.id === previewNodeId) ?? null,
-    [nodes, previewNodeId],
-  );
-  const maskEditNode = useMemo(
-    () => nodes.find((n) => n.id === maskEditNodeId) ?? null,
-    [nodes, maskEditNodeId],
-  );
-  const cropEditNode = useMemo(
-    () => nodes.find((n) => n.id === cropEditNodeId) ?? null,
-    [nodes, cropEditNodeId],
-  );
-  const mediaEditSource = useMemo(
-    () => nodes.find((n) => n.id === mediaEditSourceId) ?? null,
-    [nodes, mediaEditSourceId],
   );
 
   return (
@@ -821,7 +573,7 @@ function Studio({ onToggleLang }: { onToggleLang: () => void }) {
         </div>
       </NodeEditingContext.Provider>
       {menu && (
-        <ContextMenu x={menu.x} y={menu.y} items={menuItems} onClose={() => setMenu(null)} />
+        <ContextMenu x={menu.x} y={menu.y} items={menuItems} onClose={closeMenu} />
       )}
 
       {previewNode && (

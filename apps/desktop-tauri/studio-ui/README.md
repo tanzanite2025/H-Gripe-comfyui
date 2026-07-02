@@ -95,12 +95,14 @@ The toolbar's **Cancel** button calls `cancel_studio_run`; cancellation stops
 before the next node starts and passes a cancellation token down into the Rust
 broker/provider layer for `generate` nodes. `custom_http async_job` can call a
 configured provider-native `cancel_url` / `cancel_url_path` / `urls.cancel`, and
-`replicate run` calls the prediction cancel endpoint. This is third-party
+`replicate run` calls the prediction cancel endpoint. Synchronous calls
+(`openai_compatible` operations and `custom_http request`) have no remote job
+to cancel; there, cancellation aborts the in-flight HTTP request instead of
+waiting for the response. This is third-party
 provider/API remote job control, not an H-Gripe account/cloud system. Durable
 workflow save/load beyond autosave now exists (explicit Save/Open + project
 folder, above). Before the Node Editor becomes the primary production surface,
-the backend runner still needs more provider-native cancellation adapters and
-FFmpeg-backed video assembly/export.
+the backend runner still needs FFmpeg-backed video assembly/export.
 
 The desktop shell intentionally has no Credentials / Profiles account-management
 tabs. Provider profiles and credential refs are local API config files consumed
